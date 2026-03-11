@@ -15,6 +15,7 @@ allowed_types = [
     "revert",
     "perf",
     "test",
+    "release",
 ]
 allowed_scopes = [
     "checks",
