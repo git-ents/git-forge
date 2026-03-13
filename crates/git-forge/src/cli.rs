@@ -2,6 +2,7 @@
 
 pub mod check;
 pub mod issue;
+pub mod release;
 pub mod review;
 
 use clap::{Parser, Subcommand};
@@ -32,5 +33,10 @@ pub enum Commands {
     Check {
         #[command(subcommand)]
         command: check::CheckCommand,
+    },
+    /// Work with releases.
+    Release {
+        #[command(subcommand)]
+        command: release::ReleaseCommand,
     },
 }
