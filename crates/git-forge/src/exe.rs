@@ -2,6 +2,7 @@
 
 use crate::cli::check::CheckCommand;
 use crate::cli::issue::IssueCommand;
+use crate::cli::release::ReleaseCommand;
 use crate::cli::review::ReviewCommand;
 
 pub mod issue {
@@ -51,6 +52,23 @@ pub mod check {
             CheckCommand::List => todo!(),
             CheckCommand::Status => todo!(),
             CheckCommand::Show => todo!(),
+        }
+    }
+}
+
+pub mod release {
+    //! Execution logic for `git forge release`.
+
+    use super::ReleaseCommand;
+
+    /// Execute a `release` subcommand.
+    pub fn run(command: ReleaseCommand) {
+        match command {
+            ReleaseCommand::New => todo!(),
+            ReleaseCommand::Edit => todo!(),
+            ReleaseCommand::List => todo!(),
+            ReleaseCommand::Status => todo!(),
+            ReleaseCommand::Show => todo!(),
         }
     }
 }
