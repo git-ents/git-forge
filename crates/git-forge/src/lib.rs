@@ -8,3 +8,4 @@ pub mod counters;
 pub mod enforcement;
 pub mod entities;
 pub mod exe;
+pub mod releases;
