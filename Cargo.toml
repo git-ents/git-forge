@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/git-kiln"]
+
+[workspace.package]
+edition = "2024"
+publish = true
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
