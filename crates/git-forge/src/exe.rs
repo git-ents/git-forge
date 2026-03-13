@@ -1,5 +1,6 @@
 //! Execution logic for `git forge` subcommands.
 
+use crate::cli::check::CheckCommand;
 use crate::cli::issue::IssueCommand;
 use crate::cli::review::ReviewCommand;
 
@@ -33,6 +34,23 @@ pub mod review {
             ReviewCommand::List => todo!(),
             ReviewCommand::Status => todo!(),
             ReviewCommand::Show => todo!(),
+        }
+    }
+}
+
+pub mod check {
+    //! Execution logic for `git forge check`.
+
+    use super::CheckCommand;
+
+    /// Execute a `check` subcommand.
+    pub fn run(command: CheckCommand) {
+        match command {
+            CheckCommand::New => todo!(),
+            CheckCommand::Edit => todo!(),
+            CheckCommand::List => todo!(),
+            CheckCommand::Status => todo!(),
+            CheckCommand::Show => todo!(),
         }
     }
 }
