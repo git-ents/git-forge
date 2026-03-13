@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "git forge", bin_name = "git forge")]
 #[command(author, version)]
 pub struct Cli {
+    /// The subcommand to run.
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -21,21 +22,25 @@ pub struct Cli {
 pub enum Commands {
     /// Work with issues.
     Issue {
+        /// The issue subcommand to run.
         #[command(subcommand)]
         command: issue::IssueCommand,
     },
     /// Work with pull/merge request reviews.
     Review {
+        /// The review subcommand to run.
         #[command(subcommand)]
         command: review::ReviewCommand,
     },
     /// Work with CI checks.
     Check {
+        /// The check subcommand to run.
         #[command(subcommand)]
         command: check::CheckCommand,
     },
     /// Work with releases.
     Release {
+        /// The release subcommand to run.
         #[command(subcommand)]
         command: release::ReleaseCommand,
     },
