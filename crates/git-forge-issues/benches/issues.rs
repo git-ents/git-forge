@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use git_forge_issues::indices::issues::{
+use git_forge_issues::issues::{
     ISSUES_REF_PREFIX, Issue, IssueMeta, IssueState, IssueUpdate, NewIssue,
 };
 

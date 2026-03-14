@@ -2,4 +2,4 @@
 
 pub mod cli;
 pub mod exe;
-pub mod indices;
+pub mod reviews;

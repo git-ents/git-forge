@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use git_forge_review::indices::reviews::{
+use git_forge_review::reviews::{
     NewReview, REVIEWS_REF_PREFIX, Review, ReviewMeta, ReviewState, ReviewUpdate, Revision,
 };
 

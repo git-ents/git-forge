@@ -2,7 +2,7 @@
 
 use git2::Repository;
 
-use crate::indices::reviews::{NewReview, Review, ReviewState, ReviewUpdate, Reviews};
+use crate::reviews::{NewReview, Review, ReviewState, ReviewUpdate, Reviews};
 
 impl Reviews for Repository {
     fn list_reviews(&self) -> Result<Vec<Review>, git2::Error> {
