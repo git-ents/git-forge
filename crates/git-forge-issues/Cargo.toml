@@ -10,5 +10,12 @@ description = "Issue tracking domain for git-forge."
 clap = { workspace = true }
 git2 = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "issues"
+harness = false
+
 [lints]
 workspace = true
