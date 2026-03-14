@@ -1,6 +1,5 @@
 //! The CLI definitions for the top-level `git forge` command.
 
-pub mod check;
 pub mod issue;
 pub mod release;
 pub mod review;
@@ -31,12 +30,6 @@ pub enum Commands {
         /// The review subcommand to run.
         #[command(subcommand)]
         command: review::ReviewCommand,
-    },
-    /// Work with CI checks.
-    Check {
-        /// The check subcommand to run.
-        #[command(subcommand)]
-        command: check::CheckCommand,
     },
     /// Work with releases.
     Release {

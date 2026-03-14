@@ -1,9 +1,8 @@
 //! The main entrypoint for the CLI.
 
-mod cli;
-
-use clap::CommandFactory;
-use cli::Cli;
+use clap::{CommandFactory, Parser};
+use git_forge::cli::{Cli, Commands};
+use git_forge::exe;
 use std::path::PathBuf;
 use std::process;
 
@@ -16,9 +15,13 @@ fn main() {
         return;
     }
 
-    // No subcommands yet — print help and exit.
-    Cli::command().print_help().unwrap();
-    println!();
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Issue { command } => exe::issue::run(command),
+        Commands::Review { command } => exe::review::run(command),
+        Commands::Release { command } => exe::release::run(command),
+    }
 }
 
 /// Check for `--generate-man <DIR>` before clap parses, so it doesn't

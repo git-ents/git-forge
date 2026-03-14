@@ -2,7 +2,7 @@
 
 use git2::Repository;
 
-use crate::entities::issues::{Issue, IssueState, IssueUpdate, Issues, NewIssue};
+use crate::indices::issues::{Issue, IssueState, IssueUpdate, Issues, NewIssue};
 
 impl Issues for Repository {
     fn list_issues(&self) -> Result<Vec<Issue>, git2::Error> {
