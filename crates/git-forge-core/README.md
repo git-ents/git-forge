@@ -25,3 +25,4 @@ The `git-forge-core` library can be added to your Rust project via `cargo add`.
 
 ```shell
 cargo add --git https://github.com/git-ents/git-forge.git git-forge-core
+```
