@@ -18,5 +18,10 @@ git-forge-issues = { workspace = true }
 git-forge-review = { workspace = true }
 git-forge-release = { workspace = true }
 
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
