@@ -2,7 +2,7 @@
 
 use git2::Repository;
 
-use crate::issues::{Issue, IssueState, IssueUpdate, Issues, NewIssue};
+use crate::issues::{Issue, IssueState, Issues};
 
 impl Issues for Repository {
     fn list_issues(&self) -> Result<Vec<Issue>, git2::Error> {
@@ -17,11 +17,25 @@ impl Issues for Repository {
         todo!()
     }
 
-    fn create_issue(&self, _issue: &NewIssue) -> Result<u64, git2::Error> {
+    fn create_issue(
+        &self,
+        _title: &str,
+        _body: &str,
+        _labels: &[String],
+        _assignees: &[String],
+    ) -> Result<u64, git2::Error> {
         todo!()
     }
 
-    fn update_issue(&self, _id: u64, _update: &IssueUpdate) -> Result<(), git2::Error> {
+    fn update_issue(
+        &self,
+        _id: u64,
+        _title: Option<&str>,
+        _body: Option<&str>,
+        _labels: Option<&[String]>,
+        _assignees: Option<&[String]>,
+        _state: Option<IssueState>,
+    ) -> Result<(), git2::Error> {
         todo!()
     }
 

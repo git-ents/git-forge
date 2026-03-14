@@ -87,26 +87,6 @@ pub struct Review {
     pub revisions: Vec<Revision>,
 }
 
-/// Parameters for creating a new review.
-#[derive(Clone, Debug)]
-pub struct NewReview {
-    /// The branch this review targets.
-    pub target_branch: String,
-    /// Markdown description.
-    pub description: String,
-    /// The current tip commit of the feature branch.
-    pub head_commit: ::git2::Oid,
-}
-
-/// Parameters for mutating an existing review.
-#[derive(Clone, Debug, Default)]
-pub struct ReviewUpdate {
-    /// Replace the description when `Some`.
-    pub description: Option<String>,
-    /// Transition to a new state when `Some`.
-    pub state: Option<ReviewState>,
-}
-
 /// Operations on review refs under [`REVIEWS_REF_PREFIX`].
 pub trait Reviews {
     /// Return the ref name for a specific review ID.
@@ -141,14 +121,24 @@ pub trait Reviews {
     /// # Errors
     ///
     /// Returns a [`git2::Error`] if the review cannot be written to the repository.
-    fn create_review(&self, review: &NewReview) -> Result<u64, ::git2::Error>;
+    fn create_review(
+        &self,
+        target_branch: &str,
+        description: &str,
+        head_commit: ::git2::Oid,
+    ) -> Result<u64, ::git2::Error>;
 
     /// Apply `update` to the review identified by `id`.
     ///
     /// # Errors
     ///
     /// Returns a [`git2::Error`] if the review cannot be read or written.
-    fn update_review(&self, id: u64, update: &ReviewUpdate) -> Result<(), ::git2::Error>;
+    fn update_review(
+        &self,
+        id: u64,
+        description: Option<&str>,
+        state: Option<ReviewState>,
+    ) -> Result<(), ::git2::Error>;
 
     /// Record a new revision for an existing review (the author pushed or
     /// rebased their branch).

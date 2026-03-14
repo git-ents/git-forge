@@ -1,9 +1,7 @@
 #![allow(missing_docs)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use git_forge_issues::issues::{
-    ISSUES_REF_PREFIX, Issue, IssueMeta, IssueState, IssueUpdate, NewIssue,
-};
+use git_forge_issues::issues::{ISSUES_REF_PREFIX, Issue, IssueMeta, IssueState};
 
 fn bench_issue_state_as_str(c: &mut Criterion) {
     c.bench_function("IssueState::as_str/open", |b| {
@@ -40,32 +38,6 @@ fn bench_issue_ref(c: &mut Criterion) {
     });
 }
 
-fn bench_new_issue_construction(c: &mut Criterion) {
-    c.bench_function("NewIssue::construct/no_labels_no_assignees", |b| {
-        b.iter(|| NewIssue {
-            title: criterion::black_box("Fix the thing".to_owned()),
-            body: criterion::black_box("Detailed description here.".to_owned()),
-            labels: criterion::black_box(vec![]),
-            assignees: criterion::black_box(vec![]),
-        })
-    });
-
-    c.bench_function("NewIssue::construct/with_labels_and_assignees", |b| {
-        b.iter(|| NewIssue {
-            title: criterion::black_box("Refactor module layout".to_owned()),
-            body: criterion::black_box("We should reorganize the crate structure.".to_owned()),
-            labels: criterion::black_box(vec![
-                "refactor".to_owned(),
-                "good-first-issue".to_owned(),
-            ]),
-            assignees: criterion::black_box(vec![
-                "fingerprint-aabb".to_owned(),
-                "fingerprint-ccdd".to_owned(),
-            ]),
-        })
-    });
-}
-
 fn bench_issue_meta_construction(c: &mut Criterion) {
     c.bench_function("IssueMeta::construct", |b| {
         b.iter(|| IssueMeta {
@@ -73,8 +45,6 @@ fn bench_issue_meta_construction(c: &mut Criterion) {
             title: criterion::black_box("Add benchmarks".to_owned()),
             state: criterion::black_box(IssueState::Open),
             labels: criterion::black_box(vec!["perf".to_owned()]),
-            assignees: criterion::black_box(vec![]),
-            created: criterion::black_box("2024-01-01T00:00:00Z".to_owned()),
         })
     });
 }
@@ -88,8 +58,6 @@ fn bench_issue_construction(c: &mut Criterion) {
                 title: criterion::black_box("Add benchmarks".to_owned()),
                 state: criterion::black_box(IssueState::Open),
                 labels: criterion::black_box(vec![]),
-                assignees: criterion::black_box(vec![]),
-                created: criterion::black_box("2024-01-01T00:00:00Z".to_owned()),
             },
             body: criterion::black_box("Please add criterion benches.".to_owned()),
             comments: criterion::black_box(vec![]),
@@ -104,8 +72,6 @@ fn bench_issue_construction(c: &mut Criterion) {
                 title: criterion::black_box("Discuss approach".to_owned()),
                 state: criterion::black_box(IssueState::Closed),
                 labels: criterion::black_box(vec!["discussion".to_owned()]),
-                assignees: criterion::black_box(vec!["fingerprint-aabb".to_owned()]),
-                created: criterion::black_box("2024-03-15T09:00:00Z".to_owned()),
             },
             body: criterion::black_box("What approach should we take?".to_owned()),
             comments: criterion::black_box(vec![
@@ -122,30 +88,12 @@ fn bench_issue_construction(c: &mut Criterion) {
     });
 }
 
-fn bench_issue_update_construction(c: &mut Criterion) {
-    c.bench_function("IssueUpdate::construct/empty", |b| {
-        b.iter(|| criterion::black_box(IssueUpdate::default()))
-    });
-
-    c.bench_function("IssueUpdate::construct/full", |b| {
-        b.iter(|| IssueUpdate {
-            title: criterion::black_box(Some("Updated title".to_owned())),
-            body: criterion::black_box(Some("Updated body.".to_owned())),
-            labels: criterion::black_box(Some(vec!["bug".to_owned(), "urgent".to_owned()])),
-            assignees: criterion::black_box(Some(vec!["fingerprint-aabb".to_owned()])),
-            state: criterion::black_box(Some(IssueState::Closed)),
-        })
-    });
-}
-
 criterion_group!(
     benches,
     bench_issue_state_as_str,
     bench_issue_state_equality,
     bench_issue_ref,
-    bench_new_issue_construction,
     bench_issue_meta_construction,
     bench_issue_construction,
-    bench_issue_update_construction,
 );
 criterion_main!(benches);

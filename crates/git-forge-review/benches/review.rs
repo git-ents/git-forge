@@ -1,9 +1,7 @@
 #![allow(missing_docs)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use git_forge_review::reviews::{
-    NewReview, REVIEWS_REF_PREFIX, Review, ReviewMeta, ReviewState, ReviewUpdate, Revision,
-};
+use git_forge_review::reviews::{REVIEWS_REF_PREFIX, Review, ReviewMeta, ReviewState, Revision};
 
 fn bench_review_state_as_str(c: &mut Criterion) {
     c.bench_function("ReviewState::as_str/open", |b| {
@@ -51,16 +49,6 @@ fn bench_revision_construction(c: &mut Criterion) {
             index: criterion::black_box("001".to_owned()),
             head_commit: criterion::black_box(git2::Oid::zero()),
             timestamp: criterion::black_box("2024-01-01T00:00:00Z".to_owned()),
-        })
-    });
-}
-
-fn bench_new_review_construction(c: &mut Criterion) {
-    c.bench_function("NewReview::construct", |b| {
-        b.iter(|| NewReview {
-            target_branch: criterion::black_box("refs/heads/main".to_owned()),
-            description: criterion::black_box("Add criterion benchmarks to each crate.".to_owned()),
-            head_commit: criterion::black_box(git2::Oid::zero()),
         })
     });
 }
@@ -119,28 +107,13 @@ fn bench_review_construction(c: &mut Criterion) {
     });
 }
 
-fn bench_review_update_construction(c: &mut Criterion) {
-    c.bench_function("ReviewUpdate::construct/empty", |b| {
-        b.iter(|| criterion::black_box(ReviewUpdate::default()))
-    });
-
-    c.bench_function("ReviewUpdate::construct/full", |b| {
-        b.iter(|| ReviewUpdate {
-            description: criterion::black_box(Some("Updated description.".to_owned())),
-            state: criterion::black_box(Some(ReviewState::Closed)),
-        })
-    });
-}
-
 criterion_group!(
     benches,
     bench_review_state_as_str,
     bench_review_state_equality,
     bench_review_ref,
     bench_revision_construction,
-    bench_new_review_construction,
     bench_review_meta_construction,
     bench_review_construction,
-    bench_review_update_construction,
 );
 criterion_main!(benches);

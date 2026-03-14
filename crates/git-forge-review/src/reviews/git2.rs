@@ -2,7 +2,7 @@
 
 use git2::Repository;
 
-use crate::reviews::{NewReview, Review, ReviewState, ReviewUpdate, Reviews};
+use crate::reviews::{Review, ReviewState, Reviews};
 
 impl Reviews for Repository {
     fn list_reviews(&self) -> Result<Vec<Review>, git2::Error> {
@@ -17,11 +17,21 @@ impl Reviews for Repository {
         todo!()
     }
 
-    fn create_review(&self, _review: &NewReview) -> Result<u64, git2::Error> {
+    fn create_review(
+        &self,
+        _target_branch: &str,
+        _description: &str,
+        _head_commit: git2::Oid,
+    ) -> Result<u64, git2::Error> {
         todo!()
     }
 
-    fn update_review(&self, _id: u64, _update: &ReviewUpdate) -> Result<(), git2::Error> {
+    fn update_review(
+        &self,
+        _id: u64,
+        _description: Option<&str>,
+        _state: Option<ReviewState>,
+    ) -> Result<(), git2::Error> {
         todo!()
     }
 

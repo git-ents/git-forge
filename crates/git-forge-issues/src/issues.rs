@@ -20,7 +20,7 @@
 pub mod git2;
 
 /// Ref prefix under which issue refs are stored.
-pub const ISSUES_REF_PREFIX: &str = "refs/meta/issues/";
+pub const ISSUES_REF_PREFIX: &str = "refs/issues/";
 
 /// The lifecycle state of an issue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +42,7 @@ impl IssueState {
     }
 }
 
-/// Metadata stored in an issue's `meta` file.
+/// Metadata for an issue.
 #[derive(Clone, Debug)]
 pub struct IssueMeta {
     /// Fingerprint of the issue author.
@@ -53,13 +53,9 @@ pub struct IssueMeta {
     pub state: IssueState,
     /// Free-form label strings.
     pub labels: Vec<String>,
-    /// Fingerprints of assigned contributors.
-    pub assignees: Vec<String>,
-    /// RFC 3339 creation timestamp.
-    pub created: String,
 }
 
-/// A fully loaded issue.
+/// Represents an issue that could exist under e.g. `refs/issues`.
 #[derive(Clone, Debug)]
 pub struct Issue {
     /// Sequential integer ID.
@@ -70,34 +66,6 @@ pub struct Issue {
     pub body: String,
     /// Issue-scoped comments. Each entry is `(filename, markdown_body)`.
     pub comments: Vec<(String, String)>,
-}
-
-/// Parameters for creating a new issue.
-#[derive(Clone, Debug)]
-pub struct NewIssue {
-    /// Single-line title.
-    pub title: String,
-    /// Markdown body.
-    pub body: String,
-    /// Optional initial labels.
-    pub labels: Vec<String>,
-    /// Optional initial assignees (fingerprints).
-    pub assignees: Vec<String>,
-}
-
-/// Parameters for mutating an existing issue.
-#[derive(Clone, Debug, Default)]
-pub struct IssueUpdate {
-    /// Replace the title when `Some`.
-    pub title: Option<String>,
-    /// Replace the body when `Some`.
-    pub body: Option<String>,
-    /// Replace the full label list when `Some`.
-    pub labels: Option<Vec<String>>,
-    /// Replace the full assignee list when `Some`.
-    pub assignees: Option<Vec<String>>,
-    /// Transition to a new state when `Some`.
-    pub state: Option<IssueState>,
 }
 
 /// Operations on issue refs under [`ISSUES_REF_PREFIX`].
@@ -134,14 +102,28 @@ pub trait Issues {
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn create_issue(&self, issue: &NewIssue) -> Result<u64, ::git2::Error>;
+    fn create_issue(
+        &self,
+        title: &str,
+        body: &str,
+        labels: &[String],
+        assignees: &[String],
+    ) -> Result<u64, ::git2::Error>;
 
     /// Apply `update` to the issue identified by `id`.
     ///
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn update_issue(&self, id: u64, update: &IssueUpdate) -> Result<(), ::git2::Error>;
+    fn update_issue(
+        &self,
+        id: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        labels: Option<&[String]>,
+        assignees: Option<&[String]>,
+        state: Option<IssueState>,
+    ) -> Result<(), ::git2::Error>;
 
     /// Add a conversation comment to an issue (not a code comment).
     ///
