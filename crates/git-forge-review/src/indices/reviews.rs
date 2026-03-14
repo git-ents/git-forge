@@ -110,32 +110,62 @@ pub struct ReviewUpdate {
 /// Operations on review refs under [`REVIEWS_REF_PREFIX`].
 pub trait Reviews {
     /// Return the ref name for a specific review ID.
+    #[must_use]
     fn review_ref(id: u64) -> String {
         format!("{REVIEWS_REF_PREFIX}{id}")
     }
 
     /// Return all reviews, ordered by ID ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the underlying repository cannot be read.
     fn list_reviews(&self) -> Result<Vec<Review>, ::git2::Error>;
 
     /// Return all reviews matching `state`, ordered by ID ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the underlying repository cannot be read.
     fn list_reviews_by_state(&self, state: ReviewState) -> Result<Vec<Review>, ::git2::Error>;
 
     /// Load a single review by ID, returning `None` if the ref does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the underlying repository cannot be read.
     fn find_review(&self, id: u64) -> Result<Option<Review>, ::git2::Error>;
 
     /// Create a new review, returning the assigned ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the review cannot be written to the repository.
     fn create_review(&self, review: &NewReview) -> Result<u64, ::git2::Error>;
 
     /// Apply `update` to the review identified by `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the review cannot be read or written.
     fn update_review(&self, id: u64, update: &ReviewUpdate) -> Result<(), ::git2::Error>;
 
     /// Record a new revision for an existing review (the author pushed or
     /// rebased their branch).
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the review cannot be read or written.
     fn add_revision(&self, id: u64, head_commit: ::git2::Oid) -> Result<(), ::git2::Error>;
 
     /// Compute the commit range `base..tip` for the given revision of a
     /// review, where `base` is the merge base of `head_commit` with
     /// `target_branch`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`git2::Error`] if the revision data cannot be read or the
+    /// merge base cannot be computed.
     fn revision_range(
         &self,
         review: &Review,

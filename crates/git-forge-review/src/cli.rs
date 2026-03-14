@@ -3,7 +3,7 @@
 use clap::Subcommand;
 
 /// Subcommands for `git forge review`.
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy)]
 pub enum ReviewCommand {
     /// Open a new review.
     New,

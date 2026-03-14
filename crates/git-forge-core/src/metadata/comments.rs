@@ -110,10 +110,16 @@ pub struct Reanchor {
 /// Operations on code comments stored under [`COMMENTS_REF`].
 pub trait Comments {
     /// Return all comments anchored to `blob_oid`.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn comments_on_blob(&self, blob_oid: ::git2::Oid) -> Result<Vec<Comment>, ::git2::Error>;
 
     /// Return the comment with `id` anchored to `blob_oid`, or `None` if it
     /// does not exist.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn find_comment(
         &self,
         blob_oid: ::git2::Oid,
@@ -121,9 +127,15 @@ pub trait Comments {
     ) -> Result<Option<Comment>, ::git2::Error>;
 
     /// Leave a new comment, returning the assigned comment ID.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn add_comment(&self, comment: &NewComment) -> Result<String, ::git2::Error>;
 
     /// Add a reply to an existing comment thread.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn reply_to_comment(
         &self,
         blob_oid: ::git2::Oid,
@@ -133,6 +145,9 @@ pub trait Comments {
     ) -> Result<(), ::git2::Error>;
 
     /// Mark a comment as resolved.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn resolve_comment(
         &self,
         blob_oid: ::git2::Oid,
@@ -143,9 +158,15 @@ pub trait Comments {
     /// Reanchor a comment from its current blob OID to a new one after the
     /// file was modified. Writes a new metadata commit recording the updated
     /// anchor.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn reanchor_comment(&self, reanchor: &Reanchor) -> Result<(), ::git2::Error>;
 
     /// Return all comments whose blob OID no longer appears in any file
     /// reachable from `HEAD`. These are "orphaned" comments.
+    /// # Errors
+    ///
+    /// Returns `Err` if the underlying git operation fails.
     fn orphaned_comments(&self) -> Result<Vec<Comment>, ::git2::Error>;
 }

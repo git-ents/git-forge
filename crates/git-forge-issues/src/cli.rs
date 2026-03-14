@@ -3,7 +3,7 @@
 use clap::Subcommand;
 
 /// Subcommands for `git forge issue`.
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy)]
 pub enum IssueCommand {
     /// Open a new issue.
     New,

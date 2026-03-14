@@ -103,25 +103,50 @@ pub struct IssueUpdate {
 /// Operations on issue refs under [`ISSUES_REF_PREFIX`].
 pub trait Issues {
     /// Return the ref name for a specific issue ID.
+    #[must_use]
     fn issue_ref(id: u64) -> String {
         format!("{ISSUES_REF_PREFIX}{id}")
     }
 
     /// Return all issues, ordered by ID ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn list_issues(&self) -> Result<Vec<Issue>, ::git2::Error>;
 
     /// Return all issues matching `state`, ordered by ID ascending.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn list_issues_by_state(&self, state: IssueState) -> Result<Vec<Issue>, ::git2::Error>;
 
     /// Load a single issue by ID, returning `None` if the ref does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn find_issue(&self, id: u64) -> Result<Option<Issue>, ::git2::Error>;
 
     /// Create a new issue, returning the assigned ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn create_issue(&self, issue: &NewIssue) -> Result<u64, ::git2::Error>;
 
     /// Apply `update` to the issue identified by `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn update_issue(&self, id: u64, update: &IssueUpdate) -> Result<(), ::git2::Error>;
 
     /// Add a conversation comment to an issue (not a code comment).
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
     fn add_issue_comment(&self, id: u64, author: &str, body: &str) -> Result<(), ::git2::Error>;
 }

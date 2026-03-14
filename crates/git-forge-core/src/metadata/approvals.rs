@@ -73,10 +73,16 @@ pub struct NewApproval {
 /// Operations on approvals stored under [`APPROVALS_REF`].
 pub trait Approvals {
     /// Return all approvals recorded for `object_id` (patch-id or OID hex).
+    /// # Errors
+    ///
+    /// Returns `Err` if reading from the metadata ref fails.
     fn approvals_for(&self, object_id: &str) -> Result<Vec<Approval>, ::git2::Error>;
 
     /// Return the approval by `approver_fingerprint` for `object_id`, or
     /// `None` if the approver has not yet approved.
+    /// # Errors
+    ///
+    /// Returns `Err` if reading from the metadata ref fails.
     fn find_approval(
         &self,
         object_id: &str,
@@ -84,11 +90,17 @@ pub trait Approvals {
     ) -> Result<Option<Approval>, ::git2::Error>;
 
     /// Record a new approval.
+    /// # Errors
+    ///
+    /// Returns `Err` if writing the metadata commit fails.
     fn add_approval(&self, approval: &NewApproval) -> Result<(), ::git2::Error>;
 
     /// Bulk-approve every patch-id in `patch_ids` plus a single range approval
     /// for `range_patch_id`. This is what `git forge review approve` calls
     /// under the hood.
+    /// # Errors
+    ///
+    /// Returns `Err` if writing any of the metadata commits fails.
     fn bulk_approve_range(
         &self,
         patch_ids: &[String],
@@ -98,6 +110,9 @@ pub trait Approvals {
 
     /// Return `true` if `object_id` has at least `min_approvals` distinct
     /// approvals, excluding `exclude` when `Some`.
+    /// # Errors
+    ///
+    /// Returns `Err` if reading from the metadata ref fails.
     fn approval_count_satisfies(
         &self,
         object_id: &str,

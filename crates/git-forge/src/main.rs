@@ -7,7 +7,7 @@ use std::process;
 
 fn main() {
     if let Some(dir) = parse_generate_man_flag() {
-        if let Err(e) = generate_man_page(dir) {
+        if let Err(e) = generate_man_page(&dir) {
             eprintln!("Error: {e}");
             process::exit(1);
         }
@@ -30,22 +30,23 @@ fn parse_generate_man_flag() -> Option<PathBuf> {
     let pos = args.iter().position(|a| a == "--generate-man")?;
     let dir = args
         .get(pos + 1)
-        .map(PathBuf::from)
-        .unwrap_or_else(default_man_dir);
+        .map_or_else(default_man_dir, PathBuf::from);
     Some(dir)
 }
 
 fn default_man_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let home = std::env::var_os("HOME").expect("HOME is not set");
-            PathBuf::from(home).join(".local/share")
-        })
+        .map_or_else(
+            || {
+                let home = std::env::var_os("HOME").expect("HOME is not set");
+                PathBuf::from(home).join(".local/share")
+            },
+            PathBuf::from,
+        )
         .join("man")
 }
 
-fn generate_man_page(output_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn generate_man_page(output_dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let man1_dir = output_dir.join("man1");
     std::fs::create_dir_all(&man1_dir)?;
 

@@ -3,7 +3,7 @@
 use clap::Subcommand;
 
 /// Subcommands for `git forge release`.
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone, Copy)]
 pub enum ReleaseCommand {
     /// Create a new release.
     New,
