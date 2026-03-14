@@ -22,6 +22,21 @@ pub mod git2;
 /// Ref prefix under which issue refs are stored.
 pub const ISSUES_REF_PREFIX: &str = "refs/issues/";
 
+/// Options for issue operations, allowing customization of the ref prefix.
+#[derive(Clone, Debug)]
+pub struct IssueOpts {
+    /// Ref prefix under which issue refs are stored. Defaults to [`ISSUES_REF_PREFIX`].
+    pub ref_prefix: String,
+}
+
+impl Default for IssueOpts {
+    fn default() -> Self {
+        Self {
+            ref_prefix: ISSUES_REF_PREFIX.to_string(),
+        }
+    }
+}
+
 /// The lifecycle state of an issue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IssueState {
@@ -81,21 +96,26 @@ pub trait Issues {
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn list_issues(&self) -> Result<Vec<Issue>, ::git2::Error>;
+    fn list_issues(&self, opts: Option<&IssueOpts>) -> Result<Vec<Issue>, ::git2::Error>;
 
     /// Return all issues matching `state`, ordered by ID ascending.
     ///
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn list_issues_by_state(&self, state: IssueState) -> Result<Vec<Issue>, ::git2::Error>;
+    fn list_issues_by_state(
+        &self,
+        state: IssueState,
+        opts: Option<&IssueOpts>,
+    ) -> Result<Vec<Issue>, ::git2::Error>;
 
     /// Load a single issue by ID, returning `None` if the ref does not exist.
     ///
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn find_issue(&self, id: u64) -> Result<Option<Issue>, ::git2::Error>;
+    fn find_issue(&self, id: u64, opts: Option<&IssueOpts>)
+    -> Result<Option<Issue>, ::git2::Error>;
 
     /// Create a new issue, returning the assigned ID.
     ///
@@ -108,6 +128,7 @@ pub trait Issues {
         body: &str,
         labels: &[String],
         assignees: &[String],
+        opts: Option<&IssueOpts>,
     ) -> Result<u64, ::git2::Error>;
 
     /// Apply `update` to the issue identified by `id`.
@@ -123,6 +144,7 @@ pub trait Issues {
         labels: Option<&[String]>,
         assignees: Option<&[String]>,
         state: Option<IssueState>,
+        opts: Option<&IssueOpts>,
     ) -> Result<(), ::git2::Error>;
 
     /// Add a conversation comment to an issue (not a code comment).
@@ -130,5 +152,11 @@ pub trait Issues {
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
-    fn add_issue_comment(&self, id: u64, author: &str, body: &str) -> Result<(), ::git2::Error>;
+    fn add_issue_comment(
+        &self,
+        id: u64,
+        author: &str,
+        body: &str,
+        opts: Option<&IssueOpts>,
+    ) -> Result<(), ::git2::Error>;
 }
