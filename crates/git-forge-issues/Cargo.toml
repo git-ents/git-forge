@@ -9,6 +9,7 @@ description = "Issue tracking domain for git-forge."
 [dependencies]
 clap = { workspace = true }
 git2 = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -7,6 +7,48 @@ use git2::Repository;
 use crate::cli::{IssueCommand, StateArg};
 use crate::issues::{IssueState, Issues};
 
+/// Parse issue template with TOML frontmatter.
+/// Returns (title, body).
+fn parse_issue_template(content: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    // Check if content starts with +++
+    if !content.starts_with("+++\n") {
+        return Err("Template must start with +++".into());
+    }
+
+    // Find the closing +++
+    let rest = &content[4..];
+    let closing_pos = match rest.find("\n+++\n") {
+        Some(pos) => pos,
+        None => return Err("Could not find closing +++".into()),
+    };
+
+    let frontmatter = &rest[..closing_pos];
+    let body_start = closing_pos + 5; // length of "\n+++\n"
+    let body = rest[body_start..].trim_end().to_string();
+
+    // Parse title from frontmatter
+    let title = frontmatter
+        .lines()
+        .find_map(|line| {
+            if line.starts_with("title = ") {
+                let title_str = &line[8..];
+                // Remove quotes
+                if (title_str.starts_with('"') && title_str.ends_with('"'))
+                    || (title_str.starts_with('\'') && title_str.ends_with('\''))
+                {
+                    Some(title_str[1..title_str.len() - 1].to_string())
+                } else {
+                    Some(title_str.to_string())
+                }
+            } else {
+                None
+            }
+        })
+        .ok_or("Could not find title in frontmatter")?;
+
+    Ok((title, body))
+}
+
 #[allow(dead_code)]
 fn open_repo() -> Repository {
     match Repository::open_from_env() {
@@ -59,15 +101,53 @@ impl Executor {
     /// Creates a new issue with the given title and body.
     pub fn create_issue(
         &self,
-        title: &str,
-        body: &str,
+        title: Option<&str>,
+        body: Option<&str>,
         label: Option<&[String]>,
         assignee: Option<&[String]>,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         let repo = self.repo();
         let labels = label.unwrap_or_default();
         let assignees = assignee.unwrap_or_default();
+        let title = title.ok_or("Title is required")?;
+        let body = body.ok_or("Body is required")?;
         let id = repo.create_issue(title, body, labels, assignees, None)?;
+        Ok(id)
+    }
+
+    /// Creates a new issue interactively using an editor.
+    pub fn create_issue_interactive(&self) -> Result<u64, Box<dyn std::error::Error>> {
+        use std::fs;
+        use std::io::Write;
+        use std::process::Command;
+
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+        // Create temporary file with frontmatter template
+        let mut temp_file = tempfile::NamedTempFile::new()?;
+        let template = "+++\ntitle = \"\"\n+++\n\n";
+        temp_file.write_all(template.as_bytes())?;
+        temp_file.flush()?;
+
+        let temp_path = temp_file.path().to_path_buf();
+
+        // Open editor
+        let status = Command::new(&editor).arg(&temp_path).status()?;
+
+        if !status.success() {
+            return Err("Editor exited with error".into());
+        }
+
+        // Read and parse the file
+        let content = fs::read_to_string(&temp_path)?;
+        let (title, body) = parse_issue_template(&content)?;
+
+        if title.trim().is_empty() {
+            return Err("Title cannot be empty".into());
+        }
+
+        let repo = self.repo();
+        let id = repo.create_issue(&title, &body, &[], &[], None)?;
         Ok(id)
     }
 
@@ -148,17 +228,31 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
             body,
             label,
             assignee,
+            interactive,
         } => {
-            let body = if let Some(b) = body {
-                b
+            if interactive {
+                let id = executor.create_issue_interactive()?;
+                eprintln!("Created issue #{id}");
             } else {
-                use std::io::Read;
-                let mut buf = String::new();
-                std::io::stdin().read_to_string(&mut buf)?;
-                buf
-            };
-            let id = executor.create_issue(&title, &body, Some(&label), Some(&assignee))?;
-            eprintln!("Created issue #{id}: {title}");
+                let title = title
+                    .as_deref()
+                    .ok_or("Title is required (or use --interactive)")?;
+                let body = if let Some(b) = body {
+                    b
+                } else {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf
+                };
+                let id = executor.create_issue(
+                    Some(title),
+                    Some(&body),
+                    Some(&label),
+                    Some(&assignee),
+                )?;
+                eprintln!("Created issue #{id}: {title}");
+            }
         }
 
         IssueCommand::Edit {
