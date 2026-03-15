@@ -3,7 +3,7 @@
 //! An issue is a standalone ref with its own lifecycle:
 //!
 //! ```text
-//! refs/issues/<issue-id> → commit → tree
+//! refs/issue/<issue-id> → commit → tree
 //! ├── author          # plain text: fingerprint
 //! ├── title           # plain text: single-line title
 //! ├── state           # plain text: "open" or "closed"
@@ -23,7 +23,7 @@
 pub mod git2;
 
 /// Ref prefix under which issue refs are stored.
-pub const ISSUES_REF_PREFIX: &str = "refs/issues/";
+pub const ISSUES_REF_PREFIX: &str = "refs/issue/";
 
 /// Options for issue operations, allowing customization of the ref prefix.
 #[derive(Clone, Debug)]
@@ -73,7 +73,7 @@ pub struct IssueMeta {
     pub labels: Vec<String>,
 }
 
-/// Represents an issue that could exist under e.g. `refs/issues`.
+/// Represents an issue that could exist under e.g. `refs/issue`.
 #[derive(Clone, Debug)]
 pub struct Issue {
     /// Sequential integer ID.
