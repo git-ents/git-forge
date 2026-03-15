@@ -38,9 +38,8 @@ fn read_state(repo: &Repository, tree: &git2::Tree<'_>) -> Result<IssueState, gi
 }
 
 fn read_labels(repo: &Repository, tree: &git2::Tree<'_>) -> Result<Vec<String>, git2::Error> {
-    let entry = match tree.get_name("labels") {
-        None => return Ok(Vec::new()),
-        Some(e) => e,
+    let Some(entry) = tree.get_name("labels") else {
+        return Ok(Vec::new());
     };
     let obj = entry.to_object(repo)?;
     let subtree = obj
@@ -54,11 +53,8 @@ fn read_labels(repo: &Repository, tree: &git2::Tree<'_>) -> Result<Vec<String>, 
     Ok(labels)
 }
 
-fn read_comments(
-    _repo: &Repository,
-    _tree: &git2::Tree<'_>,
-) -> Result<Vec<(String, String)>, git2::Error> {
-    Ok(Vec::new())
+fn read_comments(_repo: &Repository, _tree: &git2::Tree<'_>) -> Vec<(String, String)> {
+    Vec::new()
 }
 
 fn issue_from_ref(
@@ -66,14 +62,12 @@ fn issue_from_ref(
     reference: &git2::Reference<'_>,
     ref_prefix: &str,
 ) -> Result<Option<Issue>, git2::Error> {
-    let ref_name = match reference.name() {
-        None => return Ok(None),
-        Some(n) => n,
+    let Some(ref_name) = reference.name() else {
+        return Ok(None);
     };
 
-    let id_str = match ref_name.strip_prefix(ref_prefix) {
-        None => return Ok(None),
-        Some(s) => s,
+    let Some(id_str) = ref_name.strip_prefix(ref_prefix) else {
+        return Ok(None);
     };
 
     // Skip nested refs (e.g. sub-directories).
@@ -95,7 +89,7 @@ fn issue_from_ref(
     let labels = read_labels(repo, &tree)?;
 
     let body = blob_content(repo, &tree, "body")?.unwrap_or_default();
-    let comments = read_comments(repo, &tree)?;
+    let comments = read_comments(repo, &tree);
 
     Ok(Some(Issue {
         id,
@@ -116,9 +110,7 @@ fn issue_from_ref(
 
 impl Issues for Repository {
     fn list_issues(&self, opts: Option<&IssueOpts>) -> Result<Vec<Issue>, git2::Error> {
-        let prefix = opts
-            .map(|o| o.ref_prefix.as_str())
-            .unwrap_or(ISSUES_REF_PREFIX);
+        let prefix = opts.map_or(ISSUES_REF_PREFIX, |o| o.ref_prefix.as_str());
 
         let mut issues = Vec::new();
         for reference in self.references_glob(&format!("{prefix}*"))? {
@@ -136,9 +128,7 @@ impl Issues for Repository {
         state: IssueState,
         opts: Option<&IssueOpts>,
     ) -> Result<Vec<Issue>, git2::Error> {
-        let prefix = opts
-            .map(|o| o.ref_prefix.as_str())
-            .unwrap_or(ISSUES_REF_PREFIX);
+        let prefix = opts.map_or(ISSUES_REF_PREFIX, |o| o.ref_prefix.as_str());
 
         let mut issues = Vec::new();
         for reference in self.references_glob(&format!("{prefix}*"))? {
@@ -167,9 +157,7 @@ impl Issues for Repository {
     }
 
     fn find_issue(&self, id: u64, opts: Option<&IssueOpts>) -> Result<Option<Issue>, git2::Error> {
-        let prefix = opts
-            .map(|o| o.ref_prefix.as_str())
-            .unwrap_or(ISSUES_REF_PREFIX);
+        let prefix = opts.map_or(ISSUES_REF_PREFIX, |o| o.ref_prefix.as_str());
         let ref_name = format!("{prefix}{id}");
         match self.find_reference(&ref_name) {
             Ok(reference) => issue_from_ref(self, &reference, prefix),
@@ -186,25 +174,20 @@ impl Issues for Repository {
         _assignees: &[String],
         opts: Option<&IssueOpts>,
     ) -> Result<u64, git2::Error> {
-        let prefix = opts
-            .map(|o| o.ref_prefix.as_str())
-            .unwrap_or(ISSUES_REF_PREFIX);
+        let prefix = opts.map_or(ISSUES_REF_PREFIX, |o| o.ref_prefix.as_str());
 
         // Determine next ID: max existing + 1, or 1.
         let next_id = {
             let mut max = 0u64;
             for reference in self.references_glob(&format!("{prefix}*"))? {
                 let reference = reference?;
-                if let Some(name) = reference.name() {
-                    if let Some(id_str) = name.strip_prefix(prefix) {
-                        if !id_str.contains('/') {
-                            if let Ok(n) = id_str.parse::<u64>() {
-                                if n > max {
-                                    max = n;
-                                }
-                            }
-                        }
-                    }
+                if let Some(name) = reference.name()
+                    && let Some(id_str) = name.strip_prefix(prefix)
+                    && !id_str.contains('/')
+                    && let Ok(n) = id_str.parse::<u64>()
+                    && n > max
+                {
+                    max = n;
                 }
             }
             max + 1
@@ -217,7 +200,7 @@ impl Issues for Repository {
         let labels_tree = {
             let mut tb = self.treebuilder(None)?;
             for label in labels {
-                tb.insert(label, empty_blob, 0o100644)?;
+                tb.insert(label, empty_blob, 0o100_644)?;
             }
             tb.write()?
         };
@@ -229,11 +212,11 @@ impl Issues for Repository {
 
         let tree_oid = {
             let mut tb = self.treebuilder(None)?;
-            tb.insert("author", author_blob, 0o100644)?;
-            tb.insert("title", title_blob, 0o100644)?;
-            tb.insert("state", state_blob, 0o100644)?;
-            tb.insert("body", body_blob, 0o100644)?;
-            tb.insert("labels", labels_tree, 0o040000)?;
+            tb.insert("author", author_blob, 0o100_644)?;
+            tb.insert("title", title_blob, 0o100_644)?;
+            tb.insert("state", state_blob, 0o100_644)?;
+            tb.insert("body", body_blob, 0o100_644)?;
+            tb.insert("labels", labels_tree, 0o040_000)?;
             tb.write()?
         };
 
@@ -255,9 +238,7 @@ impl Issues for Repository {
         state: Option<IssueState>,
         opts: Option<&IssueOpts>,
     ) -> Result<(), git2::Error> {
-        let prefix = opts
-            .map(|o| o.ref_prefix.as_str())
-            .unwrap_or(ISSUES_REF_PREFIX);
+        let prefix = opts.map_or(ISSUES_REF_PREFIX, |o| o.ref_prefix.as_str());
 
         // Find the existing issue
         let existing = self.find_issue(id, opts)?;
@@ -286,7 +267,7 @@ impl Issues for Repository {
         let labels_tree = {
             let mut tb = self.treebuilder(None)?;
             for label in &issue.meta.labels {
-                tb.insert(label, empty_blob, 0o100644)?;
+                tb.insert(label, empty_blob, 0o100_644)?;
             }
             tb.write()?
         };
@@ -298,11 +279,11 @@ impl Issues for Repository {
 
         let tree_oid = {
             let mut tb = self.treebuilder(None)?;
-            tb.insert("author", author_blob, 0o100644)?;
-            tb.insert("title", title_blob, 0o100644)?;
-            tb.insert("state", state_blob, 0o100644)?;
-            tb.insert("body", body_blob, 0o100644)?;
-            tb.insert("labels", labels_tree, 0o040000)?;
+            tb.insert("author", author_blob, 0o100_644)?;
+            tb.insert("title", title_blob, 0o100_644)?;
+            tb.insert("state", state_blob, 0o100_644)?;
+            tb.insert("body", body_blob, 0o100_644)?;
+            tb.insert("labels", labels_tree, 0o040_000)?;
             tb.write()?
         };
 
@@ -310,7 +291,7 @@ impl Issues for Repository {
         let ref_name = format!("{prefix}{id}");
 
         // Get the current commit for the parent
-        let mut reference = self.find_reference(&ref_name)?;
+        let reference = self.find_reference(&ref_name)?;
         let parent_commit = reference.peel_to_commit()?;
 
         let message = format!("update issue {id}");

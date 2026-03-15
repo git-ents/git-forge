@@ -5,20 +5,21 @@ use git_forge_issues::issues::{ISSUES_REF_PREFIX, Issue, IssueMeta, IssueState};
 
 fn bench_issue_state_as_str(c: &mut Criterion) {
     c.bench_function("IssueState::as_str/open", |b| {
-        b.iter(|| criterion::black_box(IssueState::Open.as_str()))
+        b.iter(|| criterion::black_box(IssueState::Open.as_str()));
     });
 
     c.bench_function("IssueState::as_str/closed", |b| {
-        b.iter(|| criterion::black_box(IssueState::Closed.as_str()))
+        b.iter(|| criterion::black_box(IssueState::Closed.as_str()));
     });
 }
 
+#[allow(clippy::eq_op)]
 fn bench_issue_state_equality(c: &mut Criterion) {
     c.bench_function("IssueState::equality", |b| {
         b.iter(|| {
             criterion::black_box(IssueState::Open == IssueState::Open);
             criterion::black_box(IssueState::Open == IssueState::Closed);
-        })
+        });
     });
 }
 
@@ -27,14 +28,14 @@ fn bench_issue_ref(c: &mut Criterion) {
         b.iter(|| {
             let id: u64 = criterion::black_box(1);
             criterion::black_box(format!("{ISSUES_REF_PREFIX}{id}"))
-        })
+        });
     });
 
     c.bench_function("Issues::issue_ref/large_id", |b| {
         b.iter(|| {
             let id: u64 = criterion::black_box(99_999);
             criterion::black_box(format!("{ISSUES_REF_PREFIX}{id}"))
-        })
+        });
     });
 }
 
@@ -45,7 +46,7 @@ fn bench_issue_meta_construction(c: &mut Criterion) {
             title: criterion::black_box("Add benchmarks".to_owned()),
             state: criterion::black_box(IssueState::Open),
             labels: criterion::black_box(vec!["perf".to_owned()]),
-        })
+        });
     });
 }
 
@@ -61,7 +62,7 @@ fn bench_issue_construction(c: &mut Criterion) {
             },
             body: criterion::black_box("Please add criterion benches.".to_owned()),
             comments: criterion::black_box(vec![]),
-        })
+        });
     });
 
     c.bench_function("Issue::construct/with_comments", |b| {
@@ -84,7 +85,7 @@ fn bench_issue_construction(c: &mut Criterion) {
                     "Agreed, let's proceed.".to_owned(),
                 ),
             ]),
-        })
+        });
     });
 }
 

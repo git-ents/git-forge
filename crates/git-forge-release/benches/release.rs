@@ -5,23 +5,23 @@ use git_forge_release::cli::ReleaseCommand;
 
 fn bench_release_command_variants(c: &mut Criterion) {
     c.bench_function("ReleaseCommand::New", |b| {
-        b.iter(|| criterion::black_box(ReleaseCommand::New))
+        b.iter(|| criterion::black_box(ReleaseCommand::New));
     });
 
     c.bench_function("ReleaseCommand::Edit", |b| {
-        b.iter(|| criterion::black_box(ReleaseCommand::Edit))
+        b.iter(|| criterion::black_box(ReleaseCommand::Edit));
     });
 
     c.bench_function("ReleaseCommand::List", |b| {
-        b.iter(|| criterion::black_box(ReleaseCommand::List))
+        b.iter(|| criterion::black_box(ReleaseCommand::List));
     });
 
     c.bench_function("ReleaseCommand::Status", |b| {
-        b.iter(|| criterion::black_box(ReleaseCommand::Status))
+        b.iter(|| criterion::black_box(ReleaseCommand::Status));
     });
 
     c.bench_function("ReleaseCommand::Show", |b| {
-        b.iter(|| criterion::black_box(ReleaseCommand::Show))
+        b.iter(|| criterion::black_box(ReleaseCommand::Show));
     });
 }
 

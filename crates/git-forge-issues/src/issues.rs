@@ -139,6 +139,7 @@ pub trait Issues {
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
+    #[allow(clippy::too_many_arguments)]
     fn update_issue(
         &self,
         id: u64,

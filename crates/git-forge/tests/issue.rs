@@ -1,6 +1,7 @@
+//! Tests for the issue subcommand.
+
 use std::process::Command;
 
-use assert_cmd::prelude::*;
 use tempfile::TempDir;
 
 fn setup_repo() -> TempDir {

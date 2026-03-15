@@ -11,7 +11,7 @@ fn bench_line_range(c: &mut Criterion) {
         b.iter(|| LineRange {
             start: criterion::black_box(1),
             end: criterion::black_box(42),
-        })
+        });
     });
 }
 
@@ -29,7 +29,7 @@ fn bench_approval_kind_as_str(c: &mut Criterion) {
                     criterion::black_box(a == b_kind);
                 }
             }
-        })
+        });
     });
 }
 
@@ -42,7 +42,7 @@ fn bench_approval_construction(c: &mut Criterion) {
             kind: criterion::black_box(ApprovalKind::Patch),
             path: criterion::black_box(None),
             message: criterion::black_box(Some("LGTM".to_owned())),
-        })
+        });
     });
 
     c.bench_function("NewApproval::construct", |b| {
@@ -51,7 +51,7 @@ fn bench_approval_construction(c: &mut Criterion) {
             kind: criterion::black_box(ApprovalKind::Range),
             path: criterion::black_box(None),
             message: criterion::black_box(None),
-        })
+        });
     });
 }
 
@@ -71,7 +71,7 @@ fn bench_comment_construction(c: &mut Criterion) {
             body: criterion::black_box("This needs a doc comment.".to_owned()),
             resolved: criterion::black_box(None),
             replies: criterion::black_box(vec![]),
-        })
+        });
     });
 
     c.bench_function("NewComment::construct", |b| {
@@ -80,7 +80,7 @@ fn bench_comment_construction(c: &mut Criterion) {
             range: LineRange { start: 1, end: 5 },
             context_lines: criterion::black_box(vec!["use std::fmt;".to_owned()]),
             body: criterion::black_box("Consider deriving Display instead.".to_owned()),
-        })
+        });
     });
 }
 
@@ -91,7 +91,7 @@ fn bench_reply_construction(c: &mut Criterion) {
             author: criterion::black_box("fingerprint-002".to_owned()),
             timestamp: criterion::black_box("2024-01-02T00:00:00Z".to_owned()),
             body: criterion::black_box("Agreed, will fix.".to_owned()),
-        })
+        });
     });
 }
 

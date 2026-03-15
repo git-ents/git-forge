@@ -7,6 +7,7 @@ use git2::Repository;
 use crate::cli::{IssueCommand, StateArg};
 use crate::issues::{IssueState, Issues};
 
+#[allow(dead_code)]
 fn open_repo() -> Repository {
     match Repository::open_from_env() {
         Ok(r) => r,
@@ -22,6 +23,7 @@ struct Executor(git2::Repository);
 
 impl Executor {
     /// Constructs an `Executor` from a path to a repository.
+    #[allow(dead_code)]
     pub fn from_path(path: &str) -> Result<Self, git2::Error> {
         let repo = Repository::open(path)?;
         Ok(Self(repo))
@@ -39,6 +41,7 @@ impl Executor {
     }
 
     /// Lists issues for the repository, optionally filtered by state.
+    #[allow(dead_code)]
     pub fn list_issues(&self, state: Option<IssueState>) -> Result<(), Box<dyn std::error::Error>> {
         let repo = self.repo();
 
@@ -58,13 +61,13 @@ impl Executor {
         &self,
         title: &str,
         body: &str,
-        label: Option<Vec<String>>,
-        assignee: Option<Vec<String>>,
+        label: Option<&[String]>,
+        assignee: Option<&[String]>,
     ) -> Result<u64, Box<dyn std::error::Error>> {
         let repo = self.repo();
         let labels = label.unwrap_or_default();
         let assignees = assignee.unwrap_or_default();
-        let id = repo.create_issue(&title, &body, &labels, &assignees, None)?;
+        let id = repo.create_issue(title, body, labels, assignees, None)?;
         Ok(id)
     }
 
@@ -74,14 +77,12 @@ impl Executor {
         id: u64,
         title: Option<&str>,
         body: Option<&str>,
-        labels: Option<Vec<String>>,
-        assignees: Option<Vec<String>>,
+        labels: Option<&[String]>,
+        assignees: Option<&[String]>,
         state: Option<IssueState>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo = self.repo();
-        let labels_ref = labels.as_ref().map(|l| l.as_slice());
-        let assignees_ref = assignees.as_ref().map(|a| a.as_slice());
-        repo.update_issue(id, title, body, labels_ref, assignees_ref, state, None)?;
+        repo.update_issue(id, title, body, labels, assignees, state, None)?;
         Ok(())
     }
 
@@ -148,16 +149,15 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
             label,
             assignee,
         } => {
-            let body = match body {
-                Some(b) => b,
-                None => {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    std::io::stdin().read_to_string(&mut buf)?;
-                    buf
-                }
+            let body = if let Some(b) = body {
+                b
+            } else {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                buf
             };
-            let id = executor.create_issue(&title, &body, Some(label), Some(assignee))?;
+            let id = executor.create_issue(&title, &body, Some(&label), Some(&assignee))?;
             eprintln!("Created issue #{id}: {title}");
         }
 
@@ -183,8 +183,8 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 title.as_deref(),
                 body.as_deref(),
-                labels,
-                assignees,
+                labels.as_deref(),
+                assignees.as_deref(),
                 issue_state,
             )?;
             eprintln!("Updated issue #{id}.");

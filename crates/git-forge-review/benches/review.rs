@@ -5,25 +5,26 @@ use git_forge_review::reviews::{REVIEWS_REF_PREFIX, Review, ReviewMeta, ReviewSt
 
 fn bench_review_state_as_str(c: &mut Criterion) {
     c.bench_function("ReviewState::as_str/open", |b| {
-        b.iter(|| criterion::black_box(ReviewState::Open.as_str()))
+        b.iter(|| criterion::black_box(ReviewState::Open.as_str()));
     });
 
     c.bench_function("ReviewState::as_str/merged", |b| {
-        b.iter(|| criterion::black_box(ReviewState::Merged.as_str()))
+        b.iter(|| criterion::black_box(ReviewState::Merged.as_str()));
     });
 
     c.bench_function("ReviewState::as_str/closed", |b| {
-        b.iter(|| criterion::black_box(ReviewState::Closed.as_str()))
+        b.iter(|| criterion::black_box(ReviewState::Closed.as_str()));
     });
 }
 
+#[allow(clippy::eq_op)]
 fn bench_review_state_equality(c: &mut Criterion) {
     c.bench_function("ReviewState::equality", |b| {
         b.iter(|| {
             criterion::black_box(ReviewState::Open == ReviewState::Open);
             criterion::black_box(ReviewState::Open == ReviewState::Merged);
             criterion::black_box(ReviewState::Merged == ReviewState::Closed);
-        })
+        });
     });
 }
 
@@ -32,14 +33,14 @@ fn bench_review_ref(c: &mut Criterion) {
         b.iter(|| {
             let id: u64 = criterion::black_box(1);
             criterion::black_box(format!("{REVIEWS_REF_PREFIX}{id}"))
-        })
+        });
     });
 
     c.bench_function("Reviews::review_ref/large_id", |b| {
         b.iter(|| {
             let id: u64 = criterion::black_box(99_999);
             criterion::black_box(format!("{REVIEWS_REF_PREFIX}{id}"))
-        })
+        });
     });
 }
 
@@ -49,7 +50,7 @@ fn bench_revision_construction(c: &mut Criterion) {
             index: criterion::black_box("001".to_owned()),
             head_commit: criterion::black_box(git2::Oid::zero()),
             timestamp: criterion::black_box("2024-01-01T00:00:00Z".to_owned()),
-        })
+        });
     });
 }
 
@@ -60,7 +61,7 @@ fn bench_review_meta_construction(c: &mut Criterion) {
             target_branch: criterion::black_box("refs/heads/main".to_owned()),
             state: criterion::black_box(ReviewState::Open),
             created: criterion::black_box("2024-01-01T00:00:00Z".to_owned()),
-        })
+        });
     });
 }
 
@@ -76,7 +77,7 @@ fn bench_review_construction(c: &mut Criterion) {
             },
             description: criterion::black_box("Initial review.".to_owned()),
             revisions: criterion::black_box(vec![]),
-        })
+        });
     });
 
     c.bench_function("Review::construct/with_revisions", |b| {
@@ -103,7 +104,7 @@ fn bench_review_construction(c: &mut Criterion) {
                     timestamp: "2024-03-11T09:30:00Z".to_owned(),
                 },
             ]),
-        })
+        });
     });
 }
 
