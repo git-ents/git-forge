@@ -52,101 +52,43 @@ impl Executor {
         }
         Ok(())
     }
-}
 
-fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
-    let repo = open_repo();
+    /// Creates a new issue with the given title and body.
+    pub fn create_issue(
+        &self,
+        title: &str,
+        body: &str,
+        label: Option<Vec<String>>,
+        assignee: Option<Vec<String>>,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let repo = self.repo();
+        let labels = label.unwrap_or_default();
+        let assignees = assignee.unwrap_or_default();
+        let id = repo.create_issue(&title, &body, &labels, &assignees, None)?;
+        Ok(id)
+    }
 
-    match command {
-        IssueCommand::New {
-            title,
-            body,
-            label,
-            assignee,
-        } => {
-            let body = match body {
-                Some(b) => b,
-                None => {
-                    use std::io::Read;
-                    let mut buf = String::new();
-                    std::io::stdin().read_to_string(&mut buf)?;
-                    buf
-                }
-            };
-            let id = repo.create_issue(&title, &body, &label, &assignee, None)?;
-            eprintln!("Created issue #{id}: {title}");
-        }
+    /// Updates an existing issue.
+    pub fn edit_issue(
+        &self,
+        id: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        labels: Option<Vec<String>>,
+        assignees: Option<Vec<String>>,
+        state: Option<IssueState>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let repo = self.repo();
+        let labels_ref = labels.as_ref().map(|l| l.as_slice());
+        let assignees_ref = assignees.as_ref().map(|a| a.as_slice());
+        repo.update_issue(id, title, body, labels_ref, assignees_ref, state, None)?;
+        Ok(())
+    }
 
-        IssueCommand::Edit {
-            id,
-            title,
-            body,
-            label,
-            assignee,
-            state,
-        } => {
-            let labels = if label.is_empty() {
-                None
-            } else {
-                Some(label.as_slice())
-            };
-            let assignees = if assignee.is_empty() {
-                None
-            } else {
-                Some(assignee.as_slice())
-            };
-            let issue_state = state.map(|s| match s {
-                StateArg::Open => IssueState::Open,
-                StateArg::Closed => IssueState::Closed,
-            });
-            repo.update_issue(
-                id,
-                title.as_deref(),
-                body.as_deref(),
-                labels,
-                assignees,
-                issue_state,
-                None,
-            )?;
-            eprintln!("Updated issue #{id}.");
-        }
-
-        IssueCommand::List { state } => {
-            let issue_state = match state {
-                StateArg::Open => IssueState::Open,
-                StateArg::Closed => IssueState::Closed,
-            };
-            let issues = repo.list_issues_by_state(issue_state, None)?;
-            if issues.is_empty() {
-                println!("No {} issues.", issue_state.as_str());
-            } else {
-                for issue in &issues {
-                    println!(
-                        "#{:>4}  [{}]  {}",
-                        issue.id,
-                        issue.meta.state.as_str(),
-                        issue.meta.title,
-                    );
-                }
-            }
-        }
-
-        IssueCommand::Status { id } => match repo.find_issue(id, None)? {
-            None => {
-                eprintln!("Issue #{id} not found.");
-                process::exit(1);
-            }
-            Some(issue) => {
-                println!(
-                    "#{}: {} [{}]",
-                    issue.id,
-                    issue.meta.title,
-                    issue.meta.state.as_str()
-                );
-            }
-        },
-
-        IssueCommand::Show { id } => match repo.find_issue(id, None)? {
+    /// Displays the full details of an issue.
+    pub fn show_issue(&self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let repo = self.repo();
+        match repo.find_issue(id, None)? {
             None => {
                 eprintln!("Issue #{id} not found.");
                 process::exit(1);
@@ -171,7 +113,111 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-        },
+        }
+        Ok(())
+    }
+
+    /// Displays the status of an issue.
+    pub fn status_issue(&self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        let repo = self.repo();
+        match repo.find_issue(id, None)? {
+            None => {
+                eprintln!("Issue #{id} not found.");
+                process::exit(1);
+            }
+            Some(issue) => {
+                println!(
+                    "#{}: {} [{}]",
+                    issue.id,
+                    issue.meta.title,
+                    issue.meta.state.as_str()
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
+    let executor = Executor::from_env()?;
+
+    match command {
+        IssueCommand::New {
+            title,
+            body,
+            label,
+            assignee,
+        } => {
+            let body = match body {
+                Some(b) => b,
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf
+                }
+            };
+            let id = executor.create_issue(&title, &body, Some(label), Some(assignee))?;
+            eprintln!("Created issue #{id}: {title}");
+        }
+
+        IssueCommand::Edit {
+            id,
+            title,
+            body,
+            label,
+            assignee,
+            state,
+        } => {
+            let labels = if label.is_empty() { None } else { Some(label) };
+            let assignees = if assignee.is_empty() {
+                None
+            } else {
+                Some(assignee)
+            };
+            let issue_state = state.map(|s| match s {
+                StateArg::Open => IssueState::Open,
+                StateArg::Closed => IssueState::Closed,
+            });
+            executor.edit_issue(
+                id,
+                title.as_deref(),
+                body.as_deref(),
+                labels,
+                assignees,
+                issue_state,
+            )?;
+            eprintln!("Updated issue #{id}.");
+        }
+
+        IssueCommand::List { state } => {
+            let issue_state = match state {
+                StateArg::Open => IssueState::Open,
+                StateArg::Closed => IssueState::Closed,
+            };
+            let repo = executor.repo();
+            let issues = repo.list_issues_by_state(issue_state, None)?;
+            if issues.is_empty() {
+                println!("No {} issues.", issue_state.as_str());
+            } else {
+                for issue in &issues {
+                    println!(
+                        "#{:>4}  [{}]  {}",
+                        issue.id,
+                        issue.meta.state.as_str(),
+                        issue.meta.title,
+                    );
+                }
+            }
+        }
+
+        IssueCommand::Status { id } => {
+            executor.status_issue(id)?;
+        }
+
+        IssueCommand::Show { id } => {
+            executor.show_issue(id)?;
+        }
     }
 
     Ok(())
