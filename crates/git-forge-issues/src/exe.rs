@@ -7,6 +7,31 @@ use git2::Repository;
 use crate::cli::{IssueCommand, StateArg};
 use crate::issues::{IssueState, Issues};
 
+/// Resolve the editor to use, matching Git's own precedence:
+/// `GIT_EDITOR` → `core.editor` (git config) → `VISUAL` → `EDITOR` → `"vi"`.
+fn resolve_editor(repo: &git2::Repository) -> Result<String, Box<dyn std::error::Error>> {
+    if let Ok(val) = std::env::var("GIT_EDITOR") {
+        if !val.is_empty() {
+            return Ok(val);
+        }
+    }
+    if let Ok(cfg) = repo.config() {
+        if let Ok(val) = cfg.get_string("core.editor") {
+            if !val.is_empty() {
+                return Ok(val);
+            }
+        }
+    }
+    for var in &["VISUAL", "EDITOR"] {
+        if let Ok(val) = std::env::var(var) {
+            if !val.is_empty() {
+                return Ok(val);
+            }
+        }
+    }
+    Ok("vi".to_string())
+}
+
 /// Parse issue template with TOML frontmatter.
 /// Returns (title, body).
 fn parse_issue_template(content: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
@@ -121,32 +146,31 @@ impl Executor {
         use std::io::Write;
         use std::process::Command;
 
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+        let repo = self.repo();
+        let editor = resolve_editor(repo)?;
 
-        // Create temporary file with frontmatter template
-        let mut temp_file = tempfile::NamedTempFile::new()?;
+        let edit_path = repo.path().join("ISSUE_EDITMSG");
         let template = "+++\ntitle = \"\"\n+++\n\n";
-        temp_file.write_all(template.as_bytes())?;
-        temp_file.flush()?;
-
-        let temp_path = temp_file.path().to_path_buf();
+        {
+            let mut f = fs::File::create(&edit_path)?;
+            f.write_all(template.as_bytes())?;
+        }
 
         // Open editor
-        let status = Command::new(&editor).arg(&temp_path).status()?;
+        let status = Command::new(&editor).arg(&edit_path).status()?;
 
         if !status.success() {
             return Err("Editor exited with error".into());
         }
 
         // Read and parse the file
-        let content = fs::read_to_string(&temp_path)?;
+        let content = fs::read_to_string(&edit_path)?;
         let (title, body) = parse_issue_template(&content)?;
 
         if title.trim().is_empty() {
             return Err("Title cannot be empty".into());
         }
 
-        let repo = self.repo();
         let id = repo.create_issue(&title, &body, &[], &[], None)?;
         Ok(id)
     }
