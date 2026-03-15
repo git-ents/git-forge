@@ -1,4 +1,5 @@
 //! Comments in Git's object store.
 
-/// A synthetic comment object.
-pub struct Comment {}
+pub mod cli;
+pub mod exe;
+pub mod git2;
