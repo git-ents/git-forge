@@ -22,8 +22,8 @@ pub enum IssueCommand {
         #[arg(short, long)]
         assignee: Vec<String>,
 
-        /// Disable interactive editor mode.
-        #[arg(long, action = clap::ArgAction::SetFalse)]
+        /// Open an interactive editor to compose the issue.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
         interactive: bool,
     },
 
