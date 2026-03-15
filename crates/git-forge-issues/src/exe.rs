@@ -320,7 +320,7 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 for issue in &issues {
                     println!(
-                        "#{:>4}  [{}]  {}",
+                        "#{} [{}] {}",
                         issue.id,
                         issue.meta.state.as_str(),
                         issue.meta.title,
