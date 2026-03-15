@@ -287,25 +287,76 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
             assignee,
             state,
         } => {
-            let labels = if label.is_empty() { None } else { Some(label) };
-            let assignees = if assignee.is_empty() {
-                None
+            // Check if any specific fields are provided
+            let has_fields = title.is_some()
+                || body.is_some()
+                || !label.is_empty()
+                || !assignee.is_empty()
+                || state.is_some();
+
+            // Default to interactive when no fields provided
+            if !has_fields {
+                use std::fs;
+                use std::io::Write;
+                use std::process::Command;
+
+                let repo = executor.repo();
+                let editor = resolve_editor(repo)?;
+
+                // Fetch the current issue
+                let issue = repo
+                    .find_issue(id, None)?
+                    .ok_or(format!("Issue #{id} not found"))?;
+
+                let edit_path = repo.path().join("ISSUE_EDITMSG");
+                let template = format!(
+                    "+++\ntitle = \"{}\"\n+++\n\n{}",
+                    issue.meta.title.replace('"', "\\\""),
+                    issue.body
+                );
+                {
+                    let mut f = fs::File::create(&edit_path)?;
+                    f.write_all(template.as_bytes())?;
+                }
+
+                // Open editor
+                let status = Command::new(&editor).arg(&edit_path).status()?;
+
+                if !status.success() {
+                    return Err("Editor exited with error".into());
+                }
+
+                // Read and parse the file
+                let content = fs::read_to_string(&edit_path)?;
+                let (title, body) = parse_issue_template(&content)?;
+
+                if title.trim().is_empty() {
+                    return Err("Title cannot be empty".into());
+                }
+
+                repo.update_issue(id, Some(&title), Some(&body), None, None, None, None)?;
+                eprintln!("Updated issue #{id}.");
             } else {
-                Some(assignee)
-            };
-            let issue_state = state.map(|s| match s {
-                StateArg::Open => IssueState::Open,
-                StateArg::Closed => IssueState::Closed,
-            });
-            executor.edit_issue(
-                id,
-                title.as_deref(),
-                body.as_deref(),
-                labels.as_deref(),
-                assignees.as_deref(),
-                issue_state,
-            )?;
-            eprintln!("Updated issue #{id}.");
+                let labels = if label.is_empty() { None } else { Some(label) };
+                let assignees = if assignee.is_empty() {
+                    None
+                } else {
+                    Some(assignee)
+                };
+                let issue_state = state.map(|s| match s {
+                    StateArg::Open => IssueState::Open,
+                    StateArg::Closed => IssueState::Closed,
+                });
+                executor.edit_issue(
+                    id,
+                    title.as_deref(),
+                    body.as_deref(),
+                    labels.as_deref(),
+                    assignees.as_deref(),
+                    issue_state,
+                )?;
+                eprintln!("Updated issue #{id}.");
+            }
         }
 
         IssueCommand::List { state } => {
