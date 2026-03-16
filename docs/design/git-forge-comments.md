@@ -21,10 +21,14 @@ Comments with payloads add a tree and blobs.
 ```text
 refs/forge/comments/issue/<id>       # comments on issues
 refs/forge/comments/review/<id>      # comments on code reviews
+refs/forge/comments/object           # comments on raw git objects (commits, blobs, trees)
 ```
 
 Each ref points to the tip of a chronological chain.
 All comments for a given topic — top-level and replies — live on the same ref.
+
+Issue and review comments are naturally bounded by their ID count.
+Object comments share a single ref to avoid ref explosion; the `Anchor` and `Anchor-Type` trailers disambiguate which object each comment targets.
 
 ## Anchoring
 

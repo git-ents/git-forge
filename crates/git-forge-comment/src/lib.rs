@@ -15,6 +15,9 @@ mod tests;
 /// Ref prefix under which comment refs are stored.
 pub const COMMENTS_REF_PREFIX: &str = "refs/forge/comments/";
 
+/// Single ref for comments on raw git objects (commits, blobs, trees).
+pub const OBJECT_COMMENTS_REF: &str = "refs/forge/comments/object";
+
 /// Returns the ref name for comments on a specific issue.
 #[must_use]
 pub fn issue_comments_ref(id: u64) -> String {

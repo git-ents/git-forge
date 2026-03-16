@@ -2,7 +2,7 @@ use git2::Repository;
 use tempfile::TempDir;
 
 use crate::git2::{blob_oid_for_path, parse_ranges};
-use crate::{Anchor, Comments, COMMENTS_REF_PREFIX};
+use crate::{Anchor, Comments, COMMENTS_REF_PREFIX, OBJECT_COMMENTS_REF};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -413,4 +413,92 @@ fn build_anchor_zero_based_range_errors() {
         Some("0-5"),
     );
     assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// parse_target — object targets route to single ref
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_target_commit_routes_to_object_ref() {
+    let t = crate::exe::parse_target("commit/abc123").unwrap();
+    assert_eq!(t.ref_name, OBJECT_COMMENTS_REF);
+    assert_eq!(t.anchor_filter.as_deref(), Some("abc123"));
+}
+
+#[test]
+fn parse_target_blob_routes_to_object_ref() {
+    let t = crate::exe::parse_target("blob/def456").unwrap();
+    assert_eq!(t.ref_name, OBJECT_COMMENTS_REF);
+    assert_eq!(t.anchor_filter.as_deref(), Some("def456"));
+}
+
+#[test]
+fn parse_target_tree_routes_to_object_ref() {
+    let t = crate::exe::parse_target("tree/aaa111").unwrap();
+    assert_eq!(t.ref_name, OBJECT_COMMENTS_REF);
+    assert_eq!(t.anchor_filter.as_deref(), Some("aaa111"));
+}
+
+#[test]
+fn parse_target_issue_routes_to_issue_ref() {
+    let t = crate::exe::parse_target("issue/1").unwrap();
+    assert_eq!(t.ref_name, format!("{COMMENTS_REF_PREFIX}issue/1"));
+    assert!(t.anchor_filter.is_none());
+}
+
+#[test]
+fn parse_target_review_routes_to_review_ref() {
+    let t = crate::exe::parse_target("review/42").unwrap();
+    assert_eq!(t.ref_name, format!("{COMMENTS_REF_PREFIX}review/42"));
+    assert!(t.anchor_filter.is_none());
+}
+
+#[test]
+fn parse_target_unknown_kind_errors() {
+    assert!(crate::exe::parse_target("bogus/1").is_err());
+}
+
+#[test]
+fn parse_target_no_slash_errors() {
+    assert!(crate::exe::parse_target("noslash").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Object ref — multiple anchors on one ref, filtered by anchor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn object_ref_filters_by_anchor() {
+    let (_dir, repo) = repo_with_file();
+    let rn = OBJECT_COMMENTS_REF;
+
+    // Two different commit anchors on the same object ref.
+    let head_oid = repo.head().unwrap().peel_to_commit().unwrap().id();
+    let anchor_a = Anchor::Commit(head_oid);
+
+    let tree_oid = repo.head().unwrap().peel_to_tree().unwrap().id();
+    let anchor_b = Anchor::Tree(tree_oid);
+
+    repo.add_comment(rn, &anchor_a, "comment on commit").unwrap();
+    repo.add_comment(rn, &anchor_b, "comment on tree").unwrap();
+    repo.add_comment(rn, &anchor_a, "another on commit").unwrap();
+
+    let all = repo.comments_on(rn).unwrap();
+    assert_eq!(all.len(), 3);
+
+    // Filter to commit anchor only.
+    let commit_comments: Vec<_> = all
+        .iter()
+        .filter(|c| crate::exe::anchor_oid(&c.anchor) == head_oid)
+        .collect();
+    assert_eq!(commit_comments.len(), 2);
+
+    // Filter to tree anchor only.
+    let tree_comments: Vec<_> = all
+        .iter()
+        .filter(|c| crate::exe::anchor_oid(&c.anchor) == tree_oid)
+        .collect();
+    assert_eq!(tree_comments.len(), 1);
+    assert_eq!(tree_comments[0].body, "comment on tree");
 }

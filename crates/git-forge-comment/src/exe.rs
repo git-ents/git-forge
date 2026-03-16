@@ -7,7 +7,7 @@ use git2::Repository;
 
 use crate::cli::CommentCommand;
 use crate::git2::{blob_oid_for_path, parse_ranges};
-use crate::{Anchor, Comments, COMMENTS_REF_PREFIX};
+use crate::{Anchor, Comments, COMMENTS_REF_PREFIX, OBJECT_COMMENTS_REF};
 
 /// Resolve the editor to use, matching Git's own precedence:
 /// `GIT_EDITOR` → `core.editor` (git config) → `VISUAL` → `EDITOR` → `"vi"`.
@@ -55,11 +55,34 @@ fn default_target(repo: &git2::Repository, target: Option<String>) -> Result<Str
     }
 }
 
-fn parse_target(target: &str) -> Result<String, Box<dyn Error>> {
-    if target.contains('/') {
-        Ok(format!("{COMMENTS_REF_PREFIX}{target}"))
-    } else {
-        Err(format!("invalid target {target:?}: expected \"<kind>/<id>\" (e.g. \"issue/1\", \"commit/<sha>\", \"blob/<sha>\")").into())
+/// Parsed target: ref name plus an optional anchor OID filter for object targets.
+pub struct Target {
+    /// The fully-qualified ref name (e.g. `refs/forge/comments/object`).
+    pub ref_name: String,
+    /// For object targets (`commit/<sha>`, `blob/<sha>`, `tree/<sha>`), the OID
+    /// string from the target used to filter comments on the shared ref.
+    pub anchor_filter: Option<String>,
+}
+
+/// Parse a user-facing target string into a ref name and optional anchor filter.
+pub fn parse_target(target: &str) -> Result<Target, Box<dyn Error>> {
+    let Some((kind, id)) = target.split_once('/') else {
+        return Err(format!(
+            "invalid target {target:?}: expected \"<kind>/<id>\" \
+             (e.g. \"issue/1\", \"commit/<sha>\")"
+        )
+        .into());
+    };
+    match kind {
+        "commit" | "blob" | "tree" => Ok(Target {
+            ref_name: OBJECT_COMMENTS_REF.to_string(),
+            anchor_filter: Some(id.to_string()),
+        }),
+        "issue" | "review" => Ok(Target {
+            ref_name: format!("{COMMENTS_REF_PREFIX}{target}"),
+            anchor_filter: None,
+        }),
+        _ => Err(format!("unknown target kind {kind:?}").into()),
     }
 }
 
@@ -74,6 +97,14 @@ fn read_body(repo: &git2::Repository, body: Option<String>) -> Result<String, Bo
             std::io::stdin().read_to_string(&mut buf)?;
             Ok(buf)
         }
+    }
+}
+
+/// Extract the primary OID from an [`Anchor`].
+pub fn anchor_oid(anchor: &Anchor) -> git2::Oid {
+    match anchor {
+        Anchor::Blob { oid, .. } | Anchor::Commit(oid) | Anchor::Tree(oid) => *oid,
+        Anchor::CommitRange { start, .. } => *start,
     }
 }
 
@@ -97,11 +128,11 @@ impl Executor {
         anchor_type: Option<&str>,
         range: Option<&str>,
     ) -> Result<git2::Oid, Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
         let repo = self.repo();
 
         let anchor_obj = build_anchor(repo, anchor, anchor_type, range)?;
-        let oid = repo.add_comment(&ref_name, &anchor_obj, body)?;
+        let oid = repo.add_comment(&t.ref_name, &anchor_obj, body)?;
         Ok(oid)
     }
 
@@ -111,11 +142,11 @@ impl Executor {
         comment_oid_str: &str,
         body: &str,
     ) -> Result<git2::Oid, Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
         let repo = self.repo();
         let parent_oid = git2::Oid::from_str(comment_oid_str)
             .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
-        let oid = repo.reply_to_comment(&ref_name, parent_oid, body)?;
+        let oid = repo.reply_to_comment(&t.ref_name, parent_oid, body)?;
         Ok(oid)
     }
 
@@ -125,11 +156,11 @@ impl Executor {
         comment_oid_str: &str,
         new_body: &str,
     ) -> Result<git2::Oid, Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
         let repo = self.repo();
         let comment_oid = git2::Oid::from_str(comment_oid_str)
             .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
-        let oid = repo.edit_comment(&ref_name, comment_oid, new_body)?;
+        let oid = repo.edit_comment(&t.ref_name, comment_oid, new_body)?;
         Ok(oid)
     }
 
@@ -139,19 +170,25 @@ impl Executor {
         comment_oid_str: &str,
         _message: Option<String>,
     ) -> Result<git2::Oid, Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
         let repo = self.repo();
         let comment_oid = git2::Oid::from_str(comment_oid_str)
             .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
-        let oid = repo.resolve_comment(&ref_name, comment_oid)?;
+        let oid = repo.resolve_comment(&t.ref_name, comment_oid)?;
         Ok(oid)
     }
 
     pub fn list_comments(&self, target: &str) -> Result<(), Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
         let repo = self.repo();
-        let comments = repo.comments_on(&ref_name)?;
+        let comments = repo.comments_on(&t.ref_name)?;
         for comment in &comments {
+            if let Some(ref filter) = t.anchor_filter {
+                let oid_hex = anchor_oid(&comment.anchor).to_string();
+                if !oid_hex.starts_with(filter.as_str()) {
+                    continue;
+                }
+            }
             let short_oid = &comment.oid.to_string()[..7];
             let resolved = if comment.resolved { " [resolved]" } else { "" };
             let first_line = comment.body.lines().next().unwrap_or("").trim();
@@ -161,7 +198,8 @@ impl Executor {
     }
 
     pub fn view_comment(&self, target: &str, comment_oid_str: &str) -> Result<(), Box<dyn Error>> {
-        let ref_name = parse_target(target)?;
+        let t = parse_target(target)?;
+        let ref_name = t.ref_name;
         let repo = self.repo();
         let oid = git2::Oid::from_str(comment_oid_str)
             .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
@@ -307,12 +345,12 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
         CommentCommand::Edit { target, comment, body } => {
             let target = default_target(executor.repo(), target)?;
             let repo = executor.repo();
-            let ref_name = parse_target(&target)?;
+            let t = parse_target(&target)?;
             let comment_oid = git2::Oid::from_str(&comment)
                 .map_err(|e| format!("invalid comment OID {comment:?}: {e}"))?;
             let new_body = if let Some(b) = body { b } else {
                 let existing = repo
-                    .find_comment(&ref_name, comment_oid)?
+                    .find_comment(&t.ref_name, comment_oid)?
                     .ok_or_else(|| format!("comment {comment} not found"))?;
                 open_editor_for_body(repo, &existing.body)?
             };
