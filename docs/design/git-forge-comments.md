@@ -28,7 +28,7 @@ Each ref points to the tip of a chronological chain.
 All comments for a given topic — top-level and replies — live on the same ref.
 
 Issue and review comments are naturally bounded by their ID count.
-Object comments share a single ref to avoid ref explosion; the `Anchor` and `Anchor-Type` trailers disambiguate which object each comment targets.
+Object comments share a single ref to avoid ref explosion; the `Anchor` trailer disambiguates which object each comment targets (type is inferred from the object itself).
 
 ## Anchoring
 
@@ -40,7 +40,6 @@ Comments anchor to arbitrary Git objects via trailers in the commit message.
 This approach introduces a race condition
 
 Anchor: af3b2c4d
-Anchor-Type: commit
 ```
 
 ### Anchor to a blob with line range
@@ -49,7 +48,6 @@ Anchor-Type: commit
 Off-by-one error here
 
 Anchor: 7e3f1a2b
-Anchor-Type: blob
 Anchor-Range: 42-47
 ```
 
@@ -64,13 +62,17 @@ git rev-parse HEAD:src/main.rs
 If it matches `Anchor`, the comment is current.
 If not, it's outdated.
 
+Multiple non-contiguous ranges are comma-separated: `Anchor-Range: 1-5,10-15`.
+
+The anchor type (blob, tree, commit, commit-range) is derived by looking up the `Anchor` SHA in the object store, not from a trailer.
+A commit range is distinguished by the presence of `Anchor-End`.
+
 ### Anchor to a tree
 
 ```text
 This directory structure is confusing
 
 Anchor: 9c4d2e1f
-Anchor-Type: tree
 ```
 
 ### Anchor to a commit range
@@ -79,7 +81,6 @@ Anchor-Type: tree
 This series of changes breaks the API contract
 
 Anchor: a1b2c3d4
-Anchor-Type: commit-range
 Anchor-End: e5f6a7b8
 ```
 
@@ -88,10 +89,10 @@ Anchor-End: e5f6a7b8
 | Trailer | Required | Description |
 |---|---|---|
 | `Anchor` | yes | SHA of the target object |
-| `Anchor-Type` | yes | `blob`, `commit`, `tree`, or `commit-range` |
-| `Anchor-Range` | no | Line range (e.g. `42-47`), for blobs only |
-| `Anchor-End` | no | End SHA, for commit ranges only |
+| `Anchor-Range` | no | Line range(s) (e.g. `42-47` or `1-5,10-15`), blobs only |
+| `Anchor-End` | no | End SHA for commit ranges |
 | `Resolved` | no | `true` when a comment resolves its thread |
+| `Replaces` | no | OID of the comment this supersedes (edits) |
 
 ## Threading
 
@@ -200,7 +201,6 @@ COMMENT=$(git commit-tree $TREE \
   -m "Off-by-one: should be 0..len() not 1..len()
 
 Anchor: 7e3f1a2b
-Anchor-Type: blob
 Anchor-Range: 42-42")
 
 git update-ref refs/forge/comments/review/60 $COMMENT
@@ -219,7 +219,6 @@ COMMENT=$(git commit-tree $EMPTY_TREE \
   -m "Off-by-one error here
 
 Anchor: 7e3f1a2b
-Anchor-Type: blob
 Anchor-Range: 42-47")
 
 git update-ref refs/forge/comments/review/60 $COMMENT
@@ -234,7 +233,6 @@ REPLY=$(git commit-tree $EMPTY_TREE \
   -m "Agreed, also line 45 has the same bug
 
 Anchor: 7e3f1a2b
-Anchor-Type: blob
 Anchor-Range: 45-45")
 
 git update-ref refs/forge/comments/review/60 $REPLY
@@ -252,10 +250,28 @@ RESOLVE=$(git commit-tree $EMPTY_TREE \
 
 Resolved: true
 Anchor: 7e3f1a2b
-Anchor-Type: blob
 Anchor-Range: 42-47")
 
 git update-ref refs/forge/comments/review/60 $RESOLVE
+```
+
+### Edit a comment
+
+Editing is itself a new comment appended to the chain.
+The new commit carries `Replaces: <original-oid>` and uses the original's anchor.
+The original commit is also set as the second parent.
+
+```bash
+EDIT=$(git commit-tree $EMPTY_TREE \
+  -p $(git rev-parse refs/forge/comments/review/60) \
+  -p $COMMENT \
+  -m "Off-by-one: should be 0..len() not 1..len() (corrected wording)
+
+Anchor: 7e3f1a2b
+Anchor-Range: 42-42
+Replaces: $COMMENT")
+
+git update-ref refs/forge/comments/review/60 $EDIT
 ```
 
 ### Create the first comment on a new topic
@@ -266,8 +282,7 @@ When no ref exists yet, the first comment has no parent:
 FIRST=$(git commit-tree $EMPTY_TREE \
   -m "This needs a rewrite
 
-Anchor: af3b2c4d
-Anchor-Type: commit")
+Anchor: af3b2c4d")
 
 git update-ref refs/forge/comments/issue/7 $FIRST
 ```
