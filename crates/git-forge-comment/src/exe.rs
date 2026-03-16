@@ -239,6 +239,26 @@ pub fn build_anchor(
 
     let line_ranges = range.as_deref().map(parse_ranges).unwrap_or_default();
 
+    if let Some(range_str) = range.as_deref() {
+        let segment_count = range_str.split(',').filter(|s| !s.trim().is_empty()).count();
+        if line_ranges.len() != segment_count {
+            return Err(
+                "malformed range: expected comma-separated \"start-end\" pairs (e.g. \"1-5,10-15\")"
+                    .into(),
+            );
+        }
+        for &(start, end) in &line_ranges {
+            if start == 0 {
+                return Err(format!("invalid range {start}-{end}: line numbers are 1-based").into());
+            }
+            if start > end {
+                return Err(
+                    format!("invalid range {start}-{end}: start must be <= end").into(),
+                );
+            }
+        }
+    }
+
     match anchor_type.as_deref() {
         Some("blob") | None if inferred_blob => {
             Ok(Anchor::Blob { oid, line_ranges })
@@ -273,6 +293,7 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
             let body = read_body(executor.repo(), body)?;
             let oid = executor.new_comment(&target, &body, anchor, anchor_type, range)?;
             println!("{oid}");
+            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Reply { target, comment, body } => {
@@ -280,6 +301,7 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
             let body = read_body(executor.repo(), body)?;
             let oid = executor.reply_to_comment(&target, &comment, &body)?;
             println!("{oid}");
+            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Edit { target, comment, body } => {
@@ -299,6 +321,7 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
             };
             let oid = executor.edit_comment(&target, &comment, &new_body)?;
             println!("{oid}");
+            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Resolve { target, comment, message } => {
