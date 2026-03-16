@@ -9,6 +9,9 @@ pub mod cli;
 pub mod exe;
 pub mod git2;
 
+#[cfg(test)]
+mod tests;
+
 /// Ref prefix under which comment refs are stored.
 pub const COMMENTS_REF_PREFIX: &str = "refs/forge/comments/";
 
