@@ -65,6 +65,8 @@ pub struct Comment {
     pub resolved: bool,
     /// OID of the parent comment (second parent), if this is a reply.
     pub parent_oid: Option<::git2::Oid>,
+    /// OID of the comment this replaces (`Replaces: <oid>` trailer), if this is an edit.
+    pub replaces_oid: Option<::git2::Oid>,
 }
 
 /// Operations on comment refs under [`COMMENTS_REF_PREFIX`].
@@ -120,5 +122,20 @@ pub trait Comments {
         &self,
         ref_name: &str,
         comment_oid: ::git2::Oid,
+    ) -> Result<::git2::Oid, ::git2::Error>;
+
+    /// Append an edit to an existing comment, returning the new commit OID.
+    ///
+    /// The original comment is unchanged. The new commit carries a `Replaces: <oid>`
+    /// trailer pointing at the original and uses the original's anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `git2::Error` if the underlying repository operation fails.
+    fn edit_comment(
+        &self,
+        ref_name: &str,
+        comment_oid: ::git2::Oid,
+        new_body: &str,
     ) -> Result<::git2::Oid, ::git2::Error>;
 }

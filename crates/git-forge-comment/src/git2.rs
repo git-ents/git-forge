@@ -11,10 +11,17 @@ struct Trailers {
     anchor_range: Option<(u32, u32)>,
     anchor_end: Option<git2::Oid>,
     resolved: bool,
+    replaces_oid: Option<git2::Oid>,
 }
 
 fn parse_trailers(msg: &str) -> Trailers {
-    let mut t = Trailers { anchor_oid: None, anchor_range: None, anchor_end: None, resolved: false };
+    let mut t = Trailers {
+        anchor_oid: None,
+        anchor_range: None,
+        anchor_end: None,
+        resolved: false,
+        replaces_oid: None,
+    };
     for line in msg.lines() {
         if let Some(v) = line.strip_prefix("Anchor: ") {
             t.anchor_oid = git2::Oid::from_str(v.trim()).ok();
@@ -28,6 +35,8 @@ fn parse_trailers(msg: &str) -> Trailers {
             t.anchor_end = git2::Oid::from_str(v.trim()).ok();
         } else if let Some(v) = line.strip_prefix("Resolved: ") {
             t.resolved = v.trim() == "true";
+        } else if let Some(v) = line.strip_prefix("Replaces: ") {
+            t.replaces_oid = git2::Oid::from_str(v.trim()).ok();
         }
     }
     t
@@ -74,10 +83,22 @@ fn comment_from_commit(repo: &Repository, commit: &git2::Commit<'_>) -> Result<C
 
     let parent_oid = if commit.parent_count() >= 2 { Some(commit.parent_id(1)?) } else { None };
 
-    Ok(Comment { oid: commit.id(), anchor, body, resolved: trailers.resolved, parent_oid })
+    Ok(Comment {
+        oid: commit.id(),
+        anchor,
+        body,
+        resolved: trailers.resolved,
+        parent_oid,
+        replaces_oid: trailers.replaces_oid,
+    })
 }
 
-fn build_message(body: &str, anchor: &Anchor, resolved: bool) -> String {
+fn build_message(
+    body: &str,
+    anchor: &Anchor,
+    resolved: bool,
+    replaces: Option<git2::Oid>,
+) -> String {
     let mut msg = body.trim_end().to_string();
     msg.push_str("\n\n");
 
@@ -98,6 +119,10 @@ fn build_message(body: &str, anchor: &Anchor, resolved: bool) -> String {
 
     if resolved {
         msg.push_str("Resolved: true\n");
+    }
+
+    if let Some(oid) = replaces {
+        msg.push_str(&format!("Replaces: {oid}\n"));
     }
 
     msg
@@ -187,7 +212,7 @@ impl Comments for Repository {
         body: &str,
     ) -> Result<git2::Oid, git2::Error> {
         let tip = current_tip(self, ref_name)?;
-        let message = build_message(body, anchor, false);
+        let message = build_message(body, anchor, false, None);
         append_commit(self, ref_name, &message, tip.as_ref(), None)
     }
 
@@ -200,7 +225,7 @@ impl Comments for Repository {
         let tip = current_tip(self, ref_name)?;
         let parent_commit = self.find_commit(parent_oid)?;
         let parent_comment = comment_from_commit(self, &parent_commit)?;
-        let message = build_message(body, &parent_comment.anchor, false);
+        let message = build_message(body, &parent_comment.anchor, false, None);
         append_commit(self, ref_name, &message, tip.as_ref(), Some(&parent_commit))
     }
 
@@ -212,7 +237,20 @@ impl Comments for Repository {
         let tip = current_tip(self, ref_name)?;
         let resolved_commit = self.find_commit(comment_oid)?;
         let resolved_comment = comment_from_commit(self, &resolved_commit)?;
-        let message = build_message("", &resolved_comment.anchor, true);
+        let message = build_message("", &resolved_comment.anchor, true, None);
         append_commit(self, ref_name, &message, tip.as_ref(), Some(&resolved_commit))
+    }
+
+    fn edit_comment(
+        &self,
+        ref_name: &str,
+        comment_oid: git2::Oid,
+        new_body: &str,
+    ) -> Result<git2::Oid, git2::Error> {
+        let tip = current_tip(self, ref_name)?;
+        let original_commit = self.find_commit(comment_oid)?;
+        let original_comment = comment_from_commit(self, &original_commit)?;
+        let message = build_message(new_body, &original_comment.anchor, false, Some(comment_oid));
+        append_commit(self, ref_name, &message, tip.as_ref(), Some(&original_commit))
     }
 }

@@ -8,6 +8,49 @@ use git2::Repository;
 use crate::cli::CommentCommand;
 use crate::{Anchor, Comments, COMMENTS_REF_PREFIX};
 
+/// Resolve the editor to use, matching Git's own precedence:
+/// `GIT_EDITOR` → `core.editor` (git config) → `VISUAL` → `EDITOR` → `"vi"`.
+fn resolve_editor(repo: &git2::Repository) -> Result<String, Box<dyn Error>> {
+    if let Ok(val) = std::env::var("GIT_EDITOR") {
+        if !val.is_empty() {
+            return Ok(val);
+        }
+    }
+    if let Ok(cfg) = repo.config() {
+        if let Ok(val) = cfg.get_string("core.editor") {
+            if !val.is_empty() {
+                return Ok(val);
+            }
+        }
+    }
+    for var in &["VISUAL", "EDITOR"] {
+        if let Ok(val) = std::env::var(var) {
+            if !val.is_empty() {
+                return Ok(val);
+            }
+        }
+    }
+    Ok("vi".to_string())
+}
+
+fn open_editor_for_body(repo: &git2::Repository, initial: &str) -> Result<String, Box<dyn Error>> {
+    use std::fs;
+    use std::io::Write;
+
+    let editor = resolve_editor(repo)?;
+    let edit_path = repo.path().join("COMMENT_EDITMSG");
+    {
+        let mut f = fs::File::create(&edit_path)?;
+        f.write_all(initial.as_bytes())?;
+    }
+    let status = std::process::Command::new(&editor).arg(&edit_path).status()?;
+    if !status.success() {
+        return Err("Editor exited with error".into());
+    }
+    let body = fs::read_to_string(&edit_path)?;
+    Ok(body)
+}
+
 fn parse_target(target: &str) -> Result<String, Box<dyn Error>> {
     if target.contains('/') {
         Ok(format!("{COMMENTS_REF_PREFIX}{target}"))
@@ -67,6 +110,20 @@ impl Executor {
         let parent_oid = git2::Oid::from_str(comment_oid_str)
             .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
         let oid = repo.reply_to_comment(&ref_name, parent_oid, body)?;
+        Ok(oid)
+    }
+
+    pub fn edit_comment(
+        &self,
+        target: &str,
+        comment_oid_str: &str,
+        new_body: &str,
+    ) -> Result<git2::Oid, Box<dyn Error>> {
+        let ref_name = parse_target(target)?;
+        let repo = self.repo();
+        let comment_oid = git2::Oid::from_str(comment_oid_str)
+            .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
+        let oid = repo.edit_comment(&ref_name, comment_oid, new_body)?;
         Ok(oid)
     }
 
@@ -176,15 +233,41 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
     let executor = Executor::from_env()?;
 
     match command {
-        CommentCommand::New { target, body, anchor, anchor_type, range } => {
-            let body = read_body(body)?;
+        CommentCommand::New { target, body, anchor, anchor_type, range, interactive } => {
+            let body = if interactive {
+                open_editor_for_body(executor.repo(), "")?
+            } else {
+                read_body(body)?
+            };
             let oid = executor.new_comment(&target, &body, anchor, anchor_type, range)?;
             println!("{oid}");
         }
 
-        CommentCommand::Reply { target, comment, body } => {
-            let body = read_body(body)?;
+        CommentCommand::Reply { target, comment, body, interactive } => {
+            let body = if interactive {
+                open_editor_for_body(executor.repo(), "")?
+            } else {
+                read_body(body)?
+            };
             let oid = executor.reply_to_comment(&target, &comment, &body)?;
+            println!("{oid}");
+        }
+
+        CommentCommand::Edit { target, comment, body } => {
+            let repo = executor.repo();
+            let ref_name = parse_target(&target)?;
+            let comment_oid = git2::Oid::from_str(&comment)
+                .map_err(|e| format!("invalid comment OID {comment:?}: {e}"))?;
+            let new_body = match body {
+                Some(b) => b,
+                None => {
+                    let existing = repo
+                        .find_comment(&ref_name, comment_oid)?
+                        .ok_or_else(|| format!("comment {comment} not found"))?;
+                    open_editor_for_body(repo, &existing.body)?
+                }
+            };
+            let oid = executor.edit_comment(&target, &comment, &new_body)?;
             println!("{oid}");
         }
 
