@@ -203,6 +203,9 @@ impl Executor {
         let repo = self.repo();
         let comments = repo.comments_on(&t.ref_name)?;
         for comment in &comments {
+            if comment.resolved {
+                continue;
+            }
             if let Some(ref filter) = t.anchor_filter {
                 let oid_hex = anchor_oid(&comment.anchor).to_string();
                 if !oid_hex.starts_with(filter.as_str()) {
@@ -210,9 +213,33 @@ impl Executor {
                 }
             }
             let short_oid = &comment.oid.to_string()[..7];
-            let resolved = if comment.resolved { " [resolved]" } else { "" };
             let first_line = comment.body.lines().next().unwrap_or("").trim();
-            println!("{short_oid}{resolved} {first_line}");
+            println!("{short_oid} {first_line}");
+        }
+        Ok(())
+    }
+
+    pub fn list_all_comments(&self) -> Result<(), Box<dyn Error>> {
+        let repo = self.repo();
+        let refs = repo.references_glob(&format!("{COMMENTS_REF_PREFIX}*"))?;
+        for reference in refs {
+            let reference = reference?;
+            let ref_name = reference
+                .name()
+                .ok_or("non-UTF-8 ref name")?
+                .to_string();
+            let target_name = ref_name
+                .strip_prefix(COMMENTS_REF_PREFIX)
+                .unwrap_or(&ref_name);
+            let comments = repo.comments_on(&ref_name)?;
+            for comment in &comments {
+                if comment.resolved {
+                    continue;
+                }
+                let short_oid = &comment.oid.to_string()[..7];
+                let first_line = comment.body.lines().next().unwrap_or("").trim();
+                println!("{target_name} {short_oid} {first_line}");
+            }
         }
         Ok(())
     }
@@ -412,9 +439,13 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
             println!("{oid}");
         }
 
-        CommentCommand::List { target } => {
-            let target = default_target(repo, target)?;
-            executor.list_comments(&target)?;
+        CommentCommand::List { target, all } => {
+            if all {
+                executor.list_all_comments()?;
+            } else {
+                let target = default_target(repo, target)?;
+                executor.list_comments(&target)?;
+            }
         }
 
         CommentCommand::View { target, comment } => {

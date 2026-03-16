@@ -70,6 +70,10 @@ pub enum CommentCommand {
     List {
         /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
         target: Option<String>,
+
+        /// Show all comments across all targets.
+        #[arg(short = 'a', long)]
+        all: bool,
     },
 
     /// Show a single comment in full.
