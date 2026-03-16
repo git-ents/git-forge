@@ -1,35 +1,31 @@
 //! Implementation of `git forge install`.
 
 const FORGE_FETCH_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
-const FORGE_PUSH_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 
 pub fn run(remote: Option<&str>, global: bool) -> Result<(), Box<dyn std::error::Error>> {
     let remote_name = resolve_remote(remote, global)?;
     let fetch_key = format!("remote.{remote_name}.fetch");
-    let push_key = format!("remote.{remote_name}.push");
 
     if global {
-        let fetch_added = add_global_value(&fetch_key, FORGE_FETCH_REFSPEC)?;
-        let push_added = add_global_value(&push_key, FORGE_PUSH_REFSPEC)?;
-        if fetch_added || push_added {
+        let added = add_global_value(&fetch_key, FORGE_FETCH_REFSPEC)?;
+        if added {
             eprintln!(
-                "Added forge refspecs for remote `{remote_name}` to global git config (~/.gitconfig)."
+                "Added forge fetch refspec for remote `{remote_name}` to global git config (~/.gitconfig)."
             );
         } else {
             eprintln!(
-                "Forge refspecs for remote `{remote_name}` already present in global git config (~/.gitconfig)."
+                "Forge fetch refspec for remote `{remote_name}` already present in global git config (~/.gitconfig)."
             );
         }
     } else {
         let repo = git2::Repository::open_from_env()?;
         let mut config = repo.config()?.open_level(git2::ConfigLevel::Local)?;
-        let fetch_added = add_value_if_missing(&mut config, &fetch_key, FORGE_FETCH_REFSPEC)?;
-        let push_added = add_value_if_missing(&mut config, &push_key, FORGE_PUSH_REFSPEC)?;
-        if fetch_added || push_added {
-            eprintln!("Added forge refspecs for remote `{remote_name}` to local git config.");
+        let added = add_value_if_missing(&mut config, &fetch_key, FORGE_FETCH_REFSPEC)?;
+        if added {
+            eprintln!("Added forge fetch refspec for remote `{remote_name}` to local git config.");
         } else {
             eprintln!(
-                "Forge refspecs for remote `{remote_name}` already present in local git config."
+                "Forge fetch refspec for remote `{remote_name}` already present in local git config."
             );
         }
     }
