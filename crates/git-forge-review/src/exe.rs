@@ -3,7 +3,7 @@
 use crate::cli::ReviewCommand;
 
 /// Execute a `review` subcommand.
-pub fn run(command: ReviewCommand, _push: bool) {
+pub fn run(command: ReviewCommand, _push: bool, _fetch: bool) {
     match command {
         ReviewCommand::New => todo!(),
         ReviewCommand::Edit => todo!(),

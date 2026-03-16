@@ -119,10 +119,13 @@ fn create_and_push_issue(
     body: &str,
     labels: &[String],
     assignees: &[String],
+    fetch: bool,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut prev_id = None;
-    for _ in 0..MAX_PUSH_ATTEMPTS {
-        fetch_forge_refs(repo)?;
+    for attempt in 0..MAX_PUSH_ATTEMPTS {
+        if fetch || attempt > 0 {
+            fetch_forge_refs(repo)?;
+        }
         if let Some(old_id) = prev_id {
             let old_ref = format!("{}{old_id}", crate::ISSUES_REF_PREFIX);
             let _ = repo.find_reference(&old_ref).map(|mut r| r.delete());
@@ -258,7 +261,7 @@ impl Executor {
 }
 
 #[allow(clippy::too_many_lines)]
-fn run_inner(command: IssueCommand, push: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<dyn std::error::Error>> {
     let executor = Executor::from_env()?;
 
     match command {
@@ -284,7 +287,7 @@ fn run_inner(command: IssueCommand, push: bool) -> Result<(), Box<dyn std::error
 
             let repo = executor.repo();
             let id = if push {
-                create_and_push_issue(repo, &title, &body, &labels, &assignees)?
+                create_and_push_issue(repo, &title, &body, &labels, &assignees, fetch)?
             } else {
                 repo.create_issue(&title, &body, &labels, &assignees, None)?
             };
@@ -307,7 +310,7 @@ fn run_inner(command: IssueCommand, push: bool) -> Result<(), Box<dyn std::error
                 || state.is_some();
 
             let repo = executor.repo();
-            if push {
+            if fetch {
                 fetch_forge_refs(repo)?;
             }
 
@@ -417,8 +420,8 @@ fn run_inner(command: IssueCommand, push: bool) -> Result<(), Box<dyn std::error
 }
 
 /// Execute an `issue` subcommand.
-pub fn run(command: IssueCommand, push: bool) {
-    if let Err(e) = run_inner(command, push) {
+pub fn run(command: IssueCommand, push: bool, fetch: bool) {
+    if let Err(e) = run_inner(command, push, fetch) {
         eprintln!("Error: {e}");
         process::exit(1);
     }

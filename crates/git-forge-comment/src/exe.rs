@@ -336,7 +336,7 @@ pub fn build_anchor(
     }
 }
 
-fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> {
+fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box<dyn Error>> {
     let executor = Executor::from_env()?;
     let repo = executor.repo();
 
@@ -344,7 +344,7 @@ fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> 
         CommentCommand::New { target, body, anchor, anchor_type, range } => {
             let target = default_target(repo, target)?;
             let body = read_body(repo, body)?;
-            if push {
+            if fetch {
                 fetch_forge_refs(repo)?;
             }
             let oid = executor.new_comment(
@@ -365,7 +365,7 @@ fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> 
         CommentCommand::Reply { target, comment, body } => {
             let target = default_target(repo, target)?;
             let body = read_body(repo, body)?;
-            if push {
+            if fetch {
                 fetch_forge_refs(repo)?;
             }
             let oid = executor.reply_to_comment(&target, &comment, &body)?;
@@ -388,7 +388,7 @@ fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> 
                     .ok_or_else(|| format!("comment {comment} not found"))?;
                 open_editor_for_body(repo, &existing.body)?
             };
-            if push {
+            if fetch {
                 fetch_forge_refs(repo)?;
             }
             let oid = executor.edit_comment(&target, &comment, &new_body)?;
@@ -401,7 +401,7 @@ fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> 
 
         CommentCommand::Resolve { target, comment, message } => {
             let target = default_target(repo, target)?;
-            if push {
+            if fetch {
                 fetch_forge_refs(repo)?;
             }
             let oid = executor.resolve_comment(&target, &comment, message)?;
@@ -427,8 +427,8 @@ fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> 
 }
 
 /// Execute a `comment` subcommand.
-pub fn run(command: CommentCommand, push: bool) {
-    if let Err(e) = run_inner(command, push) {
+pub fn run(command: CommentCommand, push: bool, fetch: bool) {
+    if let Err(e) = run_inner(command, push, fetch) {
         eprintln!("Error: {e}");
         process::exit(1);
     }

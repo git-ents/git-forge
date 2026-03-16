@@ -19,12 +19,13 @@ fn main() {
     let cli = Cli::parse();
 
     let push = !cli.no_push;
+    let fetch = !cli.no_fetch && (push || cli.fetch);
 
     match cli.command {
-        Commands::Issue { command } => git_forge_issue::exe::run(command, push),
-        Commands::Review { command } => git_forge_review::exe::run(command, push),
-        Commands::Release { command } => git_forge_release::exe::run(command, push),
-        Commands::Comment { command } => git_forge_comment::exe::run(command, push),
+        Commands::Issue { command } => git_forge_issue::exe::run(command, push, fetch),
+        Commands::Review { command } => git_forge_review::exe::run(command, push, fetch),
+        Commands::Release { command } => git_forge_release::exe::run(command, push, fetch),
+        Commands::Comment { command } => git_forge_comment::exe::run(command, push, fetch),
         Commands::Install { remote, global } => {
             if let Err(e) = install::run(remote.as_deref(), global) {
                 eprintln!("Error: {e}");
