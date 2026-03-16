@@ -18,11 +18,13 @@ fn main() {
 
     let cli = Cli::parse();
 
+    let push = !cli.no_push;
+
     match cli.command {
-        Commands::Issue { command } => git_forge_issue::exe::run(command),
-        Commands::Review { command } => git_forge_review::exe::run(command),
-        Commands::Release { command } => git_forge_release::exe::run(command),
-        Commands::Comment { command } => git_forge_comment::exe::run(command),
+        Commands::Issue { command } => git_forge_issue::exe::run(command, push),
+        Commands::Review { command } => git_forge_review::exe::run(command, push),
+        Commands::Release { command } => git_forge_release::exe::run(command, push),
+        Commands::Comment { command } => git_forge_comment::exe::run(command, push),
         Commands::Install { remote, global } => {
             if let Err(e) = install::run(remote.as_deref(), global) {
                 eprintln!("Error: {e}");

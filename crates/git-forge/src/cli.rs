@@ -11,6 +11,10 @@ use git_forge_review::cli::ReviewCommand;
 #[command(name = "git forge", bin_name = "git forge")]
 #[command(author, version)]
 pub struct Cli {
+    /// Skip fetching and pushing forge refs to the remote.
+    #[arg(long = "no-push", global = true)]
+    pub no_push: bool,
+
     /// The subcommand to run.
     #[command(subcommand)]
     pub command: Commands,

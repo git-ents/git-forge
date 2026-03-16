@@ -48,6 +48,21 @@ fn open_editor_for_body(repo: &git2::Repository, initial: &str) -> Result<String
     Ok(body)
 }
 
+const FORGE_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
+
+fn fetch_forge_refs(repo: &git2::Repository) -> Result<(), Box<dyn Error>> {
+    let mut remote = repo.find_remote("origin")?;
+    remote.fetch(&[FORGE_REFSPEC], None, None)?;
+    Ok(())
+}
+
+fn push_forge_ref(repo: &git2::Repository, ref_name: &str) -> Result<(), Box<dyn Error>> {
+    let mut remote = repo.find_remote("origin")?;
+    let refspec = format!("{ref_name}:{ref_name}");
+    remote.push(&[&refspec], None)?;
+    Ok(())
+}
+
 fn default_target(repo: &git2::Repository, target: Option<String>) -> Result<String, Box<dyn Error>> {
     if let Some(t) = target { Ok(t) } else {
         let head = repo.head()?.peel_to_commit()?;
@@ -65,6 +80,10 @@ pub struct Target {
 }
 
 /// Parse a user-facing target string into a ref name and optional anchor filter.
+///
+/// # Errors
+///
+/// Returns an error if the target string is not in `<kind>/<id>` form or uses an unknown kind.
 pub fn parse_target(target: &str) -> Result<Target, Box<dyn Error>> {
     let Some((kind, id)) = target.split_once('/') else {
         return Err(format!(
@@ -101,6 +120,7 @@ fn read_body(repo: &git2::Repository, body: Option<String>) -> Result<String, Bo
 }
 
 /// Extract the primary OID from an [`Anchor`].
+#[must_use]
 pub fn anchor_oid(anchor: &Anchor) -> git2::Oid {
     match anchor {
         Anchor::Blob { oid, .. } | Anchor::Commit(oid) | Anchor::Tree(oid) => *oid,
@@ -316,13 +336,17 @@ pub fn build_anchor(
     }
 }
 
-fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
+fn run_inner(command: CommentCommand, push: bool) -> Result<(), Box<dyn Error>> {
     let executor = Executor::from_env()?;
+    let repo = executor.repo();
 
     match command {
         CommentCommand::New { target, body, anchor, anchor_type, range } => {
-            let target = default_target(executor.repo(), target)?;
-            let body = read_body(executor.repo(), body)?;
+            let target = default_target(repo, target)?;
+            let body = read_body(repo, body)?;
+            if push {
+                fetch_forge_refs(repo)?;
+            }
             let oid = executor.new_comment(
                 &target,
                 &body,
@@ -330,21 +354,31 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
                 anchor_type.as_deref(),
                 range.as_deref(),
             )?;
+            if push {
+                let t = parse_target(&target)?;
+                push_forge_ref(repo, &t.ref_name)?;
+            }
             println!("{oid}");
-            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
+            let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Reply { target, comment, body } => {
-            let target = default_target(executor.repo(), target)?;
-            let body = read_body(executor.repo(), body)?;
+            let target = default_target(repo, target)?;
+            let body = read_body(repo, body)?;
+            if push {
+                fetch_forge_refs(repo)?;
+            }
             let oid = executor.reply_to_comment(&target, &comment, &body)?;
+            if push {
+                let t = parse_target(&target)?;
+                push_forge_ref(repo, &t.ref_name)?;
+            }
             println!("{oid}");
-            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
+            let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Edit { target, comment, body } => {
-            let target = default_target(executor.repo(), target)?;
-            let repo = executor.repo();
+            let target = default_target(repo, target)?;
             let t = parse_target(&target)?;
             let comment_oid = git2::Oid::from_str(&comment)
                 .map_err(|e| format!("invalid comment OID {comment:?}: {e}"))?;
@@ -354,24 +388,37 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
                     .ok_or_else(|| format!("comment {comment} not found"))?;
                 open_editor_for_body(repo, &existing.body)?
             };
+            if push {
+                fetch_forge_refs(repo)?;
+            }
             let oid = executor.edit_comment(&target, &comment, &new_body)?;
+            if push {
+                push_forge_ref(repo, &t.ref_name)?;
+            }
             println!("{oid}");
-            let _ = std::fs::remove_file(executor.repo().path().join("COMMENT_EDITMSG"));
+            let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Resolve { target, comment, message } => {
-            let target = default_target(executor.repo(), target)?;
+            let target = default_target(repo, target)?;
+            if push {
+                fetch_forge_refs(repo)?;
+            }
             let oid = executor.resolve_comment(&target, &comment, message)?;
+            if push {
+                let t = parse_target(&target)?;
+                push_forge_ref(repo, &t.ref_name)?;
+            }
             println!("{oid}");
         }
 
         CommentCommand::List { target } => {
-            let target = default_target(executor.repo(), target)?;
+            let target = default_target(repo, target)?;
             executor.list_comments(&target)?;
         }
 
         CommentCommand::View { target, comment } => {
-            let target = default_target(executor.repo(), target)?;
+            let target = default_target(repo, target)?;
             executor.view_comment(&target, &comment)?;
         }
     }
@@ -380,8 +427,8 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
 }
 
 /// Execute a `comment` subcommand.
-pub fn run(command: CommentCommand) {
-    if let Err(e) = run_inner(command) {
+pub fn run(command: CommentCommand, push: bool) {
+    if let Err(e) = run_inner(command, push) {
         eprintln!("Error: {e}");
         process::exit(1);
     }
