@@ -9,17 +9,29 @@ pub fn run(remote: Option<&str>, global: bool) -> Result<(), Box<dyn std::error:
     let push_key = format!("remote.{remote_name}.push");
 
     if global {
-        add_global_value(&fetch_key, FORGE_FETCH_REFSPEC)?;
-        add_global_value(&push_key, FORGE_PUSH_REFSPEC)?;
-        eprintln!(
-            "Added forge refspecs for remote `{remote_name}` to global git config (~/.gitconfig)."
-        );
+        let fetch_added = add_global_value(&fetch_key, FORGE_FETCH_REFSPEC)?;
+        let push_added = add_global_value(&push_key, FORGE_PUSH_REFSPEC)?;
+        if fetch_added || push_added {
+            eprintln!(
+                "Added forge refspecs for remote `{remote_name}` to global git config (~/.gitconfig)."
+            );
+        } else {
+            eprintln!(
+                "Forge refspecs for remote `{remote_name}` already present in global git config (~/.gitconfig)."
+            );
+        }
     } else {
         let repo = git2::Repository::open_from_env()?;
         let mut config = repo.config()?.open_level(git2::ConfigLevel::Local)?;
-        add_value_if_missing(&mut config, &fetch_key, FORGE_FETCH_REFSPEC)?;
-        add_value_if_missing(&mut config, &push_key, FORGE_PUSH_REFSPEC)?;
-        eprintln!("Added forge refspecs for remote `{remote_name}` to local git config.");
+        let fetch_added = add_value_if_missing(&mut config, &fetch_key, FORGE_FETCH_REFSPEC)?;
+        let push_added = add_value_if_missing(&mut config, &push_key, FORGE_PUSH_REFSPEC)?;
+        if fetch_added || push_added {
+            eprintln!("Added forge refspecs for remote `{remote_name}` to local git config.");
+        } else {
+            eprintln!(
+                "Forge refspecs for remote `{remote_name}` already present in local git config."
+            );
+        }
     }
 
     Ok(())
@@ -54,30 +66,32 @@ fn resolve_remote(
 }
 
 /// Add `value` under `key` in the given config level, skipping if already present.
+/// Returns `true` if the value was added, `false` if it was already present.
 fn add_value_if_missing(
     config: &mut git2::Config,
     key: &str,
     value: &str,
-) -> Result<(), git2::Error> {
+) -> Result<bool, git2::Error> {
     // `multivar` lets us check all values for a multi-valued key.
     let already_set = config
         .multivar(key, Some(&regex_escape(value)))
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false);
 
-    if !already_set {
-        config.set_multivar(key, "^$", value)?;
+    if already_set {
+        return Ok(false);
     }
 
-    Ok(())
+    config.set_multivar(key, "^$", value)?;
+    Ok(true)
 }
 
 /// Add `value` under `key` in the global config, skipping if already present.
-fn add_global_value(key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Returns `true` if the value was added, `false` if it was already present.
+fn add_global_value(key: &str, value: &str) -> Result<bool, Box<dyn std::error::Error>> {
     let global_config = git2::Config::open_default()?;
     let mut global_level = global_config.open_level(git2::ConfigLevel::Global)?;
-    add_value_if_missing(&mut global_level, key, value)?;
-    Ok(())
+    Ok(add_value_if_missing(&mut global_level, key, value)?)
 }
 
 /// Escape a literal string for use as a regex in `Config::multivar`.
