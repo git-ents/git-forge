@@ -59,9 +59,11 @@ fn parse_target(target: &str) -> Result<String, Box<dyn Error>> {
     }
 }
 
-fn read_body(body: Option<String>) -> Result<String, Box<dyn Error>> {
+fn read_body(repo: &git2::Repository, body: Option<String>) -> Result<String, Box<dyn Error>> {
+    use std::io::IsTerminal;
     match body {
         Some(b) => Ok(b),
+        None if std::io::stdin().is_terminal() => open_editor_for_body(repo, ""),
         None => {
             use std::io::Read;
             let mut buf = String::new();
@@ -233,22 +235,14 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
     let executor = Executor::from_env()?;
 
     match command {
-        CommentCommand::New { target, body, anchor, anchor_type, range, interactive } => {
-            let body = if interactive {
-                open_editor_for_body(executor.repo(), "")?
-            } else {
-                read_body(body)?
-            };
+        CommentCommand::New { target, body, anchor, anchor_type, range } => {
+            let body = read_body(executor.repo(), body)?;
             let oid = executor.new_comment(&target, &body, anchor, anchor_type, range)?;
             println!("{oid}");
         }
 
-        CommentCommand::Reply { target, comment, body, interactive } => {
-            let body = if interactive {
-                open_editor_for_body(executor.repo(), "")?
-            } else {
-                read_body(body)?
-            };
+        CommentCommand::Reply { target, comment, body } => {
+            let body = read_body(executor.repo(), body)?;
             let oid = executor.reply_to_comment(&target, &comment, &body)?;
             println!("{oid}");
         }

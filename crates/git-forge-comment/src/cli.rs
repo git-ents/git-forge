@@ -10,7 +10,7 @@ pub enum CommentCommand {
         /// Target: "issue/<id>", "review/<id>", "commit/<sha>", "blob/<sha>", etc.
         target: String,
 
-        /// Comment body (markdown). Reads from stdin if omitted and --interactive is not set.
+        /// Comment body (markdown). Opens an editor when omitted in an interactive shell.
         #[arg(short, long)]
         body: Option<String>,
 
@@ -25,10 +25,6 @@ pub enum CommentCommand {
         /// Line range within a blob, e.g. "42-47".
         #[arg(long)]
         range: Option<String>,
-
-        /// Open an interactive editor to compose the comment.
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        interactive: bool,
     },
 
     /// Reply to an existing comment.
@@ -39,13 +35,9 @@ pub enum CommentCommand {
         /// OID of the comment to reply to.
         comment: String,
 
-        /// Reply body (markdown). Reads from stdin if omitted and --interactive is not set.
+        /// Reply body (markdown). Opens an editor when omitted in an interactive shell.
         #[arg(short, long)]
         body: Option<String>,
-
-        /// Open an interactive editor to compose the reply.
-        #[arg(long, action = clap::ArgAction::SetTrue)]
-        interactive: bool,
     },
 
     /// Edit a comment (creates a new immutable comment with Replaces trailer).

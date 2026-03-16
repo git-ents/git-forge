@@ -247,20 +247,13 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
     let executor = Executor::from_env()?;
 
     match command {
-        IssueCommand::New {
-            title,
-            body,
-            label,
-            assignee,
-            interactive,
-        } => {
-            if interactive {
+        IssueCommand::New { title, body, label, assignee } => {
+            use std::io::IsTerminal;
+            if title.is_none() && std::io::stdin().is_terminal() {
                 let id = executor.create_issue_interactive()?;
                 eprintln!("Created issue #{id}");
             } else {
-                let title = title
-                    .as_deref()
-                    .ok_or("Title is required (or use --interactive)")?;
+                let title = title.as_deref().ok_or("Title is required")?;
                 let body = if let Some(b) = body {
                     b
                 } else {
