@@ -14,6 +14,9 @@ fn repo_with_file() -> (TempDir, Repository) {
     let dir = TempDir::new().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     {
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "Test").unwrap();
+        cfg.set_str("user.email", "test@example.com").unwrap();
         let sig = repo.signature().unwrap();
         let blob_oid = repo.blob(b"line1\nline2\nline3\nline4\nline5\n").unwrap();
         let mut tb = repo.treebuilder(None).unwrap();
