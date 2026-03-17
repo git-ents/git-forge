@@ -7,6 +7,10 @@ fn repo() -> (TempDir, Repository) {
     let dir = TempDir::new().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     {
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "Test").unwrap();
+        cfg.set_str("user.email", "test@example.com").unwrap();
+        drop(cfg);
         let sig = repo.signature().unwrap();
         let tree_oid = repo.treebuilder(None).unwrap().write().unwrap();
         let tree = repo.find_tree(tree_oid).unwrap();
