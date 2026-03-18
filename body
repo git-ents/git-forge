@@ -1,0 +1,6 @@
+
+See [`944e039819c0eba6255bf3f67b76628f9f29a4d1`].
+
+> A previous issue disappeared... I suspect there may be a `forge sync` bug.
+
+The missing issue was empty, but this points to a possible bug.
