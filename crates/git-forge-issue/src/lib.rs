@@ -4,7 +4,6 @@
 //!
 //! ```text
 //! refs/forge/issue/<issue-id> → commit → tree
-//! ├── author          # plain text: fingerprint
 //! ├── title           # plain text: single-line title
 //! ├── state           # plain text: "open" or "closed"
 //! ├── labels/         # dir: empty blobs whose names are the labels

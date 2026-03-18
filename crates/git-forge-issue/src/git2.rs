@@ -85,7 +85,7 @@ fn issue_from_ref(
     let commit = reference.peel_to_commit()?;
     let tree = commit.tree()?;
 
-    let author = blob_content(repo, &tree, "author")?.unwrap_or_default();
+    let author = commit.author().name().unwrap_or("").to_string();
     let title = blob_content(repo, &tree, "title")?.unwrap_or_default();
     let state = read_state(repo, &tree)?;
     let labels = read_labels(repo, &tree)?;
@@ -207,14 +207,12 @@ impl Issues for Repository {
             tb.write()?
         };
 
-        let author_blob = self.blob(sig.name().unwrap_or("").as_bytes())?;
         let title_blob = self.blob(title.as_bytes())?;
         let state_blob = self.blob(b"open")?;
         let body_blob = self.blob(body.as_bytes())?;
 
         let tree_oid = {
             let mut tb = self.treebuilder(None)?;
-            tb.insert("author", author_blob, 0o100_644)?;
             tb.insert("title", title_blob, 0o100_644)?;
             tb.insert("state", state_blob, 0o100_644)?;
             tb.insert("body", body_blob, 0o100_644)?;
@@ -274,14 +272,12 @@ impl Issues for Repository {
             tb.write()?
         };
 
-        let author_blob = self.blob(issue.meta.author.as_bytes())?;
         let title_blob = self.blob(issue.meta.title.as_bytes())?;
         let state_blob = self.blob(issue.meta.state.as_str().as_bytes())?;
         let body_blob = self.blob(issue.body.as_bytes())?;
 
         let tree_oid = {
             let mut tb = self.treebuilder(None)?;
-            tb.insert("author", author_blob, 0o100_644)?;
             tb.insert("title", title_blob, 0o100_644)?;
             tb.insert("state", state_blob, 0o100_644)?;
             tb.insert("body", body_blob, 0o100_644)?;
