@@ -1,7 +1,6 @@
 //! Implementation of `git forge sync`.
 
 const FORGE_FETCH_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
-const FORGE_PUSH_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 
 pub fn run(
     remote: Option<&str>,
@@ -31,8 +30,6 @@ pub fn run(
             let mut push_opts = git_forge_core::credentials::push_options()?;
             r.push(&refspec_strs, Some(&mut push_opts))?;
         }
-        let mut push_opts = git_forge_core::credentials::push_options()?;
-        r.push(&[FORGE_PUSH_REFSPEC], Some(&mut push_opts))?;
     }
 
     Ok(())
