@@ -71,11 +71,11 @@ pub enum CommentCommand {
     },
 
     /// Show a single comment in full.
-    View {
+    Show {
         /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
         target: Option<String>,
 
-        /// OID of the comment to view.
+        /// OID of the comment to show.
         comment: String,
     },
 }

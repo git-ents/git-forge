@@ -258,7 +258,7 @@ impl Executor {
         Ok(())
     }
 
-    pub fn view_comment(&self, target: &str, comment_oid_str: &str) -> Result<(), Box<dyn Error>> {
+    pub fn show_comment(&self, target: &str, comment_oid_str: &str) -> Result<(), Box<dyn Error>> {
         let t = parse_target(target)?;
         let ref_name = t.ref_name;
         let repo = self.repo();
@@ -458,9 +458,9 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
             }
         }
 
-        CommentCommand::View { target, comment } => {
+        CommentCommand::Show { target, comment } => {
             let target = default_target(repo, target)?;
-            executor.view_comment(&target, &comment)?;
+            executor.show_comment(&target, &comment)?;
         }
     }
 
