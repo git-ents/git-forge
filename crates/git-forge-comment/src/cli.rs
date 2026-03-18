@@ -79,5 +79,9 @@ pub enum CommentCommand {
         /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
         #[arg(short, long)]
         target: Option<String>,
+
+        /// Show reply threads indented under their parent comments.
+        #[arg(short = 'T', long)]
+        threads: bool,
     },
 }

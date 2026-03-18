@@ -275,30 +275,78 @@ impl Executor {
         let comment = repo
             .find_comment(&ref_name, oid)?
             .ok_or_else(|| format!("comment {comment_oid_str} not found"))?;
-        print_comment(target, &comment);
+        print_comment(target, &comment, 0);
         Ok(())
     }
 
-    pub fn show_comments(&self, target: &str) -> Result<(), Box<dyn Error>> {
+    pub fn show_comments(&self, target: &str, threads: bool) -> Result<(), Box<dyn Error>> {
         let t = parse_target(target)?;
         let repo = self.repo();
         let comments = repo.comments_on(&t.ref_name)?;
-        let mut first = true;
-        for comment in &comments {
-            if comment.resolved {
-                continue;
-            }
-            if let Some(ref filter) = t.anchor_filter {
-                let oid_hex = anchor_oid(&comment.anchor).to_string();
-                if !oid_hex.starts_with(filter.as_str()) {
-                    continue;
+
+        // Filter to active, matching comments.
+        let visible: Vec<_> = comments
+            .iter()
+            .filter(|c| {
+                if c.resolved {
+                    return false;
                 }
+                if let Some(ref filter) = t.anchor_filter {
+                    let oid_hex = anchor_oid(&c.anchor).to_string();
+                    if !oid_hex.starts_with(filter.as_str()) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        if !threads {
+            let mut first = true;
+            for comment in &visible {
+                if !first {
+                    println!();
+                }
+                first = false;
+                print_comment(target, comment, 0);
             }
-            if !first {
+            return Ok(());
+        }
+
+        // Build parent -> children map.
+        let mut children: std::collections::HashMap<git2::Oid, Vec<&crate::Comment>> =
+            std::collections::HashMap::new();
+        let mut roots: Vec<&crate::Comment> = Vec::new();
+        for comment in &visible {
+            if let Some(parent) = comment.parent_oid {
+                children.entry(parent).or_default().push(comment);
+            } else {
+                roots.push(comment);
+            }
+        }
+
+        fn print_thread(
+            target: &str,
+            comment: &crate::Comment,
+            children: &std::collections::HashMap<git2::Oid, Vec<&crate::Comment>>,
+            depth: usize,
+            first: &mut bool,
+        ) {
+            if !*first {
                 println!();
             }
-            first = false;
-            print_comment(target, comment);
+            *first = false;
+            print_comment(target, comment, depth);
+            if let Some(replies) = children.get(&comment.oid) {
+                for reply in replies {
+                    print_thread(target, reply, children, depth + 1, first);
+                }
+            }
+        }
+
+        let mut first = true;
+        for root in &roots {
+            print_thread(target, root, &children, 0, &mut first);
         }
         Ok(())
     }
@@ -335,19 +383,26 @@ fn format_on(target: &str, anchor: &Anchor) -> String {
     }
 }
 
-fn print_comment(target: &str, comment: &crate::Comment) {
+fn print_comment(target: &str, comment: &crate::Comment, depth: usize) {
+    let indent = "  ".repeat(depth);
     let short_oid = &comment.oid.to_string()[..7];
-    println!("comment {short_oid}");
-    println!("on: {}", format_on(target, &comment.anchor));
+    println!("{indent}comment {short_oid}");
+    println!("{indent}on: {}", format_on(target, &comment.anchor));
     if let Some(p) = comment.parent_oid {
         let short_p = &p.to_string()[..7];
-        println!("parent: {short_p}");
+        println!("{indent}parent: {short_p}");
     }
     if comment.resolved {
-        println!("resolved: true");
+        println!("{indent}resolved: true");
     }
     println!();
-    print!("{}", comment.body);
+    for line in comment.body.lines() {
+        if line.is_empty() {
+            println!();
+        } else {
+            println!("{indent}{line}");
+        }
+    }
     if !comment.body.ends_with('\n') {
         println!();
     }
@@ -507,12 +562,12 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
             }
         }
 
-        CommentCommand::Show { target, comment } => {
+        CommentCommand::Show { target, comment, threads } => {
             let target = default_target(repo, target)?;
             if let Some(oid) = comment {
                 executor.show_comment(&target, &oid)?;
             } else {
-                executor.show_comments(&target)?;
+                executor.show_comments(&target, threads)?;
             }
         }
     }
