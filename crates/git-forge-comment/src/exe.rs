@@ -267,7 +267,7 @@ impl Executor {
         let comment = repo
             .find_comment(&ref_name, oid)?
             .ok_or_else(|| format!("comment {comment_oid_str} not found"))?;
-        print_comment(&comment);
+        print_comment(target, &comment);
         Ok(())
     }
 
@@ -290,7 +290,7 @@ impl Executor {
                 println!();
             }
             first = false;
-            print_comment(comment);
+            print_comment(target, comment);
         }
         Ok(())
     }
@@ -299,27 +299,41 @@ impl Executor {
 /// Resolve an anchor argument to an [`Anchor`].
 ///
 /// `anchor` may be an OID or a file path (resolved against HEAD's tree).
-fn print_comment(comment: &crate::Comment) {
-    println!("commit {}", comment.oid);
-    match &comment.anchor {
-        Anchor::Blob { oid, line_ranges } => {
-            if line_ranges.is_empty() {
-                println!("anchor: blob {oid}");
-            } else {
-                let ranges = line_ranges
-                    .iter()
-                    .map(|(s, e)| format!("{s}-{e}"))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                println!("anchor: blob {oid} lines {ranges}");
+fn format_on(target: &str, anchor: &Anchor) -> String {
+    match target.split_once('/') {
+        Some(("issue" | "review", _)) => target.to_string(),
+        _ => {
+            let oid = anchor_oid(anchor);
+            let short = &oid.to_string()[..7];
+            match anchor {
+                Anchor::Blob { line_ranges, .. } if !line_ranges.is_empty() => {
+                    let ranges = line_ranges
+                        .iter()
+                        .map(|(s, e)| format!("{s}-{e}"))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!("blob/{short} lines {ranges}")
+                }
+                Anchor::Blob { .. } => format!("blob/{short}"),
+                Anchor::Commit(_) => format!("commit/{short}"),
+                Anchor::Tree(_) => format!("tree/{short}"),
+                Anchor::CommitRange { start, end } => {
+                    let s = &start.to_string()[..7];
+                    let e = &end.to_string()[..7];
+                    format!("commit/{s}..{e}")
+                }
             }
         }
-        Anchor::Commit(oid) => println!("anchor: commit {oid}"),
-        Anchor::Tree(oid) => println!("anchor: tree {oid}"),
-        Anchor::CommitRange { start, end } => println!("anchor: commits {start}..{end}"),
     }
+}
+
+fn print_comment(target: &str, comment: &crate::Comment) {
+    let short_oid = &comment.oid.to_string()[..7];
+    println!("comment {short_oid}");
+    println!("on: {}", format_on(target, &comment.anchor));
     if let Some(p) = comment.parent_oid {
-        println!("parent: {p}");
+        let short_p = &p.to_string()[..7];
+        println!("parent: {short_p}");
     }
     if comment.resolved {
         println!("resolved: true");
