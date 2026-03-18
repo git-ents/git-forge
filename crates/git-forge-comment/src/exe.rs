@@ -460,7 +460,11 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
 
         CommentCommand::Show { target, comment } => {
             let target = default_target(repo, target)?;
-            executor.show_comment(&target, &comment)?;
+            if let Some(oid) = comment {
+                executor.show_comment(&target, &oid)?;
+            } else {
+                executor.list_comments(&target)?;
+            }
         }
     }
 

@@ -70,12 +70,14 @@ pub enum CommentCommand {
         all: bool,
     },
 
-    /// Show a single comment in full.
+    /// Show comments. Defaults to all active comments on HEAD.
     Show {
-        /// OID of the comment to show.
-        comment: String,
+        /// OID of a specific comment to show. Defaults to all active comments.
+        #[arg(short, long = "ref")]
+        comment: Option<String>,
 
         /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
+        #[arg(short, long)]
         target: Option<String>,
     },
 }
