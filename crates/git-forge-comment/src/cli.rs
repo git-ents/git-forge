@@ -39,11 +39,11 @@ pub enum CommentCommand {
 
     /// Edit a comment (creates a new immutable comment with Replaces trailer).
     Edit {
-        /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
-        target: Option<String>,
-
         /// OID of the comment to edit.
         comment: String,
+
+        /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
+        target: Option<String>,
 
         /// New body (markdown). Opens interactive editor if omitted.
         #[arg(short, long)]
@@ -72,10 +72,10 @@ pub enum CommentCommand {
 
     /// Show a single comment in full.
     Show {
-        /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
-        target: Option<String>,
-
         /// OID of the comment to show.
         comment: String,
+
+        /// Target: "issue/<id>", "review/<id>", "commit/<sha>", etc. Defaults to "commit/<HEAD>".
+        target: Option<String>,
     },
 }
