@@ -64,8 +64,8 @@ pub trait Contributors {
 
     /// Update an existing contributor.
     ///
-    /// `name` replaces the display name if `Some`. `add_emails` and
-    /// `remove_emails` are applied to the existing email list.
+    /// `new_id` renames the entry. `name` replaces the display name if `Some`.
+    /// `add_emails` and `remove_emails` are applied to the existing email list.
     ///
     /// # Errors
     ///
@@ -73,6 +73,7 @@ pub trait Contributors {
     fn update_contributor(
         &self,
         id: &str,
+        new_id: Option<&str>,
         name: Option<&str>,
         add_emails: &[String],
         remove_emails: &[String],

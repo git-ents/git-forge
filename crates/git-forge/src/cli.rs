@@ -51,6 +51,10 @@ pub enum ContributorSubcommand {
         /// Contributor ID to edit.
         id: String,
 
+        /// New ID (renames the contributor).
+        #[arg(long = "rename-id")]
+        new_id: Option<String>,
+
         /// New display name.
         #[arg(long)]
         name: Option<String>,

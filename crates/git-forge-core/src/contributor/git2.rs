@@ -136,6 +136,7 @@ impl Contributors for Repository {
     fn update_contributor(
         &self,
         id: &str,
+        new_id: Option<&str>,
         name: Option<&str>,
         add_emails: &[String],
         remove_emails: &[String],
@@ -156,6 +157,15 @@ impl Contributors for Repository {
             || git2::Error::from_str(&format!("contributor '{id}' not found")),
         )?;
 
+        let dest_id = new_id.unwrap_or(id);
+
+        if let Some(n) = new_id {
+            if n != id && existing_tree.get_name(n).is_some() {
+                return Err(git2::Error::from_str(&format!(
+                    "contributor '{n}' already exists"
+                )));
+            }
+        }
         if let Some(n) = name {
             contributor.name = n.to_string();
         }
@@ -178,13 +188,20 @@ impl Contributors for Repository {
 
         let root_tree_oid = {
             let mut tb = self.treebuilder(Some(&existing_tree))?;
-            tb.insert(id, contributor_tree_oid, 0o040_000)?;
+            if new_id.is_some_and(|n| n != id) {
+                tb.remove(id)?;
+            }
+            tb.insert(dest_id, contributor_tree_oid, 0o040_000)?;
             tb.write()?
         };
 
         let tree = self.find_tree(root_tree_oid)?;
         let sig = self.signature()?;
-        let message = format!("update contributor {id}");
+        let message = if new_id.is_some_and(|n| n != id) {
+            format!("rename contributor {id} to {dest_id}")
+        } else {
+            format!("update contributor {id}")
+        };
         self.commit(
             Some(CONTRIBUTORS_REF),
             &sig,
