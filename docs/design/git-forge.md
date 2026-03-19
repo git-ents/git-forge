@@ -1,8 +1,8 @@
 +++
 title = "Forge: A Git-Native Development Platform"
 subtitle = "Design Specification"
-version = "0.2.0"
-date = 2026-03-11
+version = "0.3.0"
+date = 2026-03-18
 status = "Draft"
 +++
 
@@ -25,52 +25,136 @@ Relationships between entities are standalone metadata, not embedded fields.
 Forge depends on [`git-metadata`](https://github.com/git-ents/git-metadata) for annotations and relational metadata. `git-metadata` extends Git's notes feature to tree-structured data, allowing arbitrary metadata to be attached to any object (blob, tree, or commit) without modifying history.
 
 
-## Entity IDs and Counters
+## Contributors
 
-Entities (issues, reviews) use sequential integer IDs.
-A counter ref tracks the next available ID per entity type:
+Contributors are the foundation of the identity model.
+A contributor is a directory in a ref, keyed by a short human-chosen identifier:
 
 ```text
-refs/forge/meta/counters → commit → tree
-├── issues          # plain text: "47"
-├── reviews         # plain text: "103"
+refs/forge/contributors → commit → tree
+├── alice/
+│   └── meta            # toml: name, email
+├── bob/
+│   └── meta            # toml: name, email
 ```
 
-Incrementing is a signed commit to this ref.
-The counter's history is its own audit log.
+The directory name (`alice`, `bob`) is the contributor ID.
+Every reference to a person anywhere in the system — issue author, assignee, comment attribution, approval signer, ACL entry — uses this ID string.
 
-### Assignment Protocols
+Adding a contributor is a signed commit to this ref.
+The commit history is the audit trail: who added whom, when, signed by whom.
 
-Three protocols produce identical refs.
-The choice depends on the server environment.
+### Bootstrapping
 
-**Pure Git (no server logic).**
-Optimistic concurrency via `git push --atomic` and `--force-with-lease`:
+The first contributor is seeded automatically on `git forge install` or on first entity creation.
+The tool reads `user.name` and `user.email` from git config, prompts for an ID (or derives one from the name), and writes the first contributor entry.
+The first commit is self-signed by the project creator.
+This bootstraps trust.
 
-1. Fetch `refs/forge/meta/counters`, read current value N.
-2. Create the entity commit locally.
-3. Commit N+1 to `refs/forge/meta/counters` locally.
-4. `git push --atomic --force-with-lease=refs/forge/meta/counters:<expected-oid> refs/forge/meta/counters refs/forge/issue/<N+1>`
-5. If rejected (someone else incremented), retry from step 1.
+### Identity Resolution
 
-`--atomic` ensures all ref updates succeed or none do.
-`--force-with-lease` on the counter ref makes it a compare-and-swap.
-Together: atomic multi-ref CAS with no server-side logic.
+The CLI resolves the current user by matching `user.email` from git config against contributor entries.
+On write operations (create issue, add comment), the tool looks up the current user's contributor ID automatically.
+On read operations (display issue, show comment), the tool resolves contributor IDs to display names from `meta`.
+
+The contributor ID is the stable reference stored everywhere.
+Display names are cosmetic, changeable, and resolved at render time.
+`--assignee alice` works because `alice` is the contributor ID directly.
+
+### Key Management (Future)
+
+When signing matters, a contributor gains a `keys/` subtree:
+
+```text
+├── alice/
+│   ├── meta
+│   └── keys/
+│       ├── <fingerprint-1>.pub
+│       └── <fingerprint-2>.pub
+```
+
+Key rotation is adding a new key and optionally removing the old one.
+The ID `alice` does not change.
+Nothing referencing `alice` anywhere in the system changes.
+Signature verification maps fingerprint → contributor ID by scanning keys.
+
+### Roles (Future)
+
+When access control matters, a contributor gains a `roles` blob:
+
+```text
+├── alice/
+│   ├── meta
+│   ├── keys/
+│   └── roles           # toml: ["maintainer"]
+```
+
+Roles map to permissions in `policy.toml`.
+Same ID, same ref, additive change.
+
+### External Identity (Future)
+
+Long-term, a contributor ID could be a DID (`did:plc:...` or `did:web:alice.dev`).
+The `keys/` subtree becomes optional — key discovery goes through DID resolution with local caching.
+Everything else is unchanged.
+The contributor data model accommodates this without migration.
+
+Near-term, the key in the contributors ref is the identity.
+No registration, no accounts.
+A key pair is sufficient.
+
+
+## Entity IDs
+
+Entities (issues, reviews) use sequential integer IDs.
+IDs are assigned by scanning existing refs — no counter ref is needed.
+
+The next ID is `max(existing IDs) + 1`, determined by globbing `refs/forge/issue/*` (or `refs/forge/review/*`).
+Scanning packed-refs or loose ref entries is fast — a project with 10,000 issues scans in microseconds.
+
+The first commit on an entity ref is the creation event.
+Author, timestamp, and signature are in the commit itself.
+No separate audit log is needed.
+
+### ID Assignment and Sync
+
+ID assignment depends on whether forge refs are fresh locally:
+
+**Refs are fresh (daemon running or recent sync).**
+The CLI scans local refs, takes N+1, commits the entity ref, and returns immediately.
+The daemon pushes the ref.
+Conflicts are near-impossible because the local state is current and entity creation is infrequent.
+
+If the daemon's push fails (someone else took N+1), the daemon re-scans, renames the local ref to N+2, pushes again, and notifies the user: `Issue renumbered: #43 → #44`.
+This is rare.
+
+Freshness is determined by the reflog timestamp on forge refs.
+If the most recent fetch is within a configurable threshold (default: a few minutes for small teams, tighter for large projects), refs are considered fresh.
+
+**Refs are stale (no daemon, offline).**
+The CLI writes the full entity tree to a staging ref:
+
+```text
+refs/forge/staging/<random-uuid> → commit → tree
+```
+
+The user sees `Created issue (pending — number assigned on sync)`.
+When connectivity returns, the daemon or `git forge sync` allocates the real number and notifies: `Staged issue assigned #43`.
 
 **Server hooks (smart server).**
 The client pushes to an inbox ref.
 The server's post-receive hook reads the commit, assigns the next integer, creates the canonical ref, and deletes the inbox ref:
 
-1. User pushes to `refs/inbox/<fingerprint>/issues/<anything>`.
+1. User pushes to `refs/inbox/<contributor-id>/issues/<anything>`.
 2. Server post-receive hook reads it, assigns the next integer, creates `refs/forge/issue/<N+1>`, deletes the inbox ref.
 3. Returns the assigned ID to the user (post-receive hook output goes back to the pusher over the transport).
 
 **UI server (direct repo access).**
 The UI has filesystem access.
-Lock the counter file, increment, write the entity ref, unlock.
+Lock, scan, increment, write the entity ref, unlock.
 No CAS retry loop, no hooks.
 
-External contributors always use the inbox path — they cannot write to `refs/forge/meta/counters`.
+External contributors always use the inbox path — they cannot write to `refs/forge/` directly.
 
 
 ## Annotations
@@ -115,7 +199,7 @@ Using patch-id rather than commit oid means approvals survive rebases automatica
 ```text
 refs/metadata/approvals   (fanout by patch-id)
   <patch-id>/
-    <fingerprint>       # toml: timestamp, type ("patch"|"range"), message (optional)
+    <contributor-id>     # toml: timestamp, type ("patch"|"range"), message (optional)
 ```
 
 The metadata commit adding the entry is signed by the approver.
@@ -154,7 +238,7 @@ It is an annotation on the blob or tree OID.
 ```text
 refs/metadata/approvals   (fanout by oid)
   <blob-or-tree-oid>/
-    <fingerprint>       # toml: timestamp, type ("blob"|"tree"), path, message (optional)
+    <contributor-id>     # toml: timestamp, type ("blob"|"tree"), path, message (optional)
 ```
 
 The `path` field records which file or directory was approved (a blob OID alone doesn't indicate location).
@@ -229,6 +313,49 @@ Reverse lookups are tree reads, not index scans.
 "All comments referencing issue 42" is a tree listing of `refs/metadata/links/issues/42/`.
 
 
+## Authorship
+
+Git commits always carry an author (name, email, timestamp).
+Forge does not duplicate this in entity trees.
+
+The creator of an issue is the author of the first commit on `refs/forge/issue/<id>`.
+The creator of a review is the author of the first commit on `refs/forge/review/<id>`.
+The author of a comment is the author of the comment's commit.
+The author of an approval is identified by the metadata tree path (keyed by contributor ID) and the commit signature.
+
+Every read path that displays "who did this" resolves the commit's author email to a contributor ID via the contributors ref, then to a display name.
+Every write path uses `repo.signature()` from git config.
+No `author` blob is stored in any entity tree.
+
+This means a reliable mapping from git commit author email to contributor ID is essential.
+The `find_contributor_by_email` lookup in the contributors ref provides this.
+
+
+## Data Model: Trees vs Blobs
+
+The choice between tree entries and TOML blobs depends on who writes the data and whether they write concurrently.
+
+**Use tree entries when different people write different entries.**
+Approvals keyed by contributor ID, comments keyed by OID, links keyed by entity ID.
+These are the cases where concurrency is common and conflicts would be spurious.
+The tree structure makes independent writes auto-merge via three-way tree merge.
+This is where `git-metadata`'s tree approach is correct.
+
+**Use separate blobs within an entity tree when concurrent edits to different fields should auto-merge.**
+Issue fields (title, state, body) are separate blobs in the issue tree.
+Two people editing the same issue — one changing the title, the other closing it — should merge cleanly.
+The daemon's auto-merge handles this because the edits touch disjoint tree paths.
+
+**Use a single TOML blob when one person writes all fields together.**
+Contributor meta (name, email) — one person sets this.
+Review meta (target_branch, state) — set at creation, rarely edited.
+These are coherent units written by a single actor.
+Splitting them gains nothing.
+
+The merge unit is the blob.
+Put the merge boundary where the authorship boundary is.
+
+
 ## Entities
 
 ### Issues
@@ -238,25 +365,23 @@ It is not metadata on any object — it is an entity.
 
 ```text
 refs/forge/issue/<issue-id> → commit → tree
-├── author          # plain text: fingerprint
 ├── title           # plain text: single-line title
 ├── state           # plain text: "open" or "closed"
-├── labels/         # dir: empty blobs whose names are the labels
 ├── body            # markdown
-└── comments/
-    ├── 001-<ts>-<fingerprint>      # markdown
-    ├── 002-<ts>-<fingerprint>
-    └── ...
+├── labels/         # dir: empty blobs whose names are the labels
+└── assignees/      # dir: empty blobs whose names are contributor IDs
 ```
 
-Each mutation — state change, new comment, label update, assignment — is a new commit on the issue's ref.
+Each field is a separate blob to enable auto-merge when different people edit different fields concurrently (see Data Model section).
+
+Each mutation — state change, title edit, label update, assignment — is a new commit on the issue's ref.
 The commit history is the issue's audit log.
 `git log refs/forge/issue/<id>` shows every change, who made it, and when.
 
 Issue comments are conversation within the issue.
 They are not the same as code comments.
 Code comments are annotations on blobs, visible everywhere that content appears, blame-reanchored.
-Issue comments are part of the issue's history, scoped to the issue.
+Issue comments are stored under `refs/forge/comments/issue/<id>`, scoped to the issue.
 
 Relationships to other entities (commits, blob+line ranges, other issues, reviews) are stored as relational metadata, not embedded in the issue.
 
@@ -265,13 +390,13 @@ Two people editing different issues never conflict.
 
 #### Labels, Assignment, State
 
-Labels are a list of strings in `meta`.
+Labels are empty blobs in a `labels/` subtree.
 No separate taxonomy system.
 A label exists when someone uses it.
 
-Assignment is a list of fingerprints in `meta`.
+Assignment is empty blobs in an `assignees/` subtree, named by contributor ID.
 
-State is an enum in `meta`: `open`, `closed`.
+State is a plain text blob: `open` or `closed`.
 No intermediate states in the core model.
 Extensions or conventions can add them via labels.
 
@@ -284,7 +409,7 @@ It has its own lifecycle independent of the commits it covers.
 
 ```text
 refs/forge/review/<review-id> → commit → tree
-├── meta            # toml: author, target_branch, state, created
+├── meta            # toml: target_branch, state, created
 ├── description     # markdown
 ├── revisions/
 │   ├── 001         # toml: head_commit, timestamp
@@ -343,11 +468,11 @@ Check results are metadata on commits, keyed by run ID to support multiple runs 
 refs/metadata/checks/<commit-oid>/
   <run-id>/
     meta          # toml: name, state (pass|fail|running), started, finished,
-                  #       runner_fingerprint, params (optional)
+                  #       runner_contributor_id, params (optional)
     log           # blob: raw output
 ```
 
-`run-id` is a timestamp + fingerprint or a short random ID.
+`run-id` is a timestamp + contributor ID or a short random ID.
 Every execution is a distinct tree entry.
 Never overwrites.
 
@@ -441,7 +566,7 @@ Entries are encrypted at rest with a key derived from the server's own identity:
   meta                    # toml: who set it, when, ACL
 ```
 
-The ACL specifies which runner fingerprints can read each secret.
+The ACL specifies which runner contributor IDs can read each secret.
 
 ### Injection
 
@@ -449,8 +574,8 @@ The server injects secrets, not the runner.
 This prevents a compromised runner from requesting arbitrary secrets.
 
 1. Runner picks up a job from the queue and authenticates to the server with its key.
-2. Server reads the check definition at that commit's tree itself, verifies the runner's fingerprint is in the ACL for each listed secret.
-3. Server writes secrets to a tmpfs volume mounted into the container at `/run/forge/secrets/<name>`.
+2. Server reads the check definition at that commit's tree itself, verifies the runner's key corresponds to a contributor in the ACL for each listed secret.
+3. Server writes secrets to a tmpfs volume mounted into the container at `/run/forge/secrets/<n>`.
 4. The mount is read-only.
    The container has no capability to remount.
    Network egress is restricted to what the check definition declares.
@@ -471,7 +596,7 @@ The tmpfs mount eliminates accidental leaks, which are the common case.
 git forge secret set AWS_ACCESS_KEY --value=...
 git forge secret set DEPLOY_TOKEN --file=token.txt
 git forge secret list
-git forge secret grant AWS_ACCESS_KEY --runner=<fingerprint>
+git forge secret grant AWS_ACCESS_KEY --runner=<contributor-id>
 ```
 
 These are API calls to the server, not ref writes.
@@ -483,7 +608,7 @@ Every secret read/write/grant event is logged to a server-maintained ref:
 
 ```text
 refs/forge/meta/audit/secrets → commit → tree
-├── 001-<ts>    # toml: action, secret_name, actor_fingerprint
+├── 001-<ts>    # toml: action, secret_name, actor_contributor_id
 ├── 002-<ts>
 ```
 
@@ -492,36 +617,6 @@ The history of who touched what is in Git and signed.
 
 
 ## Access Control
-
-### Contributors
-
-Contributors are stored in a ref:
-
-```text
-refs/forge/contributors → commit → tree
-├── <fingerprint>/
-│   ├── key.pub         # SSH or GPG public key
-│   ├── meta            # toml: name, email, added_by, timestamp
-│   └── roles           # toml: list of role names
-```
-
-Adding a contributor is a signed commit to this ref.
-The commit must be signed by someone with permission to modify contributors (governed by policy).
-
-The first commit is self-signed by the project creator.
-This bootstraps trust.
-
-### Identity (Future)
-
-Long-term, contributors reference an external identity repository rather than embedding keys directly.
-The identity repo is controlled by the user and publishes their current keys.
-The project trusts the identity repo, not individual keys.
-Key rotation happens in one place and propagates to all projects.
-
-Near-term, the key in the contributors ref is the identity.
-The fingerprint is the stable identifier.
-No registration, no accounts.
-A key pair is sufficient.
 
 ### Roles and Policy
 
@@ -584,21 +679,28 @@ modify = { require_role = "admin", require_review = true }
 
 ### External Contributors
 
-External contributors have no key in `refs/forge/contributors`.
+External contributors have no entry in `refs/forge/contributors`.
 They cannot push to the repo directly.
 
 The pre-receive hook allows anyone with a valid signature to push to a scoped inbox namespace:
 
 ```text
-refs/inbox/<fingerprint>/<branch-name>
+refs/inbox/<contributor-id-or-fingerprint>/<branch-name>
 ```
 
-The hook verifies the push is signed and that the target ref is under the pusher's own fingerprint prefix.
+The hook verifies the push is signed and that the target ref is under the pusher's own namespace.
 No role needed.
 They can only write to their own namespace.
 
 A maintainer reviews the code at that ref and decides whether to merge.
 The inbox namespace is garbage-collected after resolution.
+
+```toml
+[inbox]
+allow = "any"          # any valid signature
+# allow = "known"      # only known contributors
+# allow = "none"       # no external submissions
+```
 
 ### Ref Visibility
 
@@ -671,16 +773,80 @@ Write serialization uses the pre-receive hook, which runs atomically one push at
 The merge queue is an instance of a general queue:
 
 ```sh
-git forge queue create <name>
-git forge queue push <name> <ref>
-git forge queue pop <name>
-git forge queue list <name>
+git forge queue create <n>
+git forge queue push <n> <ref>
+git forge queue pop <n>
+git forge queue list <n>
 ```
 
 Processing hooks declare what happens when entries appear.
 The merge queue's hook rebases and tests.
 A CI queue's hook executes build actions.
 A release pipeline chains queues.
+
+
+## Sync and Transport
+
+### Architecture
+
+The daemon is the primary transport layer.
+It is not optional infrastructure — it is the expected way forge refs move between local and remote.
+The CLI and LSP are local tools that read and write refs.
+The daemon makes those changes visible to others.
+
+### Daemon
+
+The daemon is a single long-lived process per repository.
+It has two responsibilities:
+
+**Outbound:** watch local forge refs (via inotify or polling on `.git/refs/forge/`), push changes to the remote on a short debounce.
+Multiple local writes within a few seconds (e.g. five comments in rapid succession) are batched into one push.
+
+**Inbound:** fetch remote forge refs on a periodic interval or via server-sent events.
+Changes from collaborators appear locally without user action.
+
+The daemon is trivial to start.
+The editor plugin starts it.
+`git forge status` starts it if it's not running.
+It shuts down on idle.
+It is the same process as the LSP server (see Editor Integration).
+
+### Push Modes
+
+Three modes, all producing the same commits.
+The only variable is transport timing.
+
+**Daemon running (default).**
+The CLI commits locally and returns immediately.
+The daemon notices the ref change and pushes within seconds.
+The user never waits for network.
+
+**No daemon, network available (fallback).**
+`git forge sync` fetches and pushes all forge refs.
+Manual, explicit.
+The CLI should suggest starting the daemon: `tip: run git forge daemon for automatic sync`.
+
+**Offline.**
+The CLI commits locally.
+Refs accumulate.
+On reconnect, the daemon (or `git forge sync`) pushes everything.
+The server auto-merges concurrent changes (see Metadata Push and Auto-Merge).
+
+### Conflict Resolution
+
+**Entity edits (issues, reviews).**
+The daemon attempts a three-way tree merge on the entity ref.
+Because entity fields are separate blobs (title, state, body, etc.), edits to different fields by different people merge cleanly.
+
+When the merge fails (both people changed the title), the daemon uses last-write-wins: it keeps the remote version, discards the local edit, and notifies the user with the discarded content.
+The user can re-apply their change if needed.
+For entity metadata — titles, labels, state — this is appropriate.
+The notification preserves intent.
+
+**Metadata (comments, approvals, links).**
+These almost never conflict because entries have unique paths (keyed by contributor ID, OID, or timestamp).
+The server or daemon auto-merges via three-way tree merge.
+See Metadata Push and Auto-Merge.
 
 
 ## Metadata Push and Auto-Merge
@@ -704,32 +870,12 @@ This is `git merge-tree` (or the equivalent plumbing), a Git built-in.
 What conflicts in practice: two people resolving the same comment simultaneously (both write to `<comment-id>/resolved`), or two people editing the same entity's `meta` file.
 Rare, and the right answer is rejection — the slower writer retries and sees the current state.
 
-What never conflicts: adding comments (unique IDs → unique paths), adding approvals (unique fingerprints → unique paths), adding links (unique paths per direction), adding replies (sequenced by timestamp in the filename).
-That's the vast majority of metadata operations.
+What never conflicts: adding comments (unique IDs → unique paths), adding approvals (unique contributor IDs → unique paths), adding links (unique paths per direction), adding replies (sequenced by timestamp in the filename).
+That is the vast majority of metadata operations.
 
 Merge commits on metadata refs create non-linear history.
 This is fine — the history of a metadata ref is an audit log, not a development narrative.
 DAG order with timestamps is sufficient for reconstruction.
-
-### Push Timing
-
-Three modes, all producing the same commits.
-The only variable is transport timing.
-
-**Interactive (default).**
-Commit + push on every action.
-A comment, approval, or link is a collaborative signal — holding it locally defeats the purpose.
-The tooling runs `commit && push` as one operation.
-
-**Daemon.**
-Commit immediately, push on a short debounce or periodic interval.
-Useful when rapidly commenting — five comments in thirty seconds, the daemon waits for a pause, then pushes once.
-
-**Offline.**
-Commit locally, push on reconnect.
-`git forge sync` (or the daemon) pushes the metadata ref.
-The server auto-merges all accumulated commits against whatever happened while offline.
-One push, multiple operations.
 
 
 ## Reviews (Workflow)
@@ -739,7 +885,7 @@ One push, multiple operations.
 A developer pushes a branch and runs `git forge review new`.
 This:
 
-1. Generates a review ID (via the counter protocol).
+1. Scans existing review IDs, takes N+1.
 2. Creates `refs/forge/review/<review-id>` with metadata pointing at the branch's commit range relative to the target branch.
 3. Records revision 001 with the current head commit.
 
@@ -802,7 +948,7 @@ Given the commits since the last release, Forge determines the version bump, app
 ```text
 refs/tags/v1.2.0            → signed commit
 refs/forge/releases/v1.2.0  → tree
-├── meta                     # toml: version, date, author
+├── meta                     # toml: version, date
 ├── changelog                # markdown
 ├── artifacts/
 │   ├── x86_64-linux/
@@ -853,13 +999,133 @@ A missing or stale index is rebuilt from refs.
 Correctness never depends on the index.
 
 
+## Porcelain
+
+Forge has three interfaces, each serving a different interaction mode.
+
+### Editor Integration (Primary: Code Review)
+
+Code review is spatial — reading diffs, understanding context, leaving comments anchored to specific lines.
+The editor is where the code already is.
+Forge's data model (blob-anchored comments, patch-id approvals) maps directly to editor primitives.
+
+The LSP server handles:
+
+- **Comment display.**
+  Comments on blob OIDs rendered as inline diagnostics at the relevant line ranges, reanchored via `git blame`.
+- **Code actions.**
+  Reply, resolve, approve — triggered from a diagnostic.
+- **Commands.** `forge.approveReview`, `forge.createIssue`, etc., via `workspace/executeCommand`.
+- **Hover.**
+  Full comment thread, author, timestamp on hover.
+- **Status.**
+  CI results, review state in the status bar.
+
+The LSP server is the same process as the daemon.
+Both watch forge refs.
+Both react to changes.
+One process, one file watcher, one ref cache.
+
+What LSP cannot do — custom panels, diff views, tree views, notification inboxes — requires a native editor extension per editor.
+The LSP gives every editor inline comments and basic actions with minimal config.
+Editor-specific extensions add richer UI.
+
+Build order: LSP server first (works everywhere), VS Code extension second (richest API), Zed extension third.
+
+### TUI (Secondary: Triage and Navigation)
+
+A persistent, keyboard-driven, panel-based interface for scanning issues, processing notifications, and navigating reviews.
+Think `lazygit`, not `git log`.
+
+Dashboard: reviews needing attention, assigned issues, recent notifications.
+Issue list with filtering and inline preview.
+Review navigation with diff and threaded comments.
+All read from local refs — instant, no spinner.
+
+The TUI handles everything except the actual code review reading experience, which it hands off to the editor.
+
+### CLI (Tertiary: Quick Actions and Scripting)
+
+The CLI is a non-interactive tool for quick mutations and automation.
+It does one thing per invocation, composes with unix tools, and supports `--json` output on every command.
+
+The CLI never pushes, never fetches, never blocks on network.
+It writes refs and returns.
+The daemon handles all transport.
+
+```text
+git forge
+├── status                    # overview: current branch review, CI, assigned issues, notifications
+
+├── issue
+│   ├── new [title]           # opens editor if title omitted (git-style: first line = title, blank, body)
+│   ├── show <id> [--oneline]
+│   ├── list [--state {open|closed|all}] [--label ...] [--assignee ...]
+│   ├── edit <id> [--title] [--body]
+│   ├── close <id>
+│   ├── reopen <id>
+│   ├── label <id> --add <label> | --remove <label>
+│   ├── assign <id> --add <user> | --remove <user>
+│   └── comment <id> [body]   # porcelain: routes to comment system scoped to this issue
+│
+├── review
+│   ├── new [--target <branch>]
+│   ├── show [id]             # defaults to current branch's review
+│   ├── list [--state {open|merged|closed}]
+│   ├── edit [id] [--title] [--description]
+│   ├── approve [id]
+│   ├── request-changes [id]
+│   ├── merge [id]
+│   ├── close [id]
+│   └── comment [id] [body]   # porcelain: routes to comment system scoped to this review
+│
+├── comment                   # plumbing: annotate raw git objects
+│   ├── new [target] [--body] [--anchor] [--anchor-type] [--range]
+│   ├── reply <comment-oid> [--body]
+│   ├── edit <comment-oid> [--body]
+│   ├── resolve <comment-oid>
+│   ├── list [target]
+│   └── show [target] [--threads]
+│
+├── release
+│   ├── prepare
+│   ├── publish
+│   ├── list
+│   └── show <version>
+│
+├── check
+│   ├── run <name>
+│   ├── status [commit]
+│   └── list
+│
+├── contributor
+│   ├── add <id> [--name "..."] [--email "..."]
+│   ├── list
+│   └── show <id>
+│
+├── sync [remote]             # manual fallback: fetch + push all forge refs
+├── install [remote] [--global]
+└── daemon                    # start the sync/LSP daemon
+```
+
+Key design decisions:
+
+- `issue comment` and `review comment` are porcelain that routes through the comment system scoped to the entity. `comment` (top-level) is plumbing for annotating raw git objects.
+- `review` commands default to the current branch's active review when no ID is given.
+- Editor templates use Git's own convention: first line is title, blank line, body.
+  No TOML frontmatter.
+- `show` with `--oneline` replaces the separate `status` subcommand per entity.
+- `close`/`reopen`/`approve`/`merge` are direct workflow verbs, not flags on `edit`.
+- `label` and `assign` support `--add`/`--remove` for incremental changes.
+
+
 ## UI Server
 
 The UI server has direct filesystem access to the repository.
 It does not go through the Git transport protocol.
 
 **Entity creation.**
-ID assignment is a filesystem lock + increment.
+ID assignment is a filesystem lock + scan + increment.
 No CAS retry loop, no hooks.
 The UI is the fast path for entity creation.
 
@@ -879,81 +1145,6 @@ The UI maintains derived indexes in memory or on disk for fast querying:
   The UI renders the full graph — "these 3 comments and 2 issues reference this commit."
 
 Correctness never depends on the UI's indexes — they can always be rebuilt from refs.
-
-
-## CLI
-
-```text
-git forge
-├── issue
-│   ├── new [title] [--body] [--label ...] [--assignee ...]
-│   ├── edit <id> [--title] [--body] [--label ...] [--assignee ...] [--state]
-│   ├── list [--state {open|closed}]
-│   ├── status <id>
-│   └── show <id>
-│
-├── comment
-│   ├── new [target] [--body] [--anchor] [--anchor-type] [--range]
-│   ├── reply [target] <comment> [--body]
-│   ├── edit [target] <comment> [--body]
-│   ├── resolve [target] <comment> [--message]
-│   ├── list [target]
-│   └── view [target] <comment>
-│
-├── review                (not yet implemented)
-│   ├── new
-│   ├── edit
-│   ├── list
-│   ├── status
-│   └── show
-│
-├── release               (not yet implemented)
-│   ├── new
-│   ├── edit
-│   ├── list
-│   ├── status
-│   └── show
-│
-├── check                 (planned)
-│   ├── run <name>
-│   ├── status <commit>
-│   └── list
-│
-├── queue                 (planned)
-│   ├── create <name>
-│   ├── push <name> <ref>
-│   ├── pop <name>
-│   ├── list <name>
-│   └── peek <name>
-│
-├── contributor           (planned)
-│   ├── add <key-file> [--role=<role>]
-│   ├── list
-│   ├── remove <fingerprint>
-│   └── role <fingerprint> <role>
-│
-├── secret                (planned)
-│   ├── set <name> [--value=... | --file=...]
-│   ├── list
-│   ├── grant <name> --runner=<fingerprint>
-│   └── revoke <name> --runner=<fingerprint>
-│
-├── sync                  (planned)
-│   ├── github --repo=<org/project> --import
-│   └── ...
-│
-├── config                (planned)
-│   ├── show
-│   └── edit
-│
-└── install [remote] [--global]
-```
-
-`target` for `comment` subcommands is `"issue/<id>"`, `"review/<id>"`, `"commit/<sha>"`, `"blob/<sha>"`, etc.
-Defaults to `"commit/<HEAD>"` when omitted.
-
-All list commands support `--json`.
-Every subcommand maps to a ref operation (except `secret`, which is a server API call).
 
 
 ## Server
@@ -1006,3 +1197,5 @@ git forge sync github --repo=org/project --import
 
 Issues, PRs, comments, labels, and milestones are read via the platform API and written as Forge refs.
 Sync state is stored as a ref.
+
+Imported contributors who have no signing keys in the forge model are recorded as read-only entries in the contributor tree — their historical activity is preserved, but they are not onboarded until they register with a key.
