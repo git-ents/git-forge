@@ -1,0 +1,5 @@
+Code reviews must be supported for:
+- commit range;
+- commit;
+- tree;
+- blob.
