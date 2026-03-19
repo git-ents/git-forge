@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -522,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge-comment"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "criterion",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge-core"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "criterion",
  "git2",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge-issue"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "criterion",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge-release"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "criterion",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge-review"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "criterion",
