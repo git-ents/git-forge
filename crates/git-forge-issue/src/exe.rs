@@ -28,41 +28,15 @@ fn resolve_editor(repo: &git2::Repository) -> String {
     "vi".to_string()
 }
 
-/// Parse issue template with TOML frontmatter.
+/// Parse issue template: first line is the title, optional blank line, rest is body.
 /// Returns (title, body).
 fn parse_issue_template(content: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
-    // Check if content starts with +++
-    if !content.starts_with("+++\n") {
-        return Err("Template must start with +++".into());
-    }
-
-    // Find the closing +++
-    let rest = &content[4..];
-    let Some(closing_pos) = rest.find("\n+++\n") else { return Err("Could not find closing +++".into()) };
-
-    let frontmatter = &rest[..closing_pos];
-    let body_start = closing_pos + 5; // length of "\n+++\n"
-    let body = rest[body_start..].trim_end().to_string();
-
-    // Parse title from frontmatter
-    let title = frontmatter
-        .lines()
-        .find_map(|line| {
-            if let Some(title_str) = line.strip_prefix("title = ") {
-                // Remove quotes
-                if (title_str.starts_with('"') && title_str.ends_with('"'))
-                    || (title_str.starts_with('\'') && title_str.ends_with('\''))
-                {
-                    Some(title_str[1..title_str.len() - 1].to_string())
-                } else {
-                    Some(title_str.to_string())
-                }
-            } else {
-                None
-            }
-        })
-        .ok_or("Could not find title in frontmatter")?;
-
+    let mut lines = content.splitn(2, '\n');
+    let title = lines.next().unwrap_or("").trim_end().to_string();
+    let body = match lines.next() {
+        None | Some("") => String::new(),
+        Some(rest) => rest.strip_prefix('\n').unwrap_or(rest).trim_end().to_string(),
+    };
     Ok((title, body))
 }
 
@@ -75,7 +49,7 @@ fn read_issue_from_editor(
 
     let editor = resolve_editor(repo);
     let edit_path = repo.path().join("ISSUE_EDITMSG");
-    let template = "+++\ntitle = \"\"\n+++\n\n";
+    let template = "\n\n";
     {
         let mut f = fs::File::create(&edit_path)?;
         f.write_all(template.as_bytes())?;
@@ -223,11 +197,7 @@ fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or(format!("Issue #{id} not found"))?;
 
                 let edit_path = repo.path().join("ISSUE_EDITMSG");
-                let template = format!(
-                    "+++\ntitle = \"{}\"\n+++\n\n{}",
-                    issue.meta.title.replace('"', "\\\""),
-                    issue.body
-                );
+                let template = format!("{}\n\n{}", issue.meta.title, issue.body);
                 {
                     let mut f = fs::File::create(&edit_path)?;
                     f.write_all(template.as_bytes())?;
