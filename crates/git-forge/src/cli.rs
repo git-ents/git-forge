@@ -11,18 +11,6 @@ use git_forge_review::cli::ReviewCommand;
 #[command(name = "git forge", bin_name = "git forge")]
 #[command(author, version)]
 pub struct Cli {
-    /// Do not push forge refs to the remote after mutating.
-    #[arg(long = "no-push", global = true)]
-    pub no_push: bool,
-
-    /// Do not fetch forge refs before mutating. Implied by --no-push.
-    #[arg(long = "no-fetch", global = true)]
-    pub no_fetch: bool,
-
-    /// Fetch forge refs even when --no-push is set.
-    #[arg(long = "fetch", global = true, conflicts_with = "no_fetch")]
-    pub fetch: bool,
-
     /// The subcommand to run.
     #[command(subcommand)]
     pub command: Commands,

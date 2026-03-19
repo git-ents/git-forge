@@ -66,29 +66,6 @@ fn parse_issue_template(content: &str) -> Result<(String, String), Box<dyn std::
     Ok((title, body))
 }
 
-const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
-const MAX_PUSH_ATTEMPTS: usize = 3;
-
-// TODO audit: credential_callbacks uses global git config, not repo config
-fn fetch_forge_refs(repo: &git2::Repository) -> Result<(), Box<dyn std::error::Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let mut fetch_opts = git_forge_core::credentials::fetch_options()?;
-    remote.fetch(&[FORGE_REFSPEC], Some(&mut fetch_opts), None)?;
-    Ok(())
-}
-
-// TODO audit: credential_callbacks uses global git config, not repo config
-fn push_forge_ref(
-    repo: &git2::Repository,
-    ref_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let refspec = format!("{ref_name}:{ref_name}");
-    let mut push_opts = git_forge_core::credentials::push_options()?;
-    remote.push(&[&refspec], Some(&mut push_opts))?;
-    Ok(())
-}
-
 fn read_issue_from_editor(
     repo: &git2::Repository,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
@@ -115,34 +92,6 @@ fn read_issue_from_editor(
         return Err("Title cannot be empty".into());
     }
     Ok((title, body))
-}
-
-fn create_and_push_issue(
-    repo: &git2::Repository,
-    title: &str,
-    body: &str,
-    fetch: bool,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let mut prev_id = None;
-    for attempt in 0..MAX_PUSH_ATTEMPTS {
-        if fetch || attempt > 0 {
-            fetch_forge_refs(repo)?;
-        }
-        if let Some(old_id) = prev_id {
-            let old_ref = format!("{}{old_id}", crate::ISSUES_REF_PREFIX);
-            let _ = repo.find_reference(&old_ref).map(|mut r| r.delete());
-        }
-        let id = repo.create_issue(title, body, &[], &[], None)?;
-        let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-        match push_forge_ref(repo, &ref_name) {
-            Ok(()) => return Ok(id),
-            Err(e) => {
-                eprintln!("Push rejected for issue #{id}: {e}; retrying...");
-                prev_id = Some(id);
-            }
-        }
-    }
-    Err("push rejected after multiple retries; try again".into())
 }
 
 /// A wrapper type which manipulates issues for the provided repository.
@@ -226,8 +175,7 @@ impl Executor {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_inner(command: IssueCommand) -> Result<(), Box<dyn std::error::Error>> {
     let executor = Executor::from_env()?;
 
     match command {
@@ -251,11 +199,7 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
                 };
 
             let repo = executor.repo();
-            let id = if push {
-                create_and_push_issue(repo, &title, &body, fetch)?
-            } else {
-                repo.create_issue(&title, &body, &[], &[], None)?
-            };
+            let id = repo.create_issue(&title, &body, &[], &[], None)?;
             eprintln!("Created issue #{id}: {title}");
         }
 
@@ -263,16 +207,9 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
             let has_fields = title.is_some() || body.is_some();
 
             let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
 
             if has_fields {
                 executor.edit_issue(id, title.as_deref(), body.as_deref(), None)?;
-                if push {
-                    let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                    push_forge_ref(repo, &ref_name)?;
-                }
                 eprintln!("Updated issue #{id}.");
             } else {
                 use std::fs;
@@ -308,10 +245,6 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
                 }
 
                 repo.update_issue(id, Some(&title), Some(&body), None, None, None, None)?;
-                if push {
-                    let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                    push_forge_ref(repo, &ref_name)?;
-                }
                 eprintln!("Updated issue #{id}.");
             }
         }
@@ -356,36 +289,17 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
         }
 
         IssueCommand::Close { id } => {
-            let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             executor.edit_issue(id, None, None, Some(IssueState::Closed))?;
-            if push {
-                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                push_forge_ref(repo, &ref_name)?;
-            }
             eprintln!("Closed issue #{id}.");
         }
 
         IssueCommand::Reopen { id } => {
-            let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             executor.edit_issue(id, None, None, Some(IssueState::Open))?;
-            if push {
-                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                push_forge_ref(repo, &ref_name)?;
-            }
             eprintln!("Reopened issue #{id}.");
         }
 
         IssueCommand::Label { id, add, remove } => {
             let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             let issue = repo
                 .find_issue(id, None)?
                 .ok_or(format!("Issue #{id} not found"))?;
@@ -397,25 +311,14 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
             }
             labels.retain(|l| !remove.contains(l));
             repo.update_issue(id, None, None, Some(&labels), None, None, None)?;
-            if push {
-                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                push_forge_ref(repo, &ref_name)?;
-            }
             eprintln!("Updated labels on issue #{id}.");
         }
 
         IssueCommand::Assign { id, add, remove } => {
             let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             // assignees are not yet surfaced on IssueMeta; pass incremental sets directly
             let _ = remove;
             repo.update_issue(id, None, None, None, Some(&add), None, None)?;
-            if push {
-                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                push_forge_ref(repo, &ref_name)?;
-            }
             eprintln!("Updated assignees on issue #{id}.");
         }
 
@@ -423,9 +326,6 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
             use std::io::IsTerminal;
 
             let repo = executor.repo();
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             let body = if let Some(b) = body {
                 b
             } else if std::io::stdin().is_terminal() {
@@ -456,10 +356,6 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
                 .get_string("user.email")
                 .unwrap_or_else(|_| "unknown".to_string());
             repo.add_issue_comment(id, &author, &body, None)?;
-            if push {
-                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
-                push_forge_ref(repo, &ref_name)?;
-            }
             eprintln!("Added comment to issue #{id}.");
         }
     }
@@ -468,8 +364,8 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
 }
 
 /// Execute an `issue` subcommand.
-pub fn run(command: IssueCommand, push: bool, fetch: bool) {
-    if let Err(e) = run_inner(command, push, fetch) {
+pub fn run(command: IssueCommand) {
+    if let Err(e) = run_inner(command) {
         eprintln!("Error: {e}");
         process::exit(1);
     }

@@ -6,8 +6,6 @@ use git2::Repository;
 use git_forge::cli::ContributorSubcommand;
 use git_forge_core::contributor::Contributors;
 
-const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
-
 fn derive_id(name: &str) -> String {
     name.split_whitespace()
         .next()
@@ -18,29 +16,7 @@ fn derive_id(name: &str) -> String {
         .collect()
 }
 
-fn fetch_forge_refs(repo: &Repository) -> Result<(), Box<dyn std::error::Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let mut fetch_opts = git_forge_core::credentials::fetch_options()?;
-    remote.fetch(&[FORGE_REFSPEC], Some(&mut fetch_opts), None)?;
-    Ok(())
-}
-
-fn push_forge_ref(
-    repo: &Repository,
-    ref_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let refspec = format!("{ref_name}:{ref_name}");
-    let mut push_opts = git_forge_core::credentials::push_options()?;
-    remote.push(&[&refspec], Some(&mut push_opts))?;
-    Ok(())
-}
-
-fn run_inner(
-    command: ContributorSubcommand,
-    push: bool,
-    fetch: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn run_inner(command: ContributorSubcommand) -> Result<(), Box<dyn std::error::Error>> {
     let repo = Repository::open_from_env()?;
 
     match command {
@@ -58,17 +34,7 @@ fn run_inner(
                 emails
             };
             let id = id.unwrap_or_else(|| derive_id(&name));
-
-            if fetch {
-                fetch_forge_refs(&repo)?;
-            }
             repo.add_contributor(&id, &name, &emails)?;
-            if push {
-                push_forge_ref(
-                    &repo,
-                    git_forge_core::contributor::CONTRIBUTORS_REF,
-                )?;
-            }
             eprintln!("Added contributor {id} ({name} <{}>).", emails.join(", "));
         }
 
@@ -76,13 +42,7 @@ fn run_inner(
             if new_id.is_none() && name.is_none() && add_emails.is_empty() && remove_emails.is_empty() {
                 return Err("nothing to update; pass --rename-id, --name, --add-email, or --remove-email".into());
             }
-            if fetch {
-                fetch_forge_refs(&repo)?;
-            }
             repo.update_contributor(&id, new_id.as_deref(), name.as_deref(), &add_emails, &remove_emails)?;
-            if push {
-                push_forge_ref(&repo, git_forge_core::contributor::CONTRIBUTORS_REF)?;
-            }
             eprintln!("Updated contributor {id}.");
         }
 
@@ -98,13 +58,7 @@ fn run_inner(
         }
 
         ContributorSubcommand::Remove { id } => {
-            if fetch {
-                fetch_forge_refs(&repo)?;
-            }
             repo.remove_contributor(&id)?;
-            if push {
-                push_forge_ref(&repo, git_forge_core::contributor::CONTRIBUTORS_REF)?;
-            }
             eprintln!("Removed contributor {id}.");
         }
 
@@ -129,8 +83,8 @@ fn run_inner(
 }
 
 /// Execute a `contributor` subcommand.
-pub fn run(command: ContributorSubcommand, push: bool, fetch: bool) {
-    if let Err(e) = run_inner(command, push, fetch) {
+pub fn run(command: ContributorSubcommand) {
+    if let Err(e) = run_inner(command) {
         eprintln!("Error: {e}");
         process::exit(1);
     }

@@ -32,7 +32,6 @@ fn setup_repo() -> TempDir {
 fn cmd(dir: &TempDir) -> assert_cmd::Command {
     let mut c = assert_cmd::Command::cargo_bin("git-forge").unwrap();
     c.current_dir(dir.path());
-    c.arg("--no-push");
     c
 }
 

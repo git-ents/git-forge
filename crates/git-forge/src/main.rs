@@ -20,15 +20,12 @@ fn main() {
 
     let cli = Cli::parse();
 
-    let push = !cli.no_push;
-    let fetch = !cli.no_fetch && (push || cli.fetch);
-
     match cli.command {
-        Commands::Issue { command } => git_forge_issue::exe::run(command, push, fetch),
-        Commands::Review { command } => git_forge_review::exe::run(command, push, fetch),
-        Commands::Release { command } => git_forge_release::exe::run(command, push, fetch),
-        Commands::Comment { command } => git_forge_comment::exe::run(command, push, fetch),
-        Commands::Contributor { command } => contributor::run(command, push, fetch),
+        Commands::Issue { command } => git_forge_issue::exe::run(command),
+        Commands::Review { command } => git_forge_review::exe::run(command),
+        Commands::Release { command } => git_forge_release::exe::run(command),
+        Commands::Comment { command } => git_forge_comment::exe::run(command),
+        Commands::Contributor { command } => contributor::run(command),
         Commands::Install { remote, global } => {
             if let Err(e) = install::run(remote.as_deref(), global) {
                 eprintln!("Error: {e}");
@@ -36,7 +33,7 @@ fn main() {
             }
         }
         Commands::Sync { remote } => {
-            if let Err(e) = sync::run(remote.as_deref(), fetch, push) {
+            if let Err(e) = sync::run(remote.as_deref()) {
                 eprintln!("Error: {e}");
                 process::exit(1);
             }

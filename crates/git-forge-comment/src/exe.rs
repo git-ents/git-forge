@@ -48,25 +48,6 @@ fn open_editor_for_body(repo: &git2::Repository, initial: &str) -> Result<String
     Ok(body)
 }
 
-const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
-
-// TODO audit: credential_callbacks uses global git config, not repo config
-fn fetch_forge_refs(repo: &git2::Repository) -> Result<(), Box<dyn Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let mut fetch_opts = git_forge_core::credentials::fetch_options()?;
-    remote.fetch(&[FORGE_REFSPEC], Some(&mut fetch_opts), None)?;
-    Ok(())
-}
-
-// TODO audit: credential_callbacks uses global git config, not repo config
-fn push_forge_ref(repo: &git2::Repository, ref_name: &str) -> Result<(), Box<dyn Error>> {
-    let mut remote = repo.find_remote("origin")?;
-    let refspec = format!("{ref_name}:{ref_name}");
-    let mut push_opts = git_forge_core::credentials::push_options()?;
-    remote.push(&[&refspec], Some(&mut push_opts))?;
-    Ok(())
-}
-
 fn find_ref_for_comment(repo: &git2::Repository, oid: git2::Oid) -> Result<String, Box<dyn Error>> {
     let refs = repo.references_glob(&format!("{COMMENTS_REF_PREFIX}*"))?;
     for reference in refs {
@@ -478,7 +459,7 @@ pub fn build_anchor(
     }
 }
 
-fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box<dyn Error>> {
+fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
     let executor = Executor::from_env()?;
     let repo = executor.repo();
 
@@ -486,9 +467,6 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
         CommentCommand::New { target, body, anchor, anchor_type, range } => {
             let target = default_target(repo, target)?;
             let body = read_body(repo, body)?;
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             let oid = executor.new_comment(
                 &target,
                 &body,
@@ -496,23 +474,13 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
                 anchor_type.as_deref(),
                 range.as_deref(),
             )?;
-            if push {
-                let t = parse_target(&target)?;
-                push_forge_ref(repo, &t.ref_name)?;
-            }
             println!("{oid}");
             let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Reply { comment, body } => {
             let body = read_body(repo, body)?;
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
-            let (oid, ref_name) = executor.reply_to_comment(&comment, &body)?;
-            if push {
-                push_forge_ref(repo, &ref_name)?;
-            }
+            let (oid, _ref_name) = executor.reply_to_comment(&comment, &body)?;
             println!("{oid}");
             let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
@@ -528,25 +496,13 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
                     .ok_or_else(|| format!("comment {comment} not found"))?;
                 open_editor_for_body(repo, &existing.body)?
             };
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
             let oid = executor.edit_comment(&target, &comment, &new_body)?;
-            if push {
-                push_forge_ref(repo, &t.ref_name)?;
-            }
             println!("{oid}");
             let _ = std::fs::remove_file(repo.path().join("COMMENT_EDITMSG"));
         }
 
         CommentCommand::Resolve { comment, message } => {
-            if fetch {
-                fetch_forge_refs(repo)?;
-            }
-            let (oid, ref_name) = executor.resolve_comment(&comment, message)?;
-            if push {
-                push_forge_ref(repo, &ref_name)?;
-            }
+            let (oid, _ref_name) = executor.resolve_comment(&comment, message)?;
             println!("{oid}");
         }
 
@@ -573,8 +529,8 @@ fn run_inner(command: CommentCommand, push: bool, fetch: bool) -> Result<(), Box
 }
 
 /// Execute a `comment` subcommand.
-pub fn run(command: CommentCommand, push: bool, fetch: bool) {
-    if let Err(e) = run_inner(command, push, fetch) {
+pub fn run(command: CommentCommand) {
+    if let Err(e) = run_inner(command) {
         eprintln!("Error: {e}");
         process::exit(1);
     }
