@@ -1,0 +1,3 @@
+`comment new blob/<sha> --range 1-5` accepts the flag but does not persist it in the comment object. The range is silently lost.
+
+Assisted-by: Claude Code (Claude Sonnet 4.6)
