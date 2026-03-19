@@ -280,6 +280,25 @@ impl Executor {
     }
 
     pub fn show_comments(&self, target: &str, threads: bool) -> Result<(), Box<dyn Error>> {
+        fn print_thread(
+            target: &str,
+            comment: &crate::Comment,
+            children: &std::collections::HashMap<git2::Oid, Vec<&crate::Comment>>,
+            depth: usize,
+            first: &mut bool,
+        ) {
+            if !*first {
+                println!();
+            }
+            *first = false;
+            print_comment(target, comment, depth);
+            if let Some(replies) = children.get(&comment.oid) {
+                for reply in replies {
+                    print_thread(target, reply, children, depth + 1, first);
+                }
+            }
+        }
+
         let t = parse_target(target)?;
         let repo = self.repo();
         let comments = repo.comments_on(&t.ref_name)?;
@@ -325,25 +344,6 @@ impl Executor {
             }
         }
 
-        fn print_thread(
-            target: &str,
-            comment: &crate::Comment,
-            children: &std::collections::HashMap<git2::Oid, Vec<&crate::Comment>>,
-            depth: usize,
-            first: &mut bool,
-        ) {
-            if !*first {
-                println!();
-            }
-            *first = false;
-            print_comment(target, comment, depth);
-            if let Some(replies) = children.get(&comment.oid) {
-                for reply in replies {
-                    print_thread(target, reply, children, depth + 1, first);
-                }
-            }
-        }
-
         let mut first = true;
         for root in &roots {
             print_thread(target, root, &children, 0, &mut first);
@@ -356,28 +356,25 @@ impl Executor {
 ///
 /// `anchor` may be an OID or a file path (resolved against HEAD's tree).
 fn format_on(target: &str, anchor: &Anchor) -> String {
-    match target.split_once('/') {
-        Some(("issue" | "review", _)) => target.to_string(),
-        _ => {
-            let oid = anchor_oid(anchor);
-            let short = &oid.to_string()[..7];
-            match anchor {
-                Anchor::Blob { line_ranges, .. } if !line_ranges.is_empty() => {
-                    let ranges = line_ranges
-                        .iter()
-                        .map(|(s, e)| format!("{s}-{e}"))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    format!("blob/{short} lines {ranges}")
-                }
-                Anchor::Blob { .. } => format!("blob/{short}"),
-                Anchor::Commit(_) => format!("commit/{short}"),
-                Anchor::Tree(_) => format!("tree/{short}"),
-                Anchor::CommitRange { start, end } => {
-                    let s = &start.to_string()[..7];
-                    let e = &end.to_string()[..7];
-                    format!("commit/{s}..{e}")
-                }
+    if let Some(("issue" | "review", _)) = target.split_once('/') { target.to_string() } else {
+        let oid = anchor_oid(anchor);
+        let short = &oid.to_string()[..7];
+        match anchor {
+            Anchor::Blob { line_ranges, .. } if !line_ranges.is_empty() => {
+                let ranges = line_ranges
+                    .iter()
+                    .map(|(s, e)| format!("{s}-{e}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("blob/{short} lines {ranges}")
+            }
+            Anchor::Blob { .. } => format!("blob/{short}"),
+            Anchor::Commit(_) => format!("commit/{short}"),
+            Anchor::Tree(_) => format!("tree/{short}"),
+            Anchor::CommitRange { start, end } => {
+                let s = &start.to_string()[..7];
+                let e = &end.to_string()[..7];
+                format!("commit/{s}..{e}")
             }
         }
     }

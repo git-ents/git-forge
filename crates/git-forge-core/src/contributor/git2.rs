@@ -61,7 +61,7 @@ impl Contributors for Repository {
         };
         let tree = reference.peel_to_commit()?.tree()?;
         let mut contributors = Vec::new();
-        for entry in tree.iter() {
+        for entry in &tree {
             let Some(id) = entry.name() else { continue };
             if let Some(c) = contributor_from_tree(self, &tree, id)? {
                 contributors.push(c);
@@ -95,15 +95,14 @@ impl Contributors for Repository {
             Err(e) => return Err(e),
         };
 
-        let existing_tree = existing_commit.as_ref().map(|c| c.tree()).transpose()?;
+        let existing_tree = existing_commit.as_ref().map(git2::Commit::tree).transpose()?;
 
-        if let Some(ref tree) = existing_tree {
-            if tree.get_name(id).is_some() {
+        if let Some(ref tree) = existing_tree
+            && tree.get_name(id).is_some() {
                 return Err(git2::Error::from_str(&format!(
                     "contributor '{id}' already exists"
                 )));
             }
-        }
 
         let name_blob = self.blob(name.as_bytes())?;
         let emails_blob = self.blob(emails.join("\n").as_bytes())?;
@@ -159,13 +158,12 @@ impl Contributors for Repository {
 
         let dest_id = new_id.unwrap_or(id);
 
-        if let Some(n) = new_id {
-            if n != id && existing_tree.get_name(n).is_some() {
+        if let Some(n) = new_id
+            && n != id && existing_tree.get_name(n).is_some() {
                 return Err(git2::Error::from_str(&format!(
                     "contributor '{n}' already exists"
                 )));
             }
-        }
         if let Some(n) = name {
             contributor.name = n.to_string();
         }

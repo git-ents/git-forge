@@ -22,7 +22,7 @@ pub fn run(
         // git2 push does not support wildcard refspecs; enumerate refs explicitly.
         let refspecs: Vec<String> = repo
             .references_glob("refs/forge/*")?
-            .filter_map(|r| r.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|r| r.name().map(|n| format!("{n}:{n}")))
             .collect();
         if !refspecs.is_empty() {

@@ -3,6 +3,10 @@
 use git2_credentials::CredentialHandler;
 
 /// Build [`git2::FetchOptions`] wired to the user's credential helpers.
+///
+/// # Errors
+///
+/// Returns an error if the git config cannot be opened or credential callbacks cannot be created.
 pub fn fetch_options() -> Result<git2::FetchOptions<'static>, Box<dyn std::error::Error>> {
     let mut opts = git2::FetchOptions::new();
     opts.remote_callbacks(credential_callbacks()?);
@@ -10,6 +14,10 @@ pub fn fetch_options() -> Result<git2::FetchOptions<'static>, Box<dyn std::error
 }
 
 /// Build [`git2::PushOptions`] wired to the user's credential helpers.
+///
+/// # Errors
+///
+/// Returns an error if the git config cannot be opened or credential callbacks cannot be created.
 pub fn push_options() -> Result<git2::PushOptions<'static>, Box<dyn std::error::Error>> {
     let mut opts = git2::PushOptions::new();
     opts.remote_callbacks(credential_callbacks()?);
