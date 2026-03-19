@@ -13,7 +13,7 @@ pub enum ReleaseCommand {
     List,
     /// Show details of a release.
     Show {
-        /// Release version tag (e.g. `v1.2.3`).
-        version: String,
+        /// Release ID (version tag, e.g. `v1.2.3`).
+        id: String,
     },
 }
