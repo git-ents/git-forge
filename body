@@ -1,0 +1,3 @@
+`comment edit` correctly creates a new commit with a `Replaces` trailer, but `comment show -T` renders the edit as a threaded reply under the original. The display should honor the `Replaces` trailer and show the edited body in place of the original.
+
+Assisted-by: Claude Code (Claude Sonnet 4.6)
