@@ -5,6 +5,7 @@ use git_forge::cli::{Cli, Commands};
 use std::path::PathBuf;
 use std::process;
 
+mod contributor;
 mod install;
 mod sync;
 
@@ -27,6 +28,7 @@ fn main() {
         Commands::Review { command } => git_forge_review::exe::run(command, push, fetch),
         Commands::Release { command } => git_forge_release::exe::run(command, push, fetch),
         Commands::Comment { command } => git_forge_comment::exe::run(command, push, fetch),
+        Commands::Contributor { command } => contributor::run(command, push, fetch),
         Commands::Install { remote, global } => {
             if let Err(e) = install::run(remote.as_deref(), global) {
                 eprintln!("Error: {e}");

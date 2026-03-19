@@ -28,6 +28,32 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Subcommands for `git forge contributor`.
+#[derive(Subcommand, Clone)]
+pub enum ContributorSubcommand {
+    /// Add a contributor to the registry.
+    Add {
+        /// Contributor ID. Derived from the first word of name if omitted.
+        #[arg(long)]
+        id: Option<String>,
+
+        /// Display name. Defaults to git config user.name.
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Email address. Defaults to git config user.email.
+        #[arg(long)]
+        email: Option<String>,
+    },
+    /// List all contributors.
+    List,
+    /// Show details for a contributor.
+    Show {
+        /// Contributor ID to look up.
+        id: String,
+    },
+}
+
 /// Top-level subcommands.
 #[derive(Subcommand)]
 pub enum Commands {
@@ -54,6 +80,13 @@ pub enum Commands {
         /// The comment subcommand to run.
         #[command(subcommand)]
         command: CommentCommand,
+    },
+
+    /// Manage contributors.
+    Contributor {
+        /// The contributor subcommand to run.
+        #[command(subcommand)]
+        command: ContributorSubcommand,
     },
 
     /// Install forge refspecs into git config for a remote.
