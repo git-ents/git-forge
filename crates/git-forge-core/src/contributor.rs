@@ -7,9 +7,11 @@
 //! ```text
 //! refs/forge/contributors → commit → tree
 //! ├── alice/
-//! │   └── meta            # toml: name, email
+//! │   ├── name            # plain text: display name
+//! │   └── emails          # plain text: one address per line
 //! ├── bob/
-//! │   └── meta            # toml: name, email
+//! │   ├── name
+//! │   └── emails
 //! ```
 
 pub mod git2;
@@ -22,10 +24,10 @@ pub const CONTRIBUTORS_REF: &str = "refs/forge/contributors";
 pub struct Contributor {
     /// Stable short identifier (the directory name in the ref tree).
     pub id: String,
-    /// Display name from `meta`.
+    /// Display name from `name`.
     pub name: String,
-    /// Email address from `meta`.
-    pub email: String,
+    /// Email addresses from `emails`, one per line.
+    pub emails: Vec<String>,
 }
 
 /// Operations on the contributor registry under [`CONTRIBUTORS_REF`].
@@ -44,19 +46,19 @@ pub trait Contributors {
     /// Returns `git2::Error` if the underlying repository operation fails.
     fn find_contributor(&self, id: &str) -> Result<Option<Contributor>, ::git2::Error>;
 
-    /// Return the contributor whose email matches, or `None` if not found.
+    /// Return the contributor who has `email` in their `emails` list, or `None` if not found.
     ///
     /// # Errors
     ///
     /// Returns `git2::Error` if the underlying repository operation fails.
     fn find_contributor_by_email(&self, email: &str) -> Result<Option<Contributor>, ::git2::Error>;
 
-    /// Add a new contributor with the given `id`, `name`, and `email`.
+    /// Add a new contributor with the given `id`, `name`, and `emails`.
     ///
     /// Returns an error if a contributor with that ID already exists.
     ///
     /// # Errors
     ///
     /// Returns `git2::Error` if the contributor already exists or writing fails.
-    fn add_contributor(&self, id: &str, name: &str, email: &str) -> Result<(), ::git2::Error>;
+    fn add_contributor(&self, id: &str, name: &str, emails: &[String]) -> Result<(), ::git2::Error>;
 }

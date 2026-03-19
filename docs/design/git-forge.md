@@ -33,13 +33,19 @@ A contributor is a directory in a ref, keyed by a short human-chosen identifier:
 ```text
 refs/forge/contributors → commit → tree
 ├── alice/
-│   └── meta            # toml: name, email
+│   ├── name            # plain text: display name
+│   └── emails          # plain text: one address per line
 ├── bob/
-│   └── meta            # toml: name, email
+│   ├── name
+│   └── emails
 ```
 
 The directory name (`alice`, `bob`) is the contributor ID.
 Every reference to a person anywhere in the system — issue author, assignee, comment attribution, approval signer, ACL entry — uses this ID string.
+
+A contributor may have multiple email addresses (work, personal, etc.).
+The `emails` blob lists one address per line.
+Identity resolution matches any of them.
 
 Adding a contributor is a signed commit to this ref.
 The commit history is the audit trail: who added whom, when, signed by whom.
@@ -53,9 +59,9 @@ This bootstraps trust.
 
 ### Identity Resolution
 
-The CLI resolves the current user by matching `user.email` from git config against contributor entries.
+The CLI resolves the current user by matching `user.email` from git config against contributor `emails` entries.
 On write operations (create issue, add comment), the tool looks up the current user's contributor ID automatically.
-On read operations (display issue, show comment), the tool resolves contributor IDs to display names from `meta`.
+On read operations (display issue, show comment), the tool resolves contributor IDs to display names from `name`.
 
 The contributor ID is the stable reference stored everywhere.
 Display names are cosmetic, changeable, and resolved at render time.
@@ -67,7 +73,8 @@ When signing matters, a contributor gains a `keys/` subtree:
 
 ```text
 ├── alice/
-│   ├── meta
+│   ├── name
+│   ├── emails
 │   └── keys/
 │       ├── <fingerprint-1>.pub
 │       └── <fingerprint-2>.pub
@@ -84,9 +91,10 @@ When access control matters, a contributor gains a `roles` blob:
 
 ```text
 ├── alice/
-│   ├── meta
+│   ├── name
+│   ├── emails
 │   ├── keys/
-│   └── roles           # toml: ["maintainer"]
+│   └── roles           # plain text: one role per line
 ```
 
 Roles map to permissions in `policy.toml`.

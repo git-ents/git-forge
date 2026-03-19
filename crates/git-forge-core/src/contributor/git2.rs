@@ -4,20 +4,24 @@ use git2::Repository;
 
 use crate::contributor::{CONTRIBUTORS_REF, Contributor, Contributors};
 
-fn parse_meta(content: &str) -> Option<(String, String)> {
-    let mut name = None;
-    let mut email = None;
-    for line in content.lines() {
-        if let Some(val) = line.strip_prefix("name = \"") {
-            name = Some(val.trim_end_matches('"').to_string());
-        } else if let Some(val) = line.strip_prefix("email = \"") {
-            email = Some(val.trim_end_matches('"').to_string());
-        }
-    }
-    match (name, email) {
-        (Some(n), Some(e)) => Some((n, e)),
-        _ => None,
-    }
+fn blob_str<'repo>(
+    repo: &'repo Repository,
+    tree: &git2::Tree<'repo>,
+    name: &str,
+) -> Result<Option<String>, git2::Error> {
+    let Some(entry) = tree.get_name(name) else {
+        return Ok(None);
+    };
+    let obj = entry.to_object(repo)?;
+    let blob = obj
+        .as_blob()
+        .ok_or_else(|| git2::Error::from_str(&format!("'{name}' is not a blob")))?;
+    Ok(Some(
+        std::str::from_utf8(blob.content())
+            .unwrap_or("")
+            .trim_end()
+            .to_string(),
+    ))
 }
 
 fn contributor_from_tree(
@@ -32,21 +36,19 @@ fn contributor_from_tree(
     let subtree = obj
         .as_tree()
         .ok_or_else(|| git2::Error::from_str(&format!("contributor entry '{id}' is not a tree")))?;
-    let Some(meta_entry) = subtree.get_name("meta") else {
+    let Some(name) = blob_str(repo, subtree, "name")? else {
         return Ok(None);
     };
-    let meta_obj = meta_entry.to_object(repo)?;
-    let blob = meta_obj
-        .as_blob()
-        .ok_or_else(|| git2::Error::from_str("contributor meta is not a blob"))?;
-    let content = std::str::from_utf8(blob.content()).unwrap_or("");
-    let Some((name, email)) = parse_meta(content) else {
-        return Ok(None);
-    };
+    let emails = blob_str(repo, subtree, "emails")?
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
     Ok(Some(Contributor {
         id: id.to_string(),
         name,
-        email,
+        emails,
     }))
 }
 
@@ -83,10 +85,10 @@ impl Contributors for Repository {
         Ok(self
             .list_contributors()?
             .into_iter()
-            .find(|c| c.email == email))
+            .find(|c| c.emails.iter().any(|e| e == email)))
     }
 
-    fn add_contributor(&self, id: &str, name: &str, email: &str) -> Result<(), git2::Error> {
+    fn add_contributor(&self, id: &str, name: &str, emails: &[String]) -> Result<(), git2::Error> {
         let existing_commit = match self.find_reference(CONTRIBUTORS_REF) {
             Ok(r) => Some(r.peel_to_commit()?),
             Err(e) if e.code() == git2::ErrorCode::NotFound => None,
@@ -103,12 +105,13 @@ impl Contributors for Repository {
             }
         }
 
-        let meta_content = format!("name = \"{name}\"\nemail = \"{email}\"\n");
-        let meta_blob = self.blob(meta_content.as_bytes())?;
+        let name_blob = self.blob(name.as_bytes())?;
+        let emails_blob = self.blob(emails.join("\n").as_bytes())?;
 
         let contributor_tree_oid = {
             let mut tb = self.treebuilder(None)?;
-            tb.insert("meta", meta_blob, 0o100_644)?;
+            tb.insert("name", name_blob, 0o100_644)?;
+            tb.insert("emails", emails_blob, 0o100_644)?;
             tb.write()?
         };
 

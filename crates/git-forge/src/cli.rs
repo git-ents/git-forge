@@ -41,9 +41,10 @@ pub enum ContributorSubcommand {
         #[arg(long)]
         name: Option<String>,
 
-        /// Email address. Defaults to git config user.email.
-        #[arg(long)]
-        email: Option<String>,
+        /// Email address. May be repeated for multiple addresses.
+        /// Defaults to git config user.email if none provided.
+        #[arg(long = "email")]
+        emails: Vec<String>,
     },
     /// List all contributors.
     List,

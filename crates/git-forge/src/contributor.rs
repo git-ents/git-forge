@@ -44,27 +44,32 @@ fn run_inner(
     let repo = Repository::open_from_env()?;
 
     match command {
-        ContributorSubcommand::Add { id, name, email } => {
+        ContributorSubcommand::Add { id, name, emails } => {
             let cfg = repo.config()?;
             let name = name
                 .or_else(|| cfg.get_string("user.name").ok())
                 .ok_or("no name provided; set user.name in git config or pass --name")?;
-            let email = email
-                .or_else(|| cfg.get_string("user.email").ok())
-                .ok_or("no email provided; set user.email in git config or pass --email")?;
+            let emails = if emails.is_empty() {
+                cfg.get_string("user.email")
+                    .ok()
+                    .map(|e| vec![e])
+                    .ok_or("no email provided; set user.email in git config or pass --email")?
+            } else {
+                emails
+            };
             let id = id.unwrap_or_else(|| derive_id(&name));
 
             if fetch {
                 fetch_forge_refs(&repo)?;
             }
-            repo.add_contributor(&id, &name, &email)?;
+            repo.add_contributor(&id, &name, &emails)?;
             if push {
                 push_forge_ref(
                     &repo,
                     git_forge_core::contributor::CONTRIBUTORS_REF,
                 )?;
             }
-            eprintln!("Added contributor {id} ({name} <{email}>).");
+            eprintln!("Added contributor {id} ({name} <{}>).", emails.join(", "));
         }
 
         ContributorSubcommand::List => {
@@ -73,7 +78,7 @@ fn run_inner(
                 println!("No contributors registered.");
             } else {
                 for c in &contributors {
-                    println!("{}\t{} <{}>", c.id, c.name, c.email);
+                    println!("{}\t{} <{}>", c.id, c.name, c.emails.join(", "));
                 }
             }
         }
@@ -85,9 +90,11 @@ fn run_inner(
                     process::exit(1);
                 }
                 Some(c) => {
-                    println!("ID:    {}", c.id);
-                    println!("Name:  {}", c.name);
-                    println!("Email: {}", c.email);
+                    println!("ID:     {}", c.id);
+                    println!("Name:   {}", c.name);
+                    for email in &c.emails {
+                        println!("Email:  {email}");
+                    }
                 }
             }
         }
