@@ -48,16 +48,47 @@ fn open_editor_for_body(repo: &git2::Repository, initial: &str) -> Result<String
     Ok(body)
 }
 
-fn find_ref_for_comment(repo: &git2::Repository, oid: git2::Oid) -> Result<String, Box<dyn Error>> {
+/// Resolve an abbreviated or full comment OID prefix to `(full_oid, ref_name)` by
+/// scanning all forge refs. Errors on zero or ambiguous matches.
+fn find_ref_for_comment(
+    repo: &git2::Repository,
+    prefix: &str,
+) -> Result<(git2::Oid, String), Box<dyn Error>> {
     let refs = repo.references_glob(&format!("{COMMENTS_REF_PREFIX}*"))?;
+    let mut found: Vec<(git2::Oid, String)> = Vec::new();
     for reference in refs {
         let reference = reference?;
         let ref_name = reference.name().ok_or("non-UTF-8 ref name")?.to_string();
-        if repo.find_comment(&ref_name, oid)?.is_some() {
-            return Ok(ref_name);
+        for comment in repo.comments_on(&ref_name)? {
+            if comment.oid.to_string().starts_with(prefix) {
+                found.push((comment.oid, ref_name.clone()));
+            }
         }
     }
-    Err(format!("comment {oid} not found in any forge ref").into())
+    match found.len() {
+        0 => Err(format!("comment {prefix} not found in any forge ref").into()),
+        1 => Ok(found.remove(0)),
+        n => Err(format!("ambiguous comment OID {prefix}: {n} matches").into()),
+    }
+}
+
+/// Resolve an abbreviated or full comment OID prefix within a single known ref.
+fn resolve_comment_in_ref(
+    repo: &git2::Repository,
+    ref_name: &str,
+    prefix: &str,
+) -> Result<git2::Oid, Box<dyn Error>> {
+    let mut found: Vec<git2::Oid> = repo
+        .comments_on(ref_name)?
+        .into_iter()
+        .filter(|c| c.oid.to_string().starts_with(prefix))
+        .map(|c| c.oid)
+        .collect();
+    match found.len() {
+        0 => Err(format!("comment {prefix} not found").into()),
+        1 => Ok(found.remove(0)),
+        n => Err(format!("ambiguous comment OID {prefix}: {n} matches").into()),
+    }
 }
 
 fn default_target(repo: &git2::Repository, target: Option<String>) -> Result<String, Box<dyn Error>> {
@@ -163,13 +194,11 @@ impl Executor {
 
     pub fn reply_to_comment(
         &self,
-        comment_oid_str: &str,
+        comment_prefix: &str,
         body: &str,
     ) -> Result<(git2::Oid, String), Box<dyn Error>> {
         let repo = self.repo();
-        let parent_oid = git2::Oid::from_str(comment_oid_str)
-            .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
-        let ref_name = find_ref_for_comment(repo, parent_oid)?;
+        let (parent_oid, ref_name) = find_ref_for_comment(repo, comment_prefix)?;
         let oid = repo.reply_to_comment(&ref_name, parent_oid, body)?;
         Ok((oid, ref_name))
     }
@@ -177,26 +206,23 @@ impl Executor {
     pub fn edit_comment(
         &self,
         target: &str,
-        comment_oid_str: &str,
+        comment_prefix: &str,
         new_body: &str,
     ) -> Result<git2::Oid, Box<dyn Error>> {
         let t = parse_target(target)?;
         let repo = self.repo();
-        let comment_oid = git2::Oid::from_str(comment_oid_str)
-            .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
+        let comment_oid = resolve_comment_in_ref(repo, &t.ref_name, comment_prefix)?;
         let oid = repo.edit_comment(&t.ref_name, comment_oid, new_body)?;
         Ok(oid)
     }
 
     pub fn resolve_comment(
         &self,
-        comment_oid_str: &str,
+        comment_prefix: &str,
         _message: Option<String>,
     ) -> Result<(git2::Oid, String), Box<dyn Error>> {
         let repo = self.repo();
-        let comment_oid = git2::Oid::from_str(comment_oid_str)
-            .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
-        let ref_name = find_ref_for_comment(repo, comment_oid)?;
+        let (comment_oid, ref_name) = find_ref_for_comment(repo, comment_prefix)?;
         let oid = repo.resolve_comment(&ref_name, comment_oid)?;
         Ok((oid, ref_name))
     }
@@ -247,15 +273,13 @@ impl Executor {
         Ok(())
     }
 
-    pub fn show_comment(&self, target: &str, comment_oid_str: &str) -> Result<(), Box<dyn Error>> {
+    pub fn show_comment(&self, target: &str, comment_prefix: &str) -> Result<(), Box<dyn Error>> {
         let t = parse_target(target)?;
-        let ref_name = t.ref_name;
         let repo = self.repo();
-        let oid = git2::Oid::from_str(comment_oid_str)
-            .map_err(|e| format!("invalid comment OID {comment_oid_str:?}: {e}"))?;
+        let oid = resolve_comment_in_ref(repo, &t.ref_name, comment_prefix)?;
         let comment = repo
-            .find_comment(&ref_name, oid)?
-            .ok_or_else(|| format!("comment {comment_oid_str} not found"))?;
+            .find_comment(&t.ref_name, oid)?
+            .ok_or_else(|| format!("comment {comment_prefix} not found"))?;
         print_comment(target, &comment, 0);
         Ok(())
     }
@@ -488,9 +512,8 @@ fn run_inner(command: CommentCommand) -> Result<(), Box<dyn Error>> {
         CommentCommand::Edit { target, comment, body } => {
             let target = default_target(repo, target)?;
             let t = parse_target(&target)?;
-            let comment_oid = git2::Oid::from_str(&comment)
-                .map_err(|e| format!("invalid comment OID {comment:?}: {e}"))?;
             let new_body = if let Some(b) = body { b } else {
+                let comment_oid = resolve_comment_in_ref(repo, &t.ref_name, &comment)?;
                 let existing = repo
                     .find_comment(&t.ref_name, comment_oid)?
                     .ok_or_else(|| format!("comment {comment} not found"))?;
