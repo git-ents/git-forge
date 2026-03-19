@@ -48,7 +48,7 @@ fn open_editor_for_body(repo: &git2::Repository, initial: &str) -> Result<String
     Ok(body)
 }
 
-const FORGE_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
+const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 
 // TODO audit: credential_callbacks uses global git config, not repo config
 fn fetch_forge_refs(repo: &git2::Repository) -> Result<(), Box<dyn Error>> {

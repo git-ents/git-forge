@@ -6,7 +6,7 @@ use git2::Repository;
 use git_forge::cli::ContributorSubcommand;
 use git_forge_core::contributor::Contributors;
 
-const FORGE_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
+const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 
 fn derive_id(name: &str) -> String {
     name.split_whitespace()

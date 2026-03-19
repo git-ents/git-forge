@@ -66,7 +66,7 @@ fn parse_issue_template(content: &str) -> Result<(String, String), Box<dyn std::
     Ok((title, body))
 }
 
-const FORGE_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
+const FORGE_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 const MAX_PUSH_ATTEMPTS: usize = 3;
 
 // TODO audit: credential_callbacks uses global git config, not repo config

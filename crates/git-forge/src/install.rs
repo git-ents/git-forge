@@ -1,6 +1,6 @@
 //! Implementation of `git forge install`.
 
-const FORGE_FETCH_REFSPEC: &str = "+refs/forge/*:refs/forge/*";
+const FORGE_FETCH_REFSPEC: &str = "refs/forge/*:refs/forge/*";
 
 pub fn run(remote: Option<&str>, global: bool) -> Result<(), Box<dyn std::error::Error>> {
     let remote_name = resolve_remote(remote, global)?;
