@@ -1,0 +1,3 @@
+`comment resolve <oid> -m "text"` creates a resolve marker with an empty body. The message passed via `-m` is silently dropped.
+
+Assisted-by: Claude Code (Claude Sonnet 4.6)
