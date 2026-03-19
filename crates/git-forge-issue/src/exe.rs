@@ -121,8 +121,6 @@ fn create_and_push_issue(
     repo: &git2::Repository,
     title: &str,
     body: &str,
-    labels: &[String],
-    assignees: &[String],
     fetch: bool,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut prev_id = None;
@@ -134,7 +132,7 @@ fn create_and_push_issue(
             let old_ref = format!("{}{old_id}", crate::ISSUES_REF_PREFIX);
             let _ = repo.find_reference(&old_ref).map(|mut r| r.delete());
         }
-        let id = repo.create_issue(title, body, labels, assignees, None)?;
+        let id = repo.create_issue(title, body, &[], &[], None)?;
         let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
         match push_forge_ref(repo, &ref_name) {
             Ok(()) => return Ok(id),
@@ -147,28 +145,10 @@ fn create_and_push_issue(
     Err("push rejected after multiple retries; try again".into())
 }
 
-#[allow(dead_code)]
-fn open_repo() -> Repository {
-    match Repository::open_from_env() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            process::exit(1);
-        }
-    }
-}
-
 /// A wrapper type which manipulates issues for the provided repository.
 struct Executor(git2::Repository);
 
 impl Executor {
-    /// Constructs an `Executor` from a path to a repository.
-    #[allow(dead_code)]
-    pub fn from_path(path: &str) -> Result<Self, git2::Error> {
-        let repo = Repository::open(path)?;
-        Ok(Self(repo))
-    }
-
     /// Constructs an `Executor` from [`Repository::open_from_env()`].
     pub fn from_env() -> Result<Self, git2::Error> {
         let repo = Repository::open_from_env()?;
@@ -180,34 +160,16 @@ impl Executor {
         &self.0
     }
 
-    /// Lists issues for the repository, optionally filtered by state.
-    #[allow(dead_code)]
-    pub fn list_issues(&self, state: Option<IssueState>) -> Result<(), Box<dyn std::error::Error>> {
-        let repo = self.repo();
-
-        let issues = match state {
-            Some(state) => repo.list_issues_by_state(state, None)?,
-            None => repo.list_issues(None)?,
-        };
-
-        for issue in issues {
-            println!("#{}\t{}", issue.id, issue.meta.title);
-        }
-        Ok(())
-    }
-
-    /// Updates an existing issue.
+    /// Updates an existing issue's text fields.
     pub fn edit_issue(
         &self,
         id: u64,
         title: Option<&str>,
         body: Option<&str>,
-        labels: Option<&[String]>,
-        assignees: Option<&[String]>,
         state: Option<IssueState>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let repo = self.repo();
-        repo.update_issue(id, title, body, labels, assignees, state, None)?;
+        repo.update_issue(id, title, body, None, None, state, None)?;
         Ok(())
     }
 
@@ -243,8 +205,8 @@ impl Executor {
         Ok(())
     }
 
-    /// Displays the status of an issue.
-    pub fn status_issue(&self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
+    /// Displays a one-line summary of an issue.
+    pub fn show_issue_oneline(&self, id: u64) -> Result<(), Box<dyn std::error::Error>> {
         let repo = self.repo();
         match repo.find_issue(id, None)? {
             None => {
@@ -269,13 +231,12 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
     let executor = Executor::from_env()?;
 
     match command {
-        IssueCommand::New { title, body, label, assignee } => {
+        IssueCommand::New { title, body } => {
             use std::io::IsTerminal;
 
-            let (title, body, labels, assignees) =
+            let (title, body) =
                 if title.is_none() && std::io::stdin().is_terminal() {
-                    let (t, b) = read_issue_from_editor(executor.repo())?;
-                    (t, b, vec![], vec![])
+                    read_issue_from_editor(executor.repo())?
                 } else {
                     let t = title.ok_or("Title is required")?;
                     let b = if let Some(b) = body {
@@ -286,58 +247,28 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
                         std::io::stdin().read_to_string(&mut buf)?;
                         buf
                     };
-                    (t, b, label, assignee)
+                    (t, b)
                 };
 
             let repo = executor.repo();
             let id = if push {
-                create_and_push_issue(repo, &title, &body, &labels, &assignees, fetch)?
+                create_and_push_issue(repo, &title, &body, fetch)?
             } else {
-                repo.create_issue(&title, &body, &labels, &assignees, None)?
+                repo.create_issue(&title, &body, &[], &[], None)?
             };
             eprintln!("Created issue #{id}: {title}");
         }
 
-        IssueCommand::Edit {
-            id,
-            title,
-            body,
-            label,
-            assignee,
-            state,
-        } => {
-            // Check if any specific fields are provided
-            let has_fields = title.is_some()
-                || body.is_some()
-                || !label.is_empty()
-                || !assignee.is_empty()
-                || state.is_some();
+        IssueCommand::Edit { id, title, body } => {
+            let has_fields = title.is_some() || body.is_some();
 
             let repo = executor.repo();
             if fetch {
                 fetch_forge_refs(repo)?;
             }
 
-            // Default to interactive when no fields provided
             if has_fields {
-                let labels = if label.is_empty() { None } else { Some(label) };
-                let assignees = if assignee.is_empty() {
-                    None
-                } else {
-                    Some(assignee)
-                };
-                let issue_state = state.map(|s| match s {
-                    StateArg::Open => IssueState::Open,
-                    StateArg::Closed => IssueState::Closed,
-                });
-                executor.edit_issue(
-                    id,
-                    title.as_deref(),
-                    body.as_deref(),
-                    labels.as_deref(),
-                    assignees.as_deref(),
-                    issue_state,
-                )?;
+                executor.edit_issue(id, title.as_deref(), body.as_deref(), None)?;
                 if push {
                     let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
                     push_forge_ref(repo, &ref_name)?;
@@ -350,7 +281,6 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
 
                 let editor = resolve_editor(repo);
 
-                // Fetch the current issue
                 let issue = repo
                     .find_issue(id, None)?
                     .ok_or(format!("Issue #{id} not found"))?;
@@ -366,17 +296,13 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
                     f.write_all(template.as_bytes())?;
                 }
 
-                // Open editor
                 let status = Command::new(&editor).arg(&edit_path).status()?;
-
                 if !status.success() {
                     return Err("Editor exited with error".into());
                 }
 
-                // Read and parse the file
                 let content = fs::read_to_string(&edit_path)?;
                 let (title, body) = parse_issue_template(&content)?;
-
                 if title.trim().is_empty() {
                     return Err("Title cannot be empty".into());
                 }
@@ -390,15 +316,25 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
             }
         }
 
-        IssueCommand::List { state } => {
-            let issue_state = match state {
-                StateArg::Open => IssueState::Open,
-                StateArg::Closed => IssueState::Closed,
-            };
+        IssueCommand::List { state, labels, assignees } => {
             let repo = executor.repo();
-            let issues = repo.list_issues_by_state(issue_state, None)?;
+            let issues = match state {
+                StateArg::Open => repo.list_issues_by_state(IssueState::Open, None)?,
+                StateArg::Closed => repo.list_issues_by_state(IssueState::Closed, None)?,
+                StateArg::All => repo.list_issues(None)?,
+            };
+            let issues: Vec<_> = issues
+                .into_iter()
+                .filter(|i| labels.is_empty() || labels.iter().any(|l| i.meta.labels.contains(l)))
+                .filter(|_| assignees.is_empty()) // assignees not yet surfaced on IssueMeta
+                .collect();
+            let empty_msg = match state {
+                StateArg::Open => "No open issues.",
+                StateArg::Closed => "No closed issues.",
+                StateArg::All => "No issues.",
+            };
             if issues.is_empty() {
-                println!("No {} issues.", issue_state.as_str());
+                println!("{empty_msg}");
             } else {
                 for issue in &issues {
                     println!(
@@ -411,12 +347,120 @@ fn run_inner(command: IssueCommand, push: bool, fetch: bool) -> Result<(), Box<d
             }
         }
 
-        IssueCommand::Status { id } => {
-            executor.status_issue(id)?;
+        IssueCommand::Show { id, oneline } => {
+            if oneline {
+                executor.show_issue_oneline(id)?;
+            } else {
+                executor.show_issue(id)?;
+            }
         }
 
-        IssueCommand::Show { id } => {
-            executor.show_issue(id)?;
+        IssueCommand::Close { id } => {
+            let repo = executor.repo();
+            if fetch {
+                fetch_forge_refs(repo)?;
+            }
+            executor.edit_issue(id, None, None, Some(IssueState::Closed))?;
+            if push {
+                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
+                push_forge_ref(repo, &ref_name)?;
+            }
+            eprintln!("Closed issue #{id}.");
+        }
+
+        IssueCommand::Reopen { id } => {
+            let repo = executor.repo();
+            if fetch {
+                fetch_forge_refs(repo)?;
+            }
+            executor.edit_issue(id, None, None, Some(IssueState::Open))?;
+            if push {
+                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
+                push_forge_ref(repo, &ref_name)?;
+            }
+            eprintln!("Reopened issue #{id}.");
+        }
+
+        IssueCommand::Label { id, add, remove } => {
+            let repo = executor.repo();
+            if fetch {
+                fetch_forge_refs(repo)?;
+            }
+            let issue = repo
+                .find_issue(id, None)?
+                .ok_or(format!("Issue #{id} not found"))?;
+            let mut labels = issue.meta.labels.clone();
+            for l in &add {
+                if !labels.contains(l) {
+                    labels.push(l.clone());
+                }
+            }
+            labels.retain(|l| !remove.contains(l));
+            repo.update_issue(id, None, None, Some(&labels), None, None, None)?;
+            if push {
+                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
+                push_forge_ref(repo, &ref_name)?;
+            }
+            eprintln!("Updated labels on issue #{id}.");
+        }
+
+        IssueCommand::Assign { id, add, remove } => {
+            let repo = executor.repo();
+            if fetch {
+                fetch_forge_refs(repo)?;
+            }
+            // assignees are not yet surfaced on IssueMeta; pass incremental sets directly
+            let _ = remove;
+            repo.update_issue(id, None, None, None, Some(&add), None, None)?;
+            if push {
+                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
+                push_forge_ref(repo, &ref_name)?;
+            }
+            eprintln!("Updated assignees on issue #{id}.");
+        }
+
+        IssueCommand::Comment { id, body } => {
+            use std::io::IsTerminal;
+
+            let repo = executor.repo();
+            if fetch {
+                fetch_forge_refs(repo)?;
+            }
+            let body = if let Some(b) = body {
+                b
+            } else if std::io::stdin().is_terminal() {
+                use std::fs;
+                use std::io::Write;
+                use std::process::Command;
+
+                let editor = resolve_editor(repo);
+                let edit_path = repo.path().join("ISSUE_EDITMSG");
+                {
+                    let mut f = fs::File::create(&edit_path)?;
+                    f.write_all(b"")?;
+                }
+                let status = Command::new(&editor).arg(&edit_path).status()?;
+                if !status.success() {
+                    return Err("Editor exited with error".into());
+                }
+                fs::read_to_string(&edit_path)?
+            } else {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                buf
+            };
+
+            let cfg = repo.config()?;
+            let author = cfg
+                .get_string("user.email")
+                .unwrap_or_else(|_| "unknown".to_string());
+            repo.add_issue_comment(id, &author, &body, None)?;
+            if push {
+                let ref_name = format!("{}{id}", crate::ISSUES_REF_PREFIX);
+                push_forge_ref(repo, &ref_name)?;
+            }
+            eprintln!("Added comment to issue #{id}.");
         }
     }
 

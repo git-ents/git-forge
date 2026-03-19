@@ -67,20 +67,15 @@ fn new_issue_sequential_ids() {
 fn new_issue_with_labels() {
     let dir = setup_repo();
     cmd(&dir)
-        .args([
-            "issue",
-            "new",
-            "Labeled",
-            "--body",
-            "body",
-            "--label",
-            "bug",
-            "--label",
-            "help wanted",
-        ])
+        .args(["issue", "new", "Labeled", "--body", "body"])
         .assert()
         .success()
         .stderr(predicates::str::contains("Created issue #1"));
+    cmd(&dir)
+        .args(["issue", "label", "1", "--add", "bug", "--add", "help wanted"])
+        .assert()
+        .success()
+        .stderr(predicates::str::contains("Updated labels on issue #1"));
 }
 
 // --- issue list ---
@@ -92,7 +87,7 @@ fn list_empty_repo_prints_no_issues() {
         .args(["issue", "list"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("No open issues"));
+        .stdout(predicates::str::contains("No open issues."));
 }
 
 #[test]
@@ -123,7 +118,7 @@ fn list_closed_empty_when_none_closed() {
         .args(["issue", "list", "--state", "closed"])
         .assert()
         .success()
-        .stdout(predicates::str::contains("No closed issues"));
+        .stdout(predicates::str::contains("No closed issues."));
 }
 
 #[test]
@@ -134,7 +129,7 @@ fn list_closed_shows_after_edit() {
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "edit", "1", "--state", "closed"])
+        .args(["issue", "close", "1"])
         .assert()
         .success();
     let out = cmd(&dir)
@@ -145,7 +140,7 @@ fn list_closed_shows_after_edit() {
     assert!(stdout.contains("Close me"));
 }
 
-// --- issue status ---
+// --- issue show --oneline ---
 
 #[test]
 fn status_shows_id_and_title() {
@@ -155,7 +150,7 @@ fn status_shows_id_and_title() {
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "status", "1"])
+        .args(["issue", "show", "--oneline", "1"])
         .assert()
         .success()
         .stdout(predicates::str::contains("#1"))
@@ -166,7 +161,7 @@ fn status_shows_id_and_title() {
 fn status_missing_issue_exits_nonzero() {
     let dir = setup_repo();
     cmd(&dir)
-        .args(["issue", "status", "99"])
+        .args(["issue", "show", "--oneline", "99"])
         .assert()
         .failure()
         .stderr(predicates::str::contains("not found"));
@@ -228,11 +223,11 @@ fn edit_state_to_closed() {
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "edit", "1", "--state", "closed"])
+        .args(["issue", "close", "1"])
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "status", "1"])
+        .args(["issue", "show", "--oneline", "1"])
         .assert()
         .success()
         .stdout(predicates::str::contains("closed"));
@@ -246,15 +241,15 @@ fn edit_state_reopen() {
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "edit", "1", "--state", "closed"])
+        .args(["issue", "close", "1"])
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "edit", "1", "--state", "open"])
+        .args(["issue", "reopen", "1"])
         .assert()
         .success();
     cmd(&dir)
-        .args(["issue", "status", "1"])
+        .args(["issue", "show", "--oneline", "1"])
         .assert()
         .success()
         .stdout(predicates::str::contains("open"));

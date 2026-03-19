@@ -5,10 +5,9 @@ use crate::cli::ReleaseCommand;
 /// Execute a `release` subcommand.
 pub fn run(command: ReleaseCommand, _push: bool, _fetch: bool) {
     match command {
-        ReleaseCommand::New => todo!(),
-        ReleaseCommand::Edit => todo!(),
+        ReleaseCommand::Prepare => todo!(),
+        ReleaseCommand::Publish => todo!(),
         ReleaseCommand::List => todo!(),
-        ReleaseCommand::Status => todo!(),
-        ReleaseCommand::Show => todo!(),
+        ReleaseCommand::Show { .. } => todo!(),
     }
 }

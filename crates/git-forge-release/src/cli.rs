@@ -3,16 +3,17 @@
 use clap::Subcommand;
 
 /// Subcommands for `git forge release`.
-#[derive(Subcommand, Clone, Copy)]
+#[derive(Subcommand, Clone)]
 pub enum ReleaseCommand {
-    /// Create a new release.
-    New,
-    /// Edit an existing release.
-    Edit,
+    /// Prepare a new release (stage changelog, bump version, etc.).
+    Prepare,
+    /// Publish a prepared release.
+    Publish,
     /// List releases.
     List,
-    /// Show the status of a release.
-    Status,
     /// Show details of a release.
-    Show,
+    Show {
+        /// Release version tag (e.g. `v1.2.3`).
+        version: String,
+    },
 }

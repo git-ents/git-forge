@@ -13,14 +13,31 @@ pub enum IssueCommand {
         /// Issue body (markdown). Reads from stdin if omitted in a non-interactive shell.
         #[arg(short, long)]
         body: Option<String>,
+    },
 
-        /// Labels to apply.
-        #[arg(short, long)]
-        label: Vec<String>,
+    /// Show details of an issue.
+    Show {
+        /// Issue ID.
+        id: u64,
 
-        /// Assignees (fingerprints or names).
-        #[arg(short, long)]
-        assignee: Vec<String>,
+        /// One-line summary.
+        #[arg(long)]
+        oneline: bool,
+    },
+
+    /// List issues.
+    List {
+        /// Filter by state.
+        #[arg(long, value_enum, default_value_t = StateArg::Open)]
+        state: StateArg,
+
+        /// Filter by label (repeatable).
+        #[arg(long = "label")]
+        labels: Vec<String>,
+
+        /// Filter by assignee (repeatable).
+        #[arg(long = "assignee")]
+        assignees: Vec<String>,
     },
 
     /// Edit an existing issue.
@@ -35,37 +52,55 @@ pub enum IssueCommand {
         /// New body.
         #[arg(short, long)]
         body: Option<String>,
-
-        /// Replace labels with this set.
-        #[arg(short, long)]
-        label: Vec<String>,
-
-        /// Replace assignees with this set.
-        #[arg(short, long)]
-        assignee: Vec<String>,
-
-        /// Set state to open or closed.
-        #[arg(long, value_enum)]
-        state: Option<StateArg>,
     },
 
-    /// List issues.
-    List {
-        /// Filter by state.
-        #[arg(long, value_enum, default_value_t = StateArg::Open)]
-        state: StateArg,
-    },
-
-    /// Show the status of an issue.
-    Status {
+    /// Close an issue.
+    Close {
         /// Issue ID.
         id: u64,
     },
 
-    /// Show details of an issue.
-    Show {
+    /// Reopen a closed issue.
+    Reopen {
         /// Issue ID.
         id: u64,
+    },
+
+    /// Add or remove labels on an issue.
+    Label {
+        /// Issue ID.
+        id: u64,
+
+        /// Label to add (repeatable).
+        #[arg(long = "add")]
+        add: Vec<String>,
+
+        /// Label to remove (repeatable).
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+    },
+
+    /// Add or remove assignees on an issue.
+    Assign {
+        /// Issue ID.
+        id: u64,
+
+        /// Assignee to add (repeatable).
+        #[arg(long = "add")]
+        add: Vec<String>,
+
+        /// Assignee to remove (repeatable).
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+    },
+
+    /// Add a comment to an issue.
+    Comment {
+        /// Issue ID.
+        id: u64,
+
+        /// Comment body (markdown). Opens an editor when omitted in an interactive shell.
+        body: Option<String>,
     },
 }
 
@@ -76,4 +111,6 @@ pub enum StateArg {
     Open,
     /// The issue has been resolved or won't be fixed.
     Closed,
+    /// All issues regardless of state.
+    All,
 }
