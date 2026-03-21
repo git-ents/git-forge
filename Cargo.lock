@@ -433,6 +433,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "git2-odb-bench"
+version = "0.0.0"
+dependencies = [
+ "git2",
+ "rand",
+ "tempfile",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
