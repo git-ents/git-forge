@@ -56,7 +56,7 @@ It is a distinct concern.
 3. forge            — schema, workflows, hooks, UX
 ```
 
-There is no `git forge` CLI.
+There is no `forge` CLI.
 There never needed to be.
 `git-metadata` is the Git extension.
 `forge` is a consumer of it.

@@ -158,7 +158,7 @@ SUGGESTION=$(git cat-file -p <comment-tree-sha> | awk '/suggestion/{print $3}')
 git cat-file -p $SUGGESTION  # the replacement code
 ```
 
-`git forge apply <comment-sha>` extracts the suggestion blob, reads the `Anchor` and `Anchor-Range` trailers, and patches the file.
+`forge apply <comment-sha>` extracts the suggestion blob, reads the `Anchor` and `Anchor-Range` trailers, and patches the file.
 This is GitHub's "suggested changes" feature, but in the object store.
 
 ### Attachments
@@ -320,7 +320,7 @@ Watch ref tips.
 When a ref changes after fetch, walk from the new tip until hitting a known SHA.
 Index only the new commits.
 
-### `git forge blame` integration
+### `forge blame` integration
 
 1. Run `git blame -C <file>` — get originating commit per line
 2. Resolve `<commit>:<path>` to blob SHA

@@ -7,7 +7,7 @@ license.workspace = true
 description = "Local-first infrastructure for Git forges."
 
 [[bin]]
-name = "git-forge"
+name = "forge"
 path = "src/main.rs"
 
 [dependencies]

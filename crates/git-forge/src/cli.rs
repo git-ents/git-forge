@@ -1,4 +1,4 @@
-//! The CLI definitions for the top-level `git forge` command.
+//! The CLI definitions for the top-level `forge` command.
 
 use clap::{Parser, Subcommand};
 use git_forge_comment::cli::CommentCommand;
@@ -8,7 +8,7 @@ use git_forge_review::cli::ReviewCommand;
 
 /// Local-first infrastructure for Git forges.
 #[derive(Parser)]
-#[command(name = "git forge", bin_name = "git forge")]
+#[command(name = "forge", bin_name = "forge")]
 #[command(author, version)]
 pub struct Cli {
     /// The subcommand to run.

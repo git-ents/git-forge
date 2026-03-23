@@ -52,7 +52,7 @@ The commit history is the audit trail: who added whom, when, signed by whom.
 
 ### Bootstrapping
 
-The first contributor is seeded automatically on `git forge install` or on first entity creation.
+The first contributor is seeded automatically on `forge install` or on first entity creation.
 The tool reads `user.name` and `user.email` from git config, prompts for an ID (or derives one from the name), and writes the first contributor entry.
 The first commit is self-signed by the project creator.
 This bootstraps trust.
@@ -147,7 +147,7 @@ refs/forge/staging/<random-uuid> → commit → tree
 ```
 
 The user sees `Created issue (pending — number assigned on sync)`.
-When connectivity returns, the daemon or `git forge sync` allocates the real number and notifies: `Staged issue assigned #43`.
+When connectivity returns, the daemon or `forge sync` allocates the real number and notifies: `Staged issue assigned #43`.
 
 **Server hooks (smart server).**
 The client pushes to an inbox ref.
@@ -527,7 +527,7 @@ This is correct — the rebase could introduce failures.
 
 ### Local Execution
 
-`git forge check run build` executes locally using the same definition.
+`forge check run build` executes locally using the same definition.
 Same inputs, same container image, reproducible.
 The only difference is who signs the result.
 Policy can require runner-signed results for merge but allow local runs for feedback.
@@ -601,10 +601,10 @@ The tmpfs mount eliminates accidental leaks, which are the common case.
 ### Management
 
 ```sh
-git forge secret set AWS_ACCESS_KEY --value=...
-git forge secret set DEPLOY_TOKEN --file=token.txt
-git forge secret list
-git forge secret grant AWS_ACCESS_KEY --runner=<contributor-id>
+forge secret set AWS_ACCESS_KEY --value=...
+forge secret set DEPLOY_TOKEN --file=token.txt
+forge secret list
+forge secret grant AWS_ACCESS_KEY --runner=<contributor-id>
 ```
 
 These are API calls to the server, not ref writes.
@@ -781,10 +781,10 @@ Write serialization uses the pre-receive hook, which runs atomically one push at
 The merge queue is an instance of a general queue:
 
 ```sh
-git forge queue create <n>
-git forge queue push <n> <ref>
-git forge queue pop <n>
-git forge queue list <n>
+forge queue create <n>
+forge queue push <n> <ref>
+forge queue pop <n>
+forge queue list <n>
 ```
 
 Processing hooks declare what happens when entries appear.
@@ -815,7 +815,7 @@ Changes from collaborators appear locally without user action.
 
 The daemon is trivial to start.
 The editor plugin starts it.
-`git forge status` starts it if it's not running.
+`forge status` starts it if it's not running.
 It shuts down on idle.
 It is the same process as the LSP server (see Editor Integration).
 
@@ -830,14 +830,14 @@ The daemon notices the ref change and pushes within seconds.
 The user never waits for network.
 
 **No daemon, network available (fallback).**
-`git forge sync` fetches and pushes all forge refs.
+`forge sync` fetches and pushes all forge refs.
 Manual, explicit.
-The CLI should suggest starting the daemon: `tip: run git forge daemon for automatic sync`.
+The CLI should suggest starting the daemon: `tip: run forge daemon for automatic sync`.
 
 **Offline.**
 The CLI commits locally.
 Refs accumulate.
-On reconnect, the daemon (or `git forge sync`) pushes everything.
+On reconnect, the daemon (or `forge sync`) pushes everything.
 The server auto-merges concurrent changes (see Metadata Push and Auto-Merge).
 
 ### Conflict Resolution
@@ -890,7 +890,7 @@ DAG order with timestamps is sufficient for reconstruction.
 
 ### Creating a Review
 
-A developer pushes a branch and runs `git forge review new`.
+A developer pushes a branch and runs `forge review new`.
 This:
 
 1. Scans existing review IDs, takes N+1.
@@ -900,7 +900,7 @@ This:
 ### Updating a Review
 
 The developer pushes new commits or rebases.
-They run `git forge review edit` (or the daemon detects the branch update).
+They run `forge review edit` (or the daemon detects the branch update).
 A new revision entry is added to the review ref.
 
 ### Reviewing
@@ -936,7 +936,7 @@ A release is a repository maintenance workflow.
 It is not a build step.
 Given the commits since the last release, Forge determines the version bump, applies version changes, and generates the changelog.
 
-`git forge release prepare`:
+`forge release prepare`:
 
 1. Parse conventional commits since the last tag.
 2. Determine bump type (major, minor, patch).
@@ -945,7 +945,7 @@ Given the commits since the last release, Forge determines the version bump, app
 5. Create a release branch with the changes.
 6. Create a review ref for the release.
 
-`git forge release publish`:
+`forge release publish`:
 
 1. Tag the merged commit.
 2. Attach build artifacts to the release ref.
@@ -967,7 +967,7 @@ refs/forge/releases/v1.2.0  → tree
 ### Automation Modes
 
 Fully manual, semi-automated, or continuous.
-In semi-automated mode, every merge to main triggers `git forge release prepare`.
+In semi-automated mode, every merge to main triggers `forge release prepare`.
 If there are releasable commits since the last tag, a release branch and review appear.
 In continuous mode, preparation and publication happen automatically.
 The review requirement in policy.toml is the control point.
@@ -1062,7 +1062,7 @@ It writes refs and returns.
 The daemon handles all transport.
 
 ```text
-git forge
+forge
 ├── status                    # overview: current branch review, CI, assigned issues, notifications
 
 ├── issue
@@ -1200,7 +1200,7 @@ When a team migrates off GitHub, the refs come with them.
 ### Sync
 
 ```sh
-git forge sync github --repo=org/project --import
+forge sync github --repo=org/project --import
 ```
 
 Issues, PRs, comments, labels, and milestones are read via the platform API and written as Forge refs.

@@ -251,7 +251,7 @@ Create `crates/git-forge-comment/src/exe.rs`:
 3. In `crates/git-forge/Cargo.toml`, add `git-forge-comment = { workspace = true }`.
 
 **Acceptance**: `cargo build -p git-forge` succeeds.
-Running `git forge comment --help` shows the comment subcommands.
+Running `forge comment --help` shows the comment subcommands.
 
 ---
 
@@ -288,11 +288,11 @@ feat: implement `git-forge-comment` crate with full CLI and git2 backend
 Adds the `git-forge-comment` crate: domain types, `Comments` trait,
 `git2::Repository` implementation, CLI (`add`, `reply`, `resolve`,
 `list`), and execution logic. Wires the `comment` subcommand into the
-top-level `git forge` binary. Delegates `Issues::add_issue_comment`
+top-level `forge` binary. Delegates `Issues::add_issue_comment`
 to the new crate.
 
 feat: add `git-forge-comment` crate with Comments trait and git2 impl
-feat: add `git forge comment` CLI subcommand
+feat: add `forge comment` CLI subcommand
 feat: implement `Issues::add_issue_comment` via git-forge-comment
 Assisted-by: Zed (Claude Sonnet 4.6)
 ```

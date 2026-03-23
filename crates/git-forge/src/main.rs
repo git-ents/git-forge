@@ -73,7 +73,7 @@ fn generate_man_page(output_dir: &std::path::Path) -> Result<(), Box<dyn std::er
     let mut buffer = Vec::new();
     man.render(&mut buffer)?;
 
-    let man_path = man1_dir.join("git-forge.1");
+    let man_path = man1_dir.join("forge.1");
     std::fs::write(&man_path, &buffer)?;
 
     eprintln!("Wrote man page to {}", man_path.display());
