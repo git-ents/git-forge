@@ -9,3 +9,8 @@
 	base = 1350143f7e65babc9756bac1fe9bb732f3af3da0
 	pattern = crates/**
 	pattern = docs/**
+[vendor "git-hearth"]
+	url = https://github.com/git-ents/git-hearth
+	base = 0c1eab3629ed8f786020a8a63067824721ced7e3
+	pattern = crates/**
+	pattern = docs/**
