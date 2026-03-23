@@ -9,3 +9,10 @@
 .github/workflows/CI.yml vendor=git-vendor
 .github/workflows/Lint.yml vendor=git-vendor
 .github/workflows/Version.yml vendor=git-vendor
+crates/git-kiln/Cargo.toml vendor=git-kiln
+crates/git-kiln/src/cli.rs vendor=git-kiln
+crates/git-kiln/src/lib.rs vendor=git-kiln
+crates/git-kiln/src/main.rs vendor=git-kiln
+docs/design/git-cas-benchmarks.md vendor=git-kiln
+docs/design/git-kiln-benchmarks.md vendor=git-kiln
+docs/design/git-kiln.md vendor=git-kiln
