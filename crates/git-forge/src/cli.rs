@@ -134,6 +134,10 @@ pub enum Commands {
         #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
 
+        /// Path to .forge/toolchains.toml.
+        #[arg(long, default_value = ".forge/toolchains.toml")]
+        toolchains: String,
+
         /// Path to the hearth store.
         #[arg(long, env = "HEARTH_STORE")]
         store: Option<String>,

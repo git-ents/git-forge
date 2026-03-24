@@ -34,6 +34,10 @@ pub enum Command {
         /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
         #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
+
+        /// Path to .forge/toolchains.toml (default: ./.forge/toolchains.toml).
+        #[arg(long, default_value = ".forge/toolchains.toml")]
+        toolchains: String,
     },
 
     /// Print the merged environment hash without materializing.
@@ -44,6 +48,10 @@ pub enum Command {
         /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
         #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
+
+        /// Path to .forge/toolchains.toml (default: ./.forge/toolchains.toml).
+        #[arg(long, default_value = ".forge/toolchains.toml")]
+        toolchains: String,
     },
 
     /// Show differences between two environments.
@@ -56,6 +64,10 @@ pub enum Command {
         /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
         #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
+
+        /// Path to .forge/toolchains.toml (default: ./.forge/toolchains.toml).
+        #[arg(long, default_value = ".forge/toolchains.toml")]
+        toolchains: String,
     },
 
     /// Check out an environment tree to a path on disk.
@@ -74,6 +86,10 @@ pub enum Command {
         /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
         #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
+
+        /// Path to .forge/toolchains.toml (default: ./.forge/toolchains.toml).
+        #[arg(long, default_value = ".forge/toolchains.toml")]
+        toolchains: String,
     },
 
     /// Garbage-collect unreferenced blobs from the cache.

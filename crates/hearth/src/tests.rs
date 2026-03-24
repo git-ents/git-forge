@@ -3,7 +3,9 @@ use std::path::Path;
 use tempfile::TempDir;
 
 use crate::{
-    env::{load_config, merge_trees, resolve_env, resolve_trees},
+    env::{
+        ToolchainsConfig, load_config, load_toolchains, merge_trees, resolve_env, resolve_trees,
+    },
     import::{import_dir, import_oci, import_tarball},
     store::Store,
 };
@@ -384,6 +386,12 @@ fn write_config(dir: &Path, content: &str) -> std::path::PathBuf {
     path
 }
 
+fn write_toolchains(dir: &Path, content: &str) -> std::path::PathBuf {
+    let path = dir.join("toolchains.toml");
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
 #[test]
 fn env_load_config_basic() {
     let dir = TempDir::new().unwrap();
@@ -489,7 +497,7 @@ fn env_resolve_env_creates_ref() {
         &format!("[project]\ndefault = \"myenv\"\n\n[env.myenv]\ntrees = [\"{tree_oid}\"]\n"),
     );
     let cfg = load_config(&cfg_path).unwrap();
-    let oid = resolve_env(&store, &cfg, "myenv").unwrap();
+    let oid = resolve_env(&store, &cfg, None, "myenv").unwrap();
 
     let envs = store.list_envs().unwrap();
     assert!(envs.contains(&oid));
@@ -515,7 +523,7 @@ trees = []
     );
     let cfg = load_config(&path).unwrap();
     let (_store_dir, store) = temp_store();
-    let result = resolve_trees(&cfg, "a");
+    let result = resolve_trees(&cfg, None, "a");
     assert!(result.is_err());
     let _ = store; // keep alive
 }
@@ -528,5 +536,251 @@ fn env_unknown_name_is_error() {
         "[project]\ndefault = \"real\"\n\n[env.real]\ntrees = []\n",
     );
     let cfg = load_config(&path).unwrap();
-    assert!(resolve_trees(&cfg, "missing").is_err());
+    assert!(resolve_trees(&cfg, None, "missing").is_err());
+}
+
+#[test]
+fn toolchains_load_basic() {
+    let dir = TempDir::new().unwrap();
+    let path = write_toolchains(
+        dir.path(),
+        r#"
+[rust]
+source = "git://kiln-packages/rust@1.82.0"
+oid = "a3f1c9d2b8e64f5a1c0d9e2f3b4a5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+
+[python]
+source = "git://kiln-packages/cpython@3.12.0"
+"#,
+    );
+    let tc = load_toolchains(&path).unwrap();
+    assert_eq!(tc.toolchains.len(), 2);
+    assert_eq!(
+        tc.toolchains["rust"].source,
+        "git://kiln-packages/rust@1.82.0"
+    );
+    assert!(tc.toolchains["rust"].oid.is_some());
+    assert!(tc.toolchains["python"].oid.is_none());
+}
+
+#[test]
+fn toolchains_resolve_trees_includes_toolchain_oids() {
+    let (_dir, store) = temp_store();
+    let repo = store.repo();
+
+    let blob = repo.blob(b"rustc").unwrap();
+    let mut tb = repo.treebuilder(None).unwrap();
+    tb.insert("rustc", blob, 0o100_755).unwrap();
+    let tc_tree = tb.write().unwrap();
+
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        r#"
+[project]
+default = "dev"
+
+[env.dev]
+toolchains = ["rust"]
+"#,
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+
+    let tc = ToolchainsConfig {
+        toolchains: [(
+            "rust".into(),
+            crate::env::ToolchainDef {
+                source: "git://kiln-packages/rust@1.82.0".into(),
+                oid: Some(tc_tree.to_string()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+
+    let oids = resolve_trees(&cfg, Some(&tc), "dev").unwrap();
+    assert_eq!(oids, vec![tc_tree]);
+}
+
+#[test]
+fn toolchains_missing_oid_is_error() {
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        r#"
+[project]
+default = "dev"
+
+[env.dev]
+toolchains = ["rust"]
+"#,
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+
+    let tc = ToolchainsConfig {
+        toolchains: [(
+            "rust".into(),
+            crate::env::ToolchainDef {
+                source: "git://kiln-packages/rust@1.82.0".into(),
+                oid: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+
+    assert!(resolve_trees(&cfg, Some(&tc), "dev").is_err());
+}
+
+#[test]
+fn toolchains_missing_name_is_error() {
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        r#"
+[project]
+default = "dev"
+
+[env.dev]
+toolchains = ["go"]
+"#,
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+
+    let tc = ToolchainsConfig {
+        toolchains: [(
+            "rust".into(),
+            crate::env::ToolchainDef {
+                source: "git://kiln-packages/rust@1.82.0".into(),
+                oid: Some(
+                    "a3f1c9d2b8e64f5a1c0d9e2f3b4a5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b".into(),
+                ),
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+
+    assert!(resolve_trees(&cfg, Some(&tc), "dev").is_err());
+}
+
+#[test]
+fn toolchains_no_config_with_toolchain_ref_is_error() {
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        r#"
+[project]
+default = "dev"
+
+[env.dev]
+toolchains = ["rust"]
+"#,
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+    assert!(resolve_trees(&cfg, None, "dev").is_err());
+}
+
+#[test]
+fn toolchains_inherited_through_extends() {
+    let (_dir, store) = temp_store();
+    let repo = store.repo();
+
+    let blob_r = repo.blob(b"rustc").unwrap();
+    let mut tb1 = repo.treebuilder(None).unwrap();
+    tb1.insert("rustc", blob_r, 0o100_755).unwrap();
+    let rust_tree = tb1.write().unwrap();
+
+    let blob_p = repo.blob(b"python3").unwrap();
+    let mut tb2 = repo.treebuilder(None).unwrap();
+    tb2.insert("python3", blob_p, 0o100_755).unwrap();
+    let python_tree = tb2.write().unwrap();
+
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        r#"
+[project]
+default = "dev"
+
+[env.base]
+toolchains = ["rust"]
+
+[env.dev]
+extends = "base"
+toolchains = ["python"]
+"#,
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+
+    let tc = ToolchainsConfig {
+        toolchains: [
+            (
+                "rust".into(),
+                crate::env::ToolchainDef {
+                    source: "git://kiln-packages/rust@1.82.0".into(),
+                    oid: Some(rust_tree.to_string()),
+                },
+            ),
+            (
+                "python".into(),
+                crate::env::ToolchainDef {
+                    source: "git://kiln-packages/cpython@3.12.0".into(),
+                    oid: Some(python_tree.to_string()),
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+
+    let oids = resolve_trees(&cfg, Some(&tc), "dev").unwrap();
+    assert_eq!(oids, vec![rust_tree, python_tree]);
+}
+
+#[test]
+fn toolchains_before_raw_trees() {
+    let (_dir, store) = temp_store();
+    let repo = store.repo();
+
+    let blob_tc = repo.blob(b"rustc").unwrap();
+    let mut tb1 = repo.treebuilder(None).unwrap();
+    tb1.insert("rustc", blob_tc, 0o100_755).unwrap();
+    let tc_tree = tb1.write().unwrap();
+
+    let blob_raw = repo.blob(b"extra").unwrap();
+    let mut tb2 = repo.treebuilder(None).unwrap();
+    tb2.insert("extra", blob_raw, 0o100_644).unwrap();
+    let raw_tree = tb2.write().unwrap();
+
+    let cfg_dir = TempDir::new().unwrap();
+    let cfg_path = write_config(
+        cfg_dir.path(),
+        &format!(
+            r#"
+[project]
+default = "dev"
+
+[env.dev]
+toolchains = ["rust"]
+trees = ["{raw_tree}"]
+"#
+        ),
+    );
+    let cfg = load_config(&cfg_path).unwrap();
+
+    let tc = ToolchainsConfig {
+        toolchains: [(
+            "rust".into(),
+            crate::env::ToolchainDef {
+                source: "git://kiln-packages/rust@1.82.0".into(),
+                oid: Some(tc_tree.to_string()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+    };
+
+    let oids = resolve_trees(&cfg, Some(&tc), "dev").unwrap();
+    assert_eq!(oids, vec![tc_tree, raw_tree]);
 }

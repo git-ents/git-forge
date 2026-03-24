@@ -1,18 +1,36 @@
 //! Environment configuration and tree composition.
 //!
-//! Environments are declared in `.forge/environment.toml`:
+//! Environments are configured via two files:
+//!
+//! **`.forge/toolchains.toml`** declares named toolchains with a source URI
+//! and a content-addressed tree hash managed by hearth:
+//!
+//! ```toml
+//! [rust]
+//! source = "git://kiln-packages/rust@1.82.0"
+//! oid = "a3f1c9d..."
+//!
+//! [python]
+//! source = "git://kiln-packages/python@3.12"
+//! oid = "b72e4f8..."
+//! ```
+//!
+//! **`.forge/environment.toml`** references toolchains by name and may also
+//! list raw tree hashes as an escape hatch:
 //!
 //! ```toml
 //! [project]
 //! default = "rust"
 //!
 //! [env.rust]
-//! trees = ["a3f1c9d...", "b72e4f8..."]
+//! toolchains = ["rust"]
+//! trees = ["c91a3b2..."]
 //! extras = ["/usr/bin"]
 //!
 //! [env.dev]
 //! extends = "rust"
-//! trees = ["c91a3b2..."]
+//! toolchains = ["python"]
+//! trees = ["d82b4c3..."]
 //! ```
 
 use std::collections::{BTreeMap, HashMap};
@@ -56,6 +74,9 @@ impl Config {
 pub struct EnvDef {
     /// Name of the environment to extend.
     pub extends: Option<String>,
+    /// Toolchain names from `toolchains.toml` to include.
+    #[serde(default)]
+    pub toolchains: Vec<String>,
     /// Component tree hashes in merge order.
     #[serde(default)]
     pub trees: Vec<String>,
@@ -75,25 +96,74 @@ pub struct VmDef {
     pub root: Option<String>,
 }
 
+/// A single toolchain definition from `toolchains.toml`.
+#[derive(Debug, Deserialize)]
+pub struct ToolchainDef {
+    /// Source URI (e.g. `git://kiln-packages/rust@1.82.0`).
+    pub source: String,
+    /// Resolved content-addressed tree hash (managed by hearth).
+    pub oid: Option<String>,
+}
+
+/// Top-level configuration loaded from `.forge/toolchains.toml`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ToolchainsConfig {
+    /// Named toolchain definitions.
+    #[serde(flatten)]
+    pub toolchains: HashMap<String, ToolchainDef>,
+}
+
 /// Load an `env.toml` configuration from disk.
 pub fn load_config(path: &Path) -> Result<Config, Error> {
-    let content = fs::read_to_string(path).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", path.display()))
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
+    toml::from_str(&content)
+        .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))
+}
+
+/// Load a `toolchains.toml` configuration from disk.
+pub fn load_toolchains(path: &Path) -> Result<ToolchainsConfig, Error> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
     toml::from_str(&content)
         .map_err(|e| Error::Config(format!("failed to parse {}: {e}", path.display())))
 }
 
 /// Resolve an environment name to its ordered list of component tree OIDs.
 ///
-/// Follows the `extends` chain, collecting trees from base to derived.
-pub fn resolve_trees(config: &Config, name: &str) -> Result<Vec<Oid>, Error> {
+/// Follows the `extends` chain, collecting toolchain names and trees from
+/// base to derived. Toolchain OIDs come first, then raw trees.
+pub fn resolve_trees(
+    config: &Config,
+    toolchains: Option<&ToolchainsConfig>,
+    name: &str,
+) -> Result<Vec<Oid>, Error> {
     let resolved = resolve_chain(config, name)?;
     let mut oids = Vec::new();
-    for hash_str in &resolved.trees {
-        let oid = Oid::from_str(hash_str).map_err(|e| {
-            Error::Config(format!("invalid tree hash '{hash_str}': {e}"))
+
+    for tc_name in &resolved.toolchain_names {
+        let tc_config = toolchains.ok_or_else(|| {
+            Error::Config(format!(
+                "environment '{name}' references toolchain '{tc_name}' but no toolchains config provided"
+            ))
         })?;
+        let tc_def = tc_config.toolchains.get(tc_name).ok_or_else(|| {
+            Error::Config(format!(
+                "toolchain '{tc_name}' not found in toolchains config"
+            ))
+        })?;
+        let hash_str = tc_def
+            .oid
+            .as_deref()
+            .ok_or_else(|| Error::Config(format!("toolchain '{tc_name}' has no resolved oid")))?;
+        let oid = Oid::from_str(hash_str)
+            .map_err(|e| Error::Config(format!("invalid oid for toolchain '{tc_name}': {e}")))?;
+        oids.push(oid);
+    }
+
+    for hash_str in &resolved.trees {
+        let oid = Oid::from_str(hash_str)
+            .map_err(|e| Error::Config(format!("invalid tree hash '{hash_str}': {e}")))?;
         oids.push(oid);
     }
     Ok(oids)
@@ -107,22 +177,36 @@ pub fn resolve_extras(config: &Config, name: &str) -> Result<Vec<String>, Error>
 }
 
 struct ResolvedChain {
+    toolchain_names: Vec<String>,
     trees: Vec<String>,
     extras: Vec<String>,
 }
 
 fn resolve_chain(config: &Config, name: &str) -> Result<ResolvedChain, Error> {
     let mut seen = Vec::new();
+    let mut toolchain_names = Vec::new();
     let mut trees = Vec::new();
     let mut extras = Vec::new();
-    collect_chain(config, name, &mut seen, &mut trees, &mut extras)?;
-    Ok(ResolvedChain { trees, extras })
+    collect_chain(
+        config,
+        name,
+        &mut seen,
+        &mut toolchain_names,
+        &mut trees,
+        &mut extras,
+    )?;
+    Ok(ResolvedChain {
+        toolchain_names,
+        trees,
+        extras,
+    })
 }
 
 fn collect_chain(
     config: &Config,
     name: &str,
     seen: &mut Vec<String>,
+    toolchain_names: &mut Vec<String>,
     trees: &mut Vec<String>,
     extras: &mut Vec<String>,
 ) -> Result<(), Error> {
@@ -134,14 +218,16 @@ fn collect_chain(
     }
     seen.push(name.to_string());
 
-    let def = config.env.get(name).ok_or_else(|| {
-        Error::Config(format!("environment '{name}' not found in config"))
-    })?;
+    let def = config
+        .env
+        .get(name)
+        .ok_or_else(|| Error::Config(format!("environment '{name}' not found in config")))?;
 
     if let Some(ref base) = def.extends {
-        collect_chain(config, base, seen, trees, extras)?;
+        collect_chain(config, base, seen, toolchain_names, trees, extras)?;
     }
 
+    toolchain_names.extend(def.toolchains.iter().cloned());
     trees.extend(def.trees.iter().cloned());
     extras.extend(def.extras.iter().cloned());
     Ok(())
@@ -166,8 +252,13 @@ pub fn merge_trees(store: &Store, tree_oids: &[Oid]) -> Result<Oid, Error> {
 
 /// Resolve a named environment fully: resolve its trees, merge them, store
 /// the env ref, and return the merged tree hash.
-pub fn resolve_env(store: &Store, config: &Config, name: &str) -> Result<Oid, Error> {
-    let tree_oids = resolve_trees(config, name)?;
+pub fn resolve_env(
+    store: &Store,
+    config: &Config,
+    toolchains: Option<&ToolchainsConfig>,
+    name: &str,
+) -> Result<Oid, Error> {
+    let tree_oids = resolve_trees(config, toolchains, name)?;
     if tree_oids.is_empty() {
         return Err(Error::Config(format!(
             "environment '{name}' has no component trees"
@@ -220,10 +311,7 @@ fn overlay_tree(
     Ok(())
 }
 
-fn write_merged_map(
-    repo: &Repository,
-    map: &BTreeMap<String, MergedEntry>,
-) -> Result<Oid, Error> {
+fn write_merged_map(repo: &Repository, map: &BTreeMap<String, MergedEntry>) -> Result<Oid, Error> {
     let mut builder = repo.treebuilder(None)?;
     for (name, entry) in map {
         match entry {

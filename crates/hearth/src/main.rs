@@ -6,7 +6,7 @@ use clap::Parser;
 use hearth::{
     Error,
     cli::{Cli, Command, ImportCommand},
-    env::{load_config, resolve_env, resolve_extras},
+    env::{ToolchainsConfig, load_config, load_toolchains, resolve_env, resolve_extras},
     exe::{self, Isolation},
     import::{import_dir, import_oci, import_tarball},
     store::Store,
@@ -47,20 +47,33 @@ fn run() -> Result<(), Error> {
             env,
             isolation,
             config,
+            toolchains,
         } => {
             let cfg = load_config(&PathBuf::from(&config))?;
+            let tc = std::path::Path::new(&toolchains)
+                .exists()
+                .then(|| load_toolchains(&PathBuf::from(&toolchains)))
+                .transpose()?;
             let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
             let extras = resolve_extras(&cfg, env)?;
-            let oid = resolve_env(&store, &cfg, env)?;
+            let oid = resolve_env(&store, &cfg, tc.as_ref(), env)?;
             let level = Isolation::from_u8(isolation)?;
             let status = exe::enter(&store, oid, level, &extras)?;
             std::process::exit(status.code().unwrap_or(1));
         }
 
-        Command::Hash { env, config } => {
+        Command::Hash {
+            env,
+            config,
+            toolchains,
+        } => {
             let cfg = load_config(&PathBuf::from(&config))?;
+            let tc = std::path::Path::new(&toolchains)
+                .exists()
+                .then(|| load_toolchains(&PathBuf::from(&toolchains)))
+                .transpose()?;
             let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
-            let oid = resolve_env(&store, &cfg, env)?;
+            let oid = resolve_env(&store, &cfg, tc.as_ref(), env)?;
             println!("{oid}");
         }
 
@@ -68,10 +81,15 @@ fn run() -> Result<(), Error> {
             env_a,
             env_b,
             config,
+            toolchains,
         } => {
             let cfg = load_config(&PathBuf::from(&config))?;
-            let oid_a = resolve_oid(&store, &cfg, &env_a)?;
-            let oid_b = resolve_oid(&store, &cfg, &env_b)?;
+            let tc = std::path::Path::new(&toolchains)
+                .exists()
+                .then(|| load_toolchains(&PathBuf::from(&toolchains)))
+                .transpose()?;
+            let oid_a = resolve_oid(&store, &cfg, tc.as_ref(), &env_a)?;
+            let oid_b = resolve_oid(&store, &cfg, tc.as_ref(), &env_b)?;
             print_diff(store.repo(), oid_a, oid_b)?;
         }
 
@@ -80,11 +98,16 @@ fn run() -> Result<(), Error> {
             path,
             direnv,
             config,
+            toolchains,
         } => {
             let cfg = load_config(&PathBuf::from(&config))?;
+            let tc = std::path::Path::new(&toolchains)
+                .exists()
+                .then(|| load_toolchains(&PathBuf::from(&toolchains)))
+                .transpose()?;
             let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
             let extras = resolve_extras(&cfg, env)?;
-            let oid = resolve_env(&store, &cfg, env)?;
+            let oid = resolve_env(&store, &cfg, tc.as_ref(), env)?;
             if direnv {
                 let env_path = store.materialize(oid)?;
                 exe::direnv_output(&env_path, oid, &extras);
@@ -116,11 +139,16 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
-fn resolve_oid(store: &Store, config: &hearth::env::Config, s: &str) -> Result<git2::Oid, Error> {
+fn resolve_oid(
+    store: &Store,
+    config: &hearth::env::Config,
+    toolchains: Option<&ToolchainsConfig>,
+    s: &str,
+) -> Result<git2::Oid, Error> {
     if let Ok(oid) = git2::Oid::from_str(s) {
         return Ok(oid);
     }
-    resolve_env(store, config, s)
+    resolve_env(store, config, toolchains, s)
 }
 
 fn print_diff(repo: &git2::Repository, oid_a: git2::Oid, oid_b: git2::Oid) -> Result<(), Error> {
