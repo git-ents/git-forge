@@ -11,25 +11,22 @@ use crate::{Error, store::Store};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum Isolation {
-    /// Convention only: PATH prepended, no filesystem enforcement.
+    /// No isolation: inherit host environment, no PATH changes.
     #[default]
-    Workspace = 0,
-    /// Read-only inputs: store chmod'd read-only, writes captured per-run.
-    ReadOnly = 1,
-    /// Filesystem isolation: store mounted read-only, writes captured per-run.
-    Filesystem = 2,
-    /// Network isolation: read-only mounts, writes captures, and no access to the network.
-    Network = 3,
+    Host = 0,
+    /// Declared inputs only: PATH replaced with env tree bins.
+    Workspace = 1,
+    /// Read-only inputs: PATH replaced, store chmod'd read-only, writes captured.
+    ReadOnly = 2,
 }
 
 impl Isolation {
-    /// Convert from a numeric level.
-    ///
     /// Convert from a numeric isolation level.
     pub fn from_u8(n: u8) -> Result<Self, Error> {
         match n {
-            0 => Ok(Self::Workspace),
-            1 => Ok(Self::ReadOnly),
+            0 => Ok(Self::Host),
+            1 => Ok(Self::Workspace),
+            2 => Ok(Self::ReadOnly),
             _ => todo!("isolation level {n} requires VM support"),
         }
     }
@@ -45,30 +42,27 @@ pub fn enter(
 ) -> Result<process::ExitStatus, Error> {
     let store_path = store.materialize(tree_oid)?;
 
-    if isolation == Isolation::ReadOnly {
+    let capture = if isolation == Isolation::ReadOnly {
         let id = run_id();
-        let capture = store.root().join("runs").join(&id).join("capture");
-        fs::create_dir_all(&capture)?;
+        let dir = store.root().join("runs").join(&id).join("capture");
+        fs::create_dir_all(&dir)?;
         set_read_only_recursive(&store_path)?;
-        spawn_shell(&store_path, Some(&capture), tree_oid, isolation)
+        Some(dir)
     } else {
-        spawn_shell(&store_path, None, tree_oid, isolation)
-    }
+        None
+    };
+
+    spawn_shell(&store_path, capture.as_deref(), tree_oid, isolation)
 }
 
 /// Print shell-eval-able direnv output for an environment tree.
 ///
-/// Prepends `<tree>/bin` to PATH and exports `HEARTH_ENV`.
+/// Replaces PATH with `<tree>/bin` and exports `HEARTH_ENV`.
 pub fn direnv_output(env_path: &std::path::Path, tree_oid: Oid) {
     let bin = env_path.join("bin");
-    let existing_path = std::env::var("PATH").unwrap_or_default();
-    if existing_path.is_empty() {
-        println!("export PATH=\"{}\"", bin.display());
-    } else {
-        println!("export PATH=\"{}:{}\"", bin.display(), existing_path);
-    }
+    println!("export PATH=\"{}\"", bin.display());
     println!("export HEARTH_ENV=\"{tree_oid}\"");
-    println!("export HEARTH_ISOLATION=\"0\"");
+    println!("export HEARTH_ISOLATION=\"1\"");
 }
 
 fn spawn_shell(
@@ -83,22 +77,22 @@ fn spawn_shell(
     cmd.env("HEARTH_ENV", tree_oid.to_string());
     cmd.env("HEARTH_ISOLATION", (isolation as u8).to_string());
 
-    prepend_path(&mut cmd, &env_path.join("bin"));
+    match isolation {
+        Isolation::Host => {
+            // Inherit host PATH unchanged.
+        }
+        Isolation::Workspace | Isolation::ReadOnly => {
+            // Replace PATH with only the env tree's bin/.
+            let bin = env_path.join("bin");
+            cmd.env("PATH", bin.display().to_string());
+        }
+    }
 
     if let Some(capture_dir) = capture {
         cmd.env("TMPDIR", capture_dir);
     }
 
     Ok(cmd.status()?)
-}
-
-fn prepend_path(cmd: &mut process::Command, dir: &std::path::Path) {
-    let existing = std::env::var("PATH").unwrap_or_default();
-    if existing.is_empty() {
-        cmd.env("PATH", dir.display().to_string());
-    } else {
-        cmd.env("PATH", format!("{}:{}", dir.display(), existing));
-    }
 }
 
 fn run_id() -> String {

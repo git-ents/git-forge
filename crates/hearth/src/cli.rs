@@ -27,7 +27,7 @@ pub enum Command {
         /// Environment name (from env.toml).
         env: String,
 
-        /// Isolation level (0 = convention only, 1 = read-only inputs).
+        /// Isolation level (0 = host, 1 = workspace, 2 = read-only).
         #[arg(long, default_value_t = 0)]
         isolation: u8,
 
