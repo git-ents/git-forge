@@ -1,10 +1,11 @@
 //! Environment configuration and tree composition.
 //!
-//! Environments are declared in `env.toml`:
+//! Environments are declared in `.forge/environment.toml`:
 //!
 //! ```toml
 //! [env.default]
 //! trees = ["a3f1c9d...", "b72e4f8..."]
+//! extras = ["/usr/bin"]
 //!
 //! [env.dev]
 //! extends = "default"
@@ -21,7 +22,7 @@ use serde::Deserialize;
 use crate::Error;
 use crate::store::Store;
 
-/// Top-level configuration loaded from `env.toml`.
+/// Top-level configuration loaded from `.forge/environment.toml`.
 #[derive(Debug, Deserialize)]
 pub struct Config {
     /// Named environment definitions.

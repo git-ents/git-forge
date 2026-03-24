@@ -365,7 +365,7 @@ fn import_oci_not_a_layout() {
 // ---------------------------------------------------------------------------
 
 fn write_config(dir: &Path, content: &str) -> std::path::PathBuf {
-    let path = dir.join("env.toml");
+    let path = dir.join("environment.toml");
     std::fs::write(&path, content).unwrap();
     path
 }

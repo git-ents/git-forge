@@ -24,25 +24,25 @@ pub enum Command {
 
     /// Enter an environment interactively by spawning a shell inside it.
     Enter {
-        /// Environment name (from env.toml).
+        /// Environment name (from .forge/environment.toml).
         env: String,
 
         /// Isolation level (0 = host, 1 = workspace, 2 = read-only).
         #[arg(long, default_value_t = 0)]
         isolation: u8,
 
-        /// Path to env.toml (default: ./env.toml).
-        #[arg(long, default_value = "env.toml")]
+        /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
+        #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
     },
 
     /// Print the merged environment hash without materializing.
     Hash {
-        /// Environment name (from env.toml).
+        /// Environment name (from .forge/environment.toml).
         env: String,
 
-        /// Path to env.toml (default: ./env.toml).
-        #[arg(long, default_value = "env.toml")]
+        /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
+        #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
     },
 
@@ -53,14 +53,14 @@ pub enum Command {
         /// Second environment name or tree hash.
         env_b: String,
 
-        /// Path to env.toml (default: ./env.toml).
-        #[arg(long, default_value = "env.toml")]
+        /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
+        #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
     },
 
     /// Check out an environment tree to a path on disk.
     Checkout {
-        /// Environment name (from env.toml) or tree hash.
+        /// Environment name (from .forge/environment.toml) or tree hash.
         env: String,
 
         /// Destination path (default: store/<hash>/).
@@ -71,8 +71,8 @@ pub enum Command {
         #[arg(long)]
         direnv: bool,
 
-        /// Path to env.toml (default: ./env.toml).
-        #[arg(long, default_value = "env.toml")]
+        /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
+        #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
     },
 

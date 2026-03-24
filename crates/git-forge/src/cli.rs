@@ -122,7 +122,7 @@ pub enum Commands {
 
     /// Run a command inside a hearth environment.
     Run {
-        /// Environment name (from env.toml).
+        /// Environment name (from .forge/environment.toml).
         #[arg(long, default_value = "default")]
         env: String,
 
@@ -130,8 +130,8 @@ pub enum Commands {
         #[arg(long, default_value_t = 1)]
         isolation: u8,
 
-        /// Path to env.toml.
-        #[arg(long, default_value = "env.toml")]
+        /// Path to .forge/environment.toml.
+        #[arg(long, default_value = ".forge/environment.toml")]
         config: String,
 
         /// Path to the hearth store.
