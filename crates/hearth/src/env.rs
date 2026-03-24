@@ -39,7 +39,10 @@ pub struct EnvDef {
     /// Component tree hashes in merge order.
     #[serde(default)]
     pub trees: Vec<String>,
-    /// Isolation level (0–3).
+    /// Host paths added to PATH (not content-addressed).
+    #[serde(default)]
+    pub extras: Vec<String>,
+    /// Isolation level (0–2).
     pub isolation: Option<u8>,
 }
 
@@ -65,12 +68,9 @@ pub fn load_config(path: &Path) -> Result<Config, Error> {
 ///
 /// Follows the `extends` chain, collecting trees from base to derived.
 pub fn resolve_trees(config: &Config, name: &str) -> Result<Vec<Oid>, Error> {
-    let mut seen = Vec::new();
-    let mut chain = Vec::new();
-    collect_chain(config, name, &mut seen, &mut chain)?;
-
+    let resolved = resolve_chain(config, name)?;
     let mut oids = Vec::new();
-    for hash_str in &chain {
+    for hash_str in &resolved.trees {
         let oid = Oid::from_str(hash_str).map_err(|e| {
             Error::Config(format!("invalid tree hash '{hash_str}': {e}"))
         })?;
@@ -79,11 +79,32 @@ pub fn resolve_trees(config: &Config, name: &str) -> Result<Vec<Oid>, Error> {
     Ok(oids)
 }
 
+/// Resolve an environment name to its extras (host paths).
+///
+/// Follows the `extends` chain, collecting extras from base to derived.
+pub fn resolve_extras(config: &Config, name: &str) -> Result<Vec<String>, Error> {
+    Ok(resolve_chain(config, name)?.extras)
+}
+
+struct ResolvedChain {
+    trees: Vec<String>,
+    extras: Vec<String>,
+}
+
+fn resolve_chain(config: &Config, name: &str) -> Result<ResolvedChain, Error> {
+    let mut seen = Vec::new();
+    let mut trees = Vec::new();
+    let mut extras = Vec::new();
+    collect_chain(config, name, &mut seen, &mut trees, &mut extras)?;
+    Ok(ResolvedChain { trees, extras })
+}
+
 fn collect_chain(
     config: &Config,
     name: &str,
     seen: &mut Vec<String>,
-    out: &mut Vec<String>,
+    trees: &mut Vec<String>,
+    extras: &mut Vec<String>,
 ) -> Result<(), Error> {
     if seen.contains(&name.to_string()) {
         return Err(Error::Config(format!(
@@ -98,10 +119,11 @@ fn collect_chain(
     })?;
 
     if let Some(ref base) = def.extends {
-        collect_chain(config, base, seen, out)?;
+        collect_chain(config, base, seen, trees, extras)?;
     }
 
-    out.extend(def.trees.iter().cloned());
+    trees.extend(def.trees.iter().cloned());
+    extras.extend(def.extras.iter().cloned());
     Ok(())
 }
 

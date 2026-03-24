@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use hearth::{
     cli::{Cli, Command, ImportCommand},
-    env::{load_config, resolve_env},
+    env::{load_config, resolve_env, resolve_extras},
     exe::{self, Isolation},
     import::{import_dir, import_oci, import_tarball},
     store::Store,
@@ -45,9 +45,10 @@ fn run() -> Result<(), Error> {
 
         Command::Enter { env, isolation, config } => {
             let cfg = load_config(&PathBuf::from(&config))?;
+            let extras = resolve_extras(&cfg, &env)?;
             let oid = resolve_env(&store, &cfg, &env)?;
             let level = Isolation::from_u8(isolation)?;
-            let status = exe::enter(&store, oid, level)?;
+            let status = exe::enter(&store, oid, level, &extras)?;
             std::process::exit(status.code().unwrap_or(1));
         }
 
@@ -66,10 +67,11 @@ fn run() -> Result<(), Error> {
 
         Command::Checkout { env, path, direnv, config } => {
             let cfg = load_config(&PathBuf::from(&config))?;
+            let extras = resolve_extras(&cfg, &env)?;
             let oid = resolve_env(&store, &cfg, &env)?;
             if direnv {
                 let env_path = store.materialize(oid)?;
-                exe::direnv_output(&env_path, oid);
+                exe::direnv_output(&env_path, oid, &extras);
             } else {
                 let dest = match path {
                     Some(p) => {

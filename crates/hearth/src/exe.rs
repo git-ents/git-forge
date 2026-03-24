@@ -34,11 +34,13 @@ impl Isolation {
 
 /// Enter an environment by spawning a shell inside it.
 ///
+/// `extras` are host paths appended to PATH after the env tree's `bin/`.
 /// Returns the exit status of the spawned shell.
 pub fn enter(
     store: &Store,
     tree_oid: Oid,
     isolation: Isolation,
+    extras: &[String],
 ) -> Result<process::ExitStatus, Error> {
     let store_path = store.materialize(tree_oid)?;
 
@@ -52,15 +54,15 @@ pub fn enter(
         None
     };
 
-    spawn_shell(&store_path, capture.as_deref(), tree_oid, isolation)
+    spawn_shell(&store_path, capture.as_deref(), tree_oid, isolation, extras)
 }
 
 /// Print shell-eval-able direnv output for an environment tree.
 ///
-/// Replaces PATH with `<tree>/bin` and exports `HEARTH_ENV`.
-pub fn direnv_output(env_path: &std::path::Path, tree_oid: Oid) {
-    let bin = env_path.join("bin");
-    println!("export PATH=\"{}\"", bin.display());
+/// Replaces PATH with `<tree>/bin` (plus extras) and exports `HEARTH_ENV`.
+pub fn direnv_output(env_path: &std::path::Path, tree_oid: Oid, extras: &[String]) {
+    let path = build_path(&env_path.join("bin"), extras);
+    println!("export PATH=\"{path}\"");
     println!("export HEARTH_ENV=\"{tree_oid}\"");
     println!("export HEARTH_ISOLATION=\"1\"");
 }
@@ -70,6 +72,7 @@ fn spawn_shell(
     capture: Option<&std::path::Path>,
     tree_oid: Oid,
     isolation: Isolation,
+    extras: &[String],
 ) -> Result<process::ExitStatus, Error> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
 
@@ -82,9 +85,8 @@ fn spawn_shell(
             // Inherit host PATH unchanged.
         }
         Isolation::Workspace | Isolation::ReadOnly => {
-            // Replace PATH with only the env tree's bin/.
             let bin = env_path.join("bin");
-            cmd.env("PATH", bin.display().to_string());
+            cmd.env("PATH", build_path(&bin, extras));
         }
     }
 
@@ -93,6 +95,12 @@ fn spawn_shell(
     }
 
     Ok(cmd.status()?)
+}
+
+fn build_path(bin: &std::path::Path, extras: &[String]) -> String {
+    let mut parts = vec![bin.display().to_string()];
+    parts.extend(extras.iter().cloned());
+    parts.join(":")
 }
 
 fn run_id() -> String {
