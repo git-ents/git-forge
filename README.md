@@ -26,6 +26,9 @@ These are [borrowed from Git itself](https://git-scm.com/book/en/v2/Git-Internal
 |---|---|---|
 | [`git-forge`](crates/git-forge/) | CLI entrypoint and library facade. | Porcelain |
 | [`git-forge-core`](crates/git-forge-core/) | Shared annotations: code comments and approvals. | Plumbing |
+| [`git-forge-comment`](crates/git-forge-comment/) | Comments anchored to Git objects. | Plumbing |
 | [`git-forge-issue`](crates/git-forge-issue/) | Issue tracking. | Porcelain |
 | [`git-forge-review`](crates/git-forge-review/) | Pull/merge request reviews. | Porcelain |
 | [`git-forge-release`](crates/git-forge-release/) | Release management. | Porcelain |
+| [`hearth`](crates/hearth/) | Environments as Git trees. | Porcelain |
+| [`git-kiln`](crates/git-kiln/) | A ceramic-inspired toolkit for shaping Git-native data. | Porcelain |
