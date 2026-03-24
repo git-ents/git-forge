@@ -213,6 +213,71 @@ impl Store {
         }
         Ok(())
     }
+
+    /// Full garbage collection.
+    ///
+    /// 1. Remove materialized store entries not referenced by any tree or env ref.
+    /// 2. Remove blob cache entries with no remaining hardlinks.
+    /// 3. Clean up empty run directories.
+    ///
+    /// Returns `(store_entries_removed, blobs_removed, runs_removed)`.
+    pub fn gc(&self) -> Result<GcStats, Error> {
+        let mut stats = GcStats::default();
+
+        // Collect all referenced tree OIDs (trees + envs).
+        let mut referenced = std::collections::HashSet::new();
+        for oid in self.list_trees()? {
+            referenced.insert(oid.to_string());
+        }
+        for oid in self.list_envs()? {
+            referenced.insert(oid.to_string());
+        }
+
+        // Remove unreferenced store entries.
+        let store_dir = self.root.join("store");
+        if store_dir.exists() {
+            for entry in fs::read_dir(&store_dir)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                if !referenced.contains(name.to_str().unwrap_or("")) {
+                    fs::remove_dir_all(entry.path())?;
+                    stats.store_entries += 1;
+                }
+            }
+        }
+
+        // GC blob cache.
+        stats.blobs = self.gc_blobs()?;
+
+        // Clean up empty run directories.
+        let runs_dir = self.root.join("runs");
+        if runs_dir.exists() {
+            for entry in fs::read_dir(&runs_dir)? {
+                let entry = entry?;
+                if entry.path().is_dir() && is_dir_empty(&entry.path())? {
+                    fs::remove_dir_all(entry.path())?;
+                    stats.runs += 1;
+                }
+            }
+        }
+
+        Ok(stats)
+    }
+}
+
+/// Statistics from a garbage collection run.
+#[derive(Debug, Default)]
+pub struct GcStats {
+    /// Number of materialized store entries removed.
+    pub store_entries: u64,
+    /// Number of blob cache entries removed.
+    pub blobs: u64,
+    /// Number of empty run directories removed.
+    pub runs: u64,
+}
+
+fn is_dir_empty(path: &Path) -> Result<bool, Error> {
+    Ok(fs::read_dir(path)?.next().is_none())
 }
 
 fn list_refs(repo: &Repository, prefix: &str) -> Result<Vec<Oid>, Error> {

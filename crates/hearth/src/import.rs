@@ -277,12 +277,172 @@ fn is_gzipped(path: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// OCI import (stub)
+// OCI import
 // ---------------------------------------------------------------------------
 
-/// Import an OCI image into the store.
-pub fn import_oci(_store: &Store, _image_ref: &str) -> Result<Oid, Error> {
-    todo!("OCI import")
+/// Import an OCI image layout directory into the store.
+///
+/// Accepts a path to a directory containing an OCI image layout
+/// (`oci-layout` + `index.json` + `blobs/`). Layers are applied in order
+/// with OCI whiteout handling. The result is a single merged tree.
+///
+/// To obtain an OCI layout from a registry, use tools like `skopeo` or
+/// `crane`:
+///
+/// ```text
+/// skopeo copy docker://alpine:latest oci:./alpine
+/// crane pull alpine:latest ./alpine --format oci
+/// ```
+///
+/// Registry pull is not yet implemented — use a local layout.
+pub fn import_oci(store: &Store, image_ref: &str) -> Result<Oid, Error> {
+    let layout_dir = Path::new(image_ref);
+    if !layout_dir.join("oci-layout").exists() {
+        return Err(Error::Config(format!(
+            "not an OCI image layout: {} (missing oci-layout file)",
+            layout_dir.display()
+        )));
+    }
+
+    let index = read_oci_index(layout_dir)?;
+    let manifest_desc = index
+        .manifests
+        .first()
+        .ok_or_else(|| Error::Config("OCI index has no manifests".into()))?;
+
+    let manifest = read_oci_manifest(layout_dir, &manifest_desc.digest)?;
+
+    let repo = store.repo();
+    let mut root = TreeNode::Dir(BTreeMap::new());
+
+    for layer_desc in &manifest.layers {
+        let layer_path = blob_path(layout_dir, &layer_desc.digest);
+        apply_oci_layer(repo, &mut root, &layer_path)?;
+    }
+
+    let oid = write_tree_node(repo, root)?;
+    store.create_tree_ref(oid)?;
+    Ok(oid)
+}
+
+fn blob_path(layout_dir: &Path, digest: &str) -> PathBuf {
+    // digest is "sha256:abcdef..." → blobs/sha256/abcdef...
+    let (algo, hash) = digest.split_once(':').unwrap_or(("sha256", digest));
+    layout_dir.join("blobs").join(algo).join(hash)
+}
+
+fn apply_oci_layer(
+    repo: &Repository,
+    root: &mut TreeNode,
+    layer_path: &Path,
+) -> Result<(), Error> {
+    let file = fs::File::open(layer_path)?;
+    let reader: Box<dyn Read> = if is_gzipped(layer_path) {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else {
+        // OCI layers may also be uncompressed or zstd; handle gzip and plain.
+        Box::new(file)
+    };
+
+    let mut archive = tar::Archive::new(reader);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+
+        let components: Vec<&str> = path
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect();
+
+        if components.is_empty() {
+            continue;
+        }
+
+        // OCI whiteout: .wh.<name> deletes <name>, .wh..wh..opq opaques the dir.
+        let last = components[components.len() - 1];
+        if last == ".wh..wh..opq" {
+            // Opaque whiteout: replace the parent directory with an empty dir.
+            let parent = &components[..components.len() - 1];
+            if !parent.is_empty() {
+                remove_tree_node(root, parent);
+                // Re-insert as empty dir so subsequent entries land here.
+                insert_dir_node(root, parent);
+            }
+            continue;
+        }
+        if let Some(name) = last.strip_prefix(".wh.") {
+            let mut target = components[..components.len() - 1].to_vec();
+            target.push(name);
+            remove_tree_node(root, &target);
+            continue;
+        }
+
+        if entry.header().entry_type().is_dir() {
+            continue;
+        }
+
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_symlink() {
+            if let Some(target) = entry.link_name()? {
+                let target_str = target.to_str().ok_or_else(|| {
+                    Error::Config("non-UTF-8 symlink target in OCI layer".into())
+                })?;
+                let oid = write_blob(repo, target_str.as_bytes())?;
+                insert_tree_node(root, &components, oid, 0o12_0000);
+            }
+        } else {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            let oid = write_blob(repo, &content)?;
+            let mode = if entry.header().mode()? & 0o111 != 0 {
+                0o100_755
+            } else {
+                0o100_644
+            };
+            insert_tree_node(root, &components, oid, mode);
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// OCI manifest types (minimal subset)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct OciIndex {
+    manifests: Vec<OciDescriptor>,
+}
+
+#[derive(serde::Deserialize)]
+struct OciDescriptor {
+    digest: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    media_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct OciManifest {
+    layers: Vec<OciDescriptor>,
+}
+
+fn read_oci_index(layout_dir: &Path) -> Result<OciIndex, Error> {
+    let content = fs::read_to_string(layout_dir.join("index.json"))?;
+    serde_json::from_str(&content)
+        .map_err(|e| Error::Config(format!("invalid OCI index.json: {e}")))
+}
+
+fn read_oci_manifest(layout_dir: &Path, digest: &str) -> Result<OciManifest, Error> {
+    let path = blob_path(layout_dir, digest);
+    let content = fs::read_to_string(&path)?;
+    serde_json::from_str(&content)
+        .map_err(|e| Error::Config(format!("invalid OCI manifest: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +457,34 @@ pub fn import_oci(_store: &Store, _image_ref: &str) -> Result<Oid, Error> {
 enum TreeNode {
     Blob { oid: Oid, mode: i32 },
     Dir(BTreeMap<String, TreeNode>),
+}
+
+fn remove_tree_node(root: &mut TreeNode, components: &[&str]) {
+    let TreeNode::Dir(children) = root else {
+        return;
+    };
+    if components.len() == 1 {
+        children.remove(components[0]);
+        return;
+    }
+    if let Some(child) = children.get_mut(components[0]) {
+        remove_tree_node(child, &components[1..]);
+    }
+}
+
+fn insert_dir_node(root: &mut TreeNode, components: &[&str]) {
+    let TreeNode::Dir(children) = root else {
+        return;
+    };
+    if components.is_empty() {
+        return;
+    }
+    let child = children
+        .entry(components[0].to_string())
+        .or_insert_with(|| TreeNode::Dir(BTreeMap::new()));
+    if components.len() > 1 {
+        insert_dir_node(child, &components[1..]);
+    }
 }
 
 fn insert_tree_node(root: &mut TreeNode, components: &[&str], oid: Oid, mode: i32) {

@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use crate::{
     env::{load_config, merge_trees, resolve_env, resolve_trees},
-    import::{import_dir, import_tarball},
+    import::{import_dir, import_oci, import_tarball},
     store::Store,
 };
 
@@ -81,6 +81,40 @@ fn store_gc_removes_unreferenced_blobs() {
     let removed = store.gc_blobs().unwrap();
     assert_eq!(removed, 1);
     assert!(!cache.exists());
+}
+
+#[test]
+fn store_gc_removes_unreferenced_store_entries() {
+    let (_dir, store) = temp_store();
+    let repo = store.repo();
+
+    // Create and materialize a tree, then remove the ref so it becomes unreferenced.
+    let blob_oid = repo.blob(b"data").unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    builder.insert("f.txt", blob_oid, 0o100_644).unwrap();
+    let tree_oid = builder.write().unwrap();
+
+    store.materialize(tree_oid).unwrap();
+    assert!(store.root().join("store").join(tree_oid.to_string()).exists());
+
+    // No ref → gc should remove it.
+    let stats = store.gc().unwrap();
+    assert_eq!(stats.store_entries, 1);
+    assert!(!store.root().join("store").join(tree_oid.to_string()).exists());
+}
+
+#[test]
+fn store_gc_keeps_referenced_store_entries() {
+    let (_dir, store) = temp_store();
+
+    let src = TempDir::new().unwrap();
+    std::fs::write(src.path().join("f"), b"keep").unwrap();
+    let oid = import_dir(&store, src.path()).unwrap();
+    store.materialize(oid).unwrap();
+
+    let stats = store.gc().unwrap();
+    assert_eq!(stats.store_entries, 0);
+    assert!(store.root().join("store").join(oid.to_string()).exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +225,139 @@ fn import_tarball_deterministic() {
     let oid1 = import_tarball(&store, &tar_path, 0).unwrap();
     let oid2 = import_tarball(&store, &tar_path, 0).unwrap();
     assert_eq!(oid1, oid2);
+}
+
+// ---------------------------------------------------------------------------
+// Import: OCI layout
+// ---------------------------------------------------------------------------
+
+/// Build a tar layer (uncompressed) from a list of entries.
+fn make_oci_layer(files: &[(&str, &[u8])]) -> Vec<u8> {
+    make_tar(files)
+}
+
+/// Build a tar layer that contains a whiteout entry.
+fn make_whiteout_layer(whiteouts: &[&str], files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut all: Vec<(&str, &[u8])> = whiteouts.iter().map(|w| (*w, &b""[..])).collect();
+    all.extend_from_slice(files);
+    make_tar(&all)
+}
+
+/// Compute SHA-256 digest of data (using the same algorithm OCI uses).
+fn sha256_hex(data: &[u8]) -> String {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), data).unwrap();
+    let output = std::process::Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout.split_whitespace().next().unwrap().to_string()
+}
+
+/// Create a minimal OCI image layout directory with the given layers.
+fn make_oci_layout(dir: &Path, layers: &[Vec<u8>]) {
+    std::fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+
+    let blobs = dir.join("blobs").join("sha256");
+    std::fs::create_dir_all(&blobs).unwrap();
+
+    let mut layer_descs = Vec::new();
+    for layer in layers {
+        let hash = sha256_hex(layer);
+        std::fs::write(blobs.join(&hash), layer).unwrap();
+        layer_descs.push(format!(
+            r#"{{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:{hash}","size":{}}}"#,
+            layer.len()
+        ));
+    }
+
+    // Write a minimal config blob.
+    let config = b"{}";
+    let config_hash = sha256_hex(config);
+    std::fs::write(blobs.join(&config_hash), config).unwrap();
+
+    let manifest = format!(
+        r#"{{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:{config_hash}","size":{}}},"layers":[{}]}}"#,
+        config.len(),
+        layer_descs.join(",")
+    );
+    let manifest_hash = sha256_hex(manifest.as_bytes());
+    std::fs::write(blobs.join(&manifest_hash), &manifest).unwrap();
+
+    let index = format!(
+        r#"{{"schemaVersion":2,"manifests":[{{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:{manifest_hash}","size":{}}}]}}"#,
+        manifest.len()
+    );
+    std::fs::write(dir.join("index.json"), index).unwrap();
+}
+
+#[test]
+fn import_oci_basic() {
+    let (_store_dir, store) = temp_store();
+    let layout = TempDir::new().unwrap();
+
+    let layer = make_oci_layer(&[("bin/hello", b"#!/bin/sh\necho hi"), ("lib/foo.so", b"ELF")]);
+    make_oci_layout(layout.path(), &[layer]);
+
+    let oid = import_oci(&store, layout.path().to_str().unwrap()).unwrap();
+    let mat = store.materialize(oid).unwrap();
+    assert_eq!(std::fs::read(mat.join("bin/hello")).unwrap(), b"#!/bin/sh\necho hi");
+    assert_eq!(std::fs::read(mat.join("lib/foo.so")).unwrap(), b"ELF");
+}
+
+#[test]
+fn import_oci_whiteout_deletes_file() {
+    let (_store_dir, store) = temp_store();
+    let layout = TempDir::new().unwrap();
+
+    let layer1 = make_oci_layer(&[("a.txt", b"alpha"), ("b.txt", b"beta")]);
+    let layer2 = make_whiteout_layer(&[".wh.a.txt"], &[]);
+    make_oci_layout(layout.path(), &[layer1, layer2]);
+
+    let oid = import_oci(&store, layout.path().to_str().unwrap()).unwrap();
+    let mat = store.materialize(oid).unwrap();
+    assert!(!mat.join("a.txt").exists());
+    assert_eq!(std::fs::read(mat.join("b.txt")).unwrap(), b"beta");
+}
+
+#[test]
+fn import_oci_opaque_whiteout() {
+    let (_store_dir, store) = temp_store();
+    let layout = TempDir::new().unwrap();
+
+    let layer1 = make_oci_layer(&[("dir/old.txt", b"old"), ("dir/keep.txt", b"keep")]);
+    let layer2 = make_whiteout_layer(&["dir/.wh..wh..opq"], &[("dir/new.txt", b"new")]);
+    make_oci_layout(layout.path(), &[layer1, layer2]);
+
+    let oid = import_oci(&store, layout.path().to_str().unwrap()).unwrap();
+    let mat = store.materialize(oid).unwrap();
+    assert!(!mat.join("dir/old.txt").exists());
+    assert!(!mat.join("dir/keep.txt").exists());
+    assert_eq!(std::fs::read(mat.join("dir/new.txt")).unwrap(), b"new");
+}
+
+#[test]
+fn import_oci_multi_layer_overlay() {
+    let (_store_dir, store) = temp_store();
+    let layout = TempDir::new().unwrap();
+
+    let layer1 = make_oci_layer(&[("f.txt", b"v1")]);
+    let layer2 = make_oci_layer(&[("f.txt", b"v2"), ("g.txt", b"new")]);
+    make_oci_layout(layout.path(), &[layer1, layer2]);
+
+    let oid = import_oci(&store, layout.path().to_str().unwrap()).unwrap();
+    let mat = store.materialize(oid).unwrap();
+    assert_eq!(std::fs::read(mat.join("f.txt")).unwrap(), b"v2");
+    assert_eq!(std::fs::read(mat.join("g.txt")).unwrap(), b"new");
+}
+
+#[test]
+fn import_oci_not_a_layout() {
+    let (_store_dir, store) = temp_store();
+    let dir = TempDir::new().unwrap();
+    assert!(import_oci(&store, dir.path().to_str().unwrap()).is_err());
 }
 
 // ---------------------------------------------------------------------------

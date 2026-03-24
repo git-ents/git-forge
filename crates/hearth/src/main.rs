@@ -84,8 +84,10 @@ fn run() -> Result<(), Error> {
         }
 
         Command::Gc => {
-            let removed = store.gc_blobs()?;
-            println!("removed {removed} unreferenced blobs");
+            let stats = store.gc()?;
+            println!("store entries: {}", stats.store_entries);
+            println!("blobs:         {}", stats.blobs);
+            println!("runs:          {}", stats.runs);
         }
 
         Command::Status => {

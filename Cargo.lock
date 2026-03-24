@@ -669,6 +669,7 @@ dependencies = [
  "flate2",
  "git2",
  "serde",
+ "serde_json",
  "tar",
  "tempfile",
  "toml",
