@@ -10,7 +10,7 @@ use hearth::{
 };
 
 pub(crate) fn run(
-    env: &str,
+    env: Option<&str>,
     isolation: u8,
     config: &str,
     store_path: Option<&str>,
@@ -23,7 +23,7 @@ pub(crate) fn run(
 }
 
 fn run_inner(
-    env: &str,
+    env: Option<&str>,
     isolation: u8,
     config: &str,
     store_path: Option<&str>,
@@ -35,6 +35,7 @@ fn run_inner(
     };
 
     let cfg = load_config(&PathBuf::from(config))?;
+    let env = env.unwrap_or_else(|| cfg.default_env());
     let extras = resolve_extras(&cfg, env)?;
     let oid = resolve_env(&store, &cfg, env)?;
     let level = Isolation::from_u8(isolation)?;

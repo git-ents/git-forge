@@ -122,9 +122,9 @@ pub enum Commands {
 
     /// Run a command inside a hearth environment.
     Run {
-        /// Environment name (from .forge/environment.toml).
-        #[arg(long, default_value = "default")]
-        env: String,
+        /// Environment name (defaults to project.default from config).
+        #[arg(long)]
+        env: Option<String>,
 
         /// Isolation level (0 = host, 1 = workspace, 2 = read-only).
         #[arg(long, default_value_t = 1)]

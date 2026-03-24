@@ -552,6 +552,7 @@ dependencies = [
  "git-forge-release",
  "git-forge-review",
  "git2",
+ "hearth",
  "predicates",
  "tempfile",
 ]

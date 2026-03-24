@@ -4,12 +4,12 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use hearth::{
+    Error,
     cli::{Cli, Command, ImportCommand},
     env::{load_config, resolve_env, resolve_extras},
     exe::{self, Isolation},
     import::{import_dir, import_oci, import_tarball},
     store::Store,
-    Error,
 };
 
 fn main() {
@@ -43,10 +43,15 @@ fn run() -> Result<(), Error> {
             }
         },
 
-        Command::Enter { env, isolation, config } => {
+        Command::Enter {
+            env,
+            isolation,
+            config,
+        } => {
             let cfg = load_config(&PathBuf::from(&config))?;
-            let extras = resolve_extras(&cfg, &env)?;
-            let oid = resolve_env(&store, &cfg, &env)?;
+            let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
+            let extras = resolve_extras(&cfg, env)?;
+            let oid = resolve_env(&store, &cfg, env)?;
             let level = Isolation::from_u8(isolation)?;
             let status = exe::enter(&store, oid, level, &extras)?;
             std::process::exit(status.code().unwrap_or(1));
@@ -54,21 +59,32 @@ fn run() -> Result<(), Error> {
 
         Command::Hash { env, config } => {
             let cfg = load_config(&PathBuf::from(&config))?;
-            let oid = resolve_env(&store, &cfg, &env)?;
+            let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
+            let oid = resolve_env(&store, &cfg, env)?;
             println!("{oid}");
         }
 
-        Command::Diff { env_a, env_b, config } => {
+        Command::Diff {
+            env_a,
+            env_b,
+            config,
+        } => {
             let cfg = load_config(&PathBuf::from(&config))?;
             let oid_a = resolve_oid(&store, &cfg, &env_a)?;
             let oid_b = resolve_oid(&store, &cfg, &env_b)?;
             print_diff(store.repo(), oid_a, oid_b)?;
         }
 
-        Command::Checkout { env, path, direnv, config } => {
+        Command::Checkout {
+            env,
+            path,
+            direnv,
+            config,
+        } => {
             let cfg = load_config(&PathBuf::from(&config))?;
-            let extras = resolve_extras(&cfg, &env)?;
-            let oid = resolve_env(&store, &cfg, &env)?;
+            let env = env.as_deref().unwrap_or_else(|| cfg.default_env());
+            let extras = resolve_extras(&cfg, env)?;
+            let oid = resolve_env(&store, &cfg, env)?;
             if direnv {
                 let env_path = store.materialize(oid)?;
                 exe::direnv_output(&env_path, oid, &extras);
@@ -100,11 +116,7 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
-fn resolve_oid(
-    store: &Store,
-    config: &hearth::env::Config,
-    s: &str,
-) -> Result<git2::Oid, Error> {
+fn resolve_oid(store: &Store, config: &hearth::env::Config, s: &str) -> Result<git2::Oid, Error> {
     if let Ok(oid) = git2::Oid::from_str(s) {
         return Ok(oid);
     }

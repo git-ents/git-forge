@@ -3,12 +3,15 @@
 //! Environments are declared in `.forge/environment.toml`:
 //!
 //! ```toml
-//! [env.default]
+//! [project]
+//! default = "rust"
+//!
+//! [env.rust]
 //! trees = ["a3f1c9d...", "b72e4f8..."]
 //! extras = ["/usr/bin"]
 //!
 //! [env.dev]
-//! extends = "default"
+//! extends = "rust"
 //! trees = ["c91a3b2..."]
 //! ```
 
@@ -22,14 +25,30 @@ use serde::Deserialize;
 use crate::Error;
 use crate::store::Store;
 
+/// Project-level configuration.
+#[derive(Debug, Deserialize)]
+pub struct ProjectDef {
+    /// Name of the default environment.
+    pub default: String,
+}
+
 /// Top-level configuration loaded from `.forge/environment.toml`.
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    /// Project-level settings.
+    pub project: ProjectDef,
     /// Named environment definitions.
     #[serde(default)]
     pub env: HashMap<String, EnvDef>,
     /// VM configuration (kernel + root filesystem).
     pub vm: Option<VmDef>,
+}
+
+impl Config {
+    /// Return the name of the default environment.
+    pub fn default_env(&self) -> &str {
+        &self.project.default
+    }
 }
 
 /// A single environment definition.

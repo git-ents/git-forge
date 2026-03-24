@@ -45,7 +45,13 @@ fn main() {
             config,
             store,
             command,
-        } => run::run(&env, isolation, &config, store.as_deref(), &command),
+        } => run::run(
+            env.as_deref(),
+            isolation,
+            &config,
+            store.as_deref(),
+            &command,
+        ),
     }
 }
 

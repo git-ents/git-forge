@@ -24,8 +24,8 @@ pub enum Command {
 
     /// Enter an environment interactively by spawning a shell inside it.
     Enter {
-        /// Environment name (from .forge/environment.toml).
-        env: String,
+        /// Environment name (defaults to project.default from config).
+        env: Option<String>,
 
         /// Isolation level (0 = host, 1 = workspace, 2 = read-only).
         #[arg(long, default_value_t = 0)]
@@ -38,8 +38,8 @@ pub enum Command {
 
     /// Print the merged environment hash without materializing.
     Hash {
-        /// Environment name (from .forge/environment.toml).
-        env: String,
+        /// Environment name (defaults to project.default from config).
+        env: Option<String>,
 
         /// Path to .forge/environment.toml (default: ./.forge/environment.toml).
         #[arg(long, default_value = ".forge/environment.toml")]
@@ -60,8 +60,8 @@ pub enum Command {
 
     /// Check out an environment tree to a path on disk.
     Checkout {
-        /// Environment name (from .forge/environment.toml) or tree hash.
-        env: String,
+        /// Environment name (defaults to project.default from config) or tree hash.
+        env: Option<String>,
 
         /// Destination path (default: store/<hash>/).
         #[arg(long)]

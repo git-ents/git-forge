@@ -69,7 +69,6 @@ fn store_materialize_creates_hardlink_farm() {
 #[cfg(unix)]
 #[test]
 fn store_gc_removes_unreferenced_blobs() {
-
     let (_dir, store) = temp_store();
     let repo = store.repo();
     let blob_oid = repo.blob(b"orphan").unwrap();
@@ -95,12 +94,24 @@ fn store_gc_removes_unreferenced_store_entries() {
     let tree_oid = builder.write().unwrap();
 
     store.materialize(tree_oid).unwrap();
-    assert!(store.root().join("store").join(tree_oid.to_string()).exists());
+    assert!(
+        store
+            .root()
+            .join("store")
+            .join(tree_oid.to_string())
+            .exists()
+    );
 
     // No ref → gc should remove it.
     let stats = store.gc().unwrap();
     assert_eq!(stats.store_entries, 1);
-    assert!(!store.root().join("store").join(tree_oid.to_string()).exists());
+    assert!(
+        !store
+            .root()
+            .join("store")
+            .join(tree_oid.to_string())
+            .exists()
+    );
 }
 
 #[test]
@@ -303,7 +314,10 @@ fn import_oci_basic() {
 
     let oid = import_oci(&store, layout.path().to_str().unwrap()).unwrap();
     let mat = store.materialize(oid).unwrap();
-    assert_eq!(std::fs::read(mat.join("bin/hello")).unwrap(), b"#!/bin/sh\necho hi");
+    assert_eq!(
+        std::fs::read(mat.join("bin/hello")).unwrap(),
+        b"#!/bin/sh\necho hi"
+    );
     assert_eq!(std::fs::read(mat.join("lib/foo.so")).unwrap(), b"ELF");
 }
 
@@ -376,6 +390,9 @@ fn env_load_config_basic() {
     let path = write_config(
         dir.path(),
         r#"
+[project]
+default = "default"
+
 [env.default]
 trees = ["a3f1c9d2b8e64f5a1c0d9e2f3b4a5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"]
 "#,
@@ -391,6 +408,9 @@ fn env_load_config_extends() {
     let path = write_config(
         dir.path(),
         r#"
+[project]
+default = "base"
+
 [env.base]
 trees = []
 
@@ -466,9 +486,7 @@ fn env_resolve_env_creates_ref() {
     let cfg_dir = TempDir::new().unwrap();
     let cfg_path = write_config(
         cfg_dir.path(),
-        &format!(
-            "[env.myenv]\ntrees = [\"{tree_oid}\"]\n"
-        ),
+        &format!("[project]\ndefault = \"myenv\"\n\n[env.myenv]\ntrees = [\"{tree_oid}\"]\n"),
     );
     let cfg = load_config(&cfg_path).unwrap();
     let oid = resolve_env(&store, &cfg, "myenv").unwrap();
@@ -483,6 +501,9 @@ fn env_circular_extends_is_error() {
     let path = write_config(
         dir.path(),
         r#"
+[project]
+default = "a"
+
 [env.a]
 extends = "b"
 trees = []
@@ -502,7 +523,10 @@ trees = []
 #[test]
 fn env_unknown_name_is_error() {
     let dir = TempDir::new().unwrap();
-    let path = write_config(dir.path(), "[env.real]\ntrees = []\n");
+    let path = write_config(
+        dir.path(),
+        "[project]\ndefault = \"real\"\n\n[env.real]\ntrees = []\n",
+    );
     let cfg = load_config(&path).unwrap();
     assert!(resolve_trees(&cfg, "missing").is_err());
 }
