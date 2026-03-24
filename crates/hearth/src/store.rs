@@ -35,6 +35,8 @@ impl Store {
             Ok(repo) => repo,
             Err(_) => Repository::init_bare(root)?,
         };
+        // Use fast compression — the store is a local cache, not a transfer format.
+        repo.config()?.set_i32("core.compression", 1)?;
         for dir in &["blobs", "store", "runs"] {
             fs::create_dir_all(root.join(dir))?;
         }

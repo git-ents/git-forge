@@ -1,14 +1,23 @@
 //! Import external sources into the content-addressed store.
 //!
 //! Supported sources:
-//! - `dir`: a local directory
+//! - `dir`: a local directory (blob writes parallelized)
 //! - `tarball`: a `.tar` or `.tar.gz` archive
 //! - `oci`: an OCI image reference (not yet implemented)
+//!
+//! # Future optimization
+//!
+//! Bulk imports could write a packfile directly instead of one loose object
+//! per blob. This would reduce filesystem overhead (fewer inodes, one
+//! sequential write) at the cost of implementation complexity. The current
+//! loose-object approach with parallel writes and skip-existing is fast
+//! enough for toolchain-sized imports.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::thread;
 
 use git2::{Oid, Repository};
 
@@ -20,6 +29,9 @@ use crate::store::Store;
 // ---------------------------------------------------------------------------
 
 /// Import a local directory into the store, returning the root tree OID.
+///
+/// Blob writes are parallelized across available CPU cores. Blobs already
+/// present in the object store are skipped (hash check only, no compression).
 pub fn import_dir(store: &Store, path: &Path) -> Result<Oid, Error> {
     if !path.is_dir() {
         return Err(Error::Config(format!(
@@ -27,65 +39,151 @@ pub fn import_dir(store: &Store, path: &Path) -> Result<Oid, Error> {
             path.display()
         )));
     }
-    let oid = write_tree_from_dir(store.repo(), path)?;
+
+    let mut entries = Vec::new();
+    collect_dir_entries(path, path, &mut entries)?;
+
+    let blob_results = write_blobs_parallel(store.root(), &entries)?;
+
+    let mut root = TreeNode::Dir(BTreeMap::new());
+    for (components, oid, mode) in &blob_results {
+        let refs: Vec<&str> = components.iter().map(String::as_str).collect();
+        insert_tree_node(&mut root, &refs, *oid, *mode);
+    }
+
+    let oid = write_tree_node(store.repo(), root)?;
     store.create_tree_ref(oid)?;
     Ok(oid)
 }
 
-fn write_tree_from_dir(repo: &Repository, dir: &Path) -> Result<Oid, Error> {
-    let mut builder = repo.treebuilder(None)?;
+struct DirEntry {
+    components: Vec<String>,
+    abs_path: PathBuf,
+    kind: DirEntryKind,
+}
 
-    let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
+enum DirEntryKind {
+    File { executable: bool },
+    Symlink,
+}
 
-    for entry in entries {
-        let ft = entry.file_type()?;
-        let name = entry.file_name();
-        let name_str = name.to_str().ok_or_else(|| {
-            Error::Config(format!(
-                "non-UTF-8 filename: {}",
-                entry.path().display()
-            ))
-        })?;
+fn collect_dir_entries(
+    root: &Path,
+    current: &Path,
+    out: &mut Vec<DirEntry>,
+) -> Result<(), Error> {
+    let mut children: Vec<_> = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
+    children.sort_by_key(fs::DirEntry::file_name);
+
+    for child in children {
+        let ft = child.file_type()?;
+        let abs = child.path();
+        let rel = abs
+            .strip_prefix(root)
+            .map_err(|e| Error::Config(e.to_string()))?;
+        let components: Vec<String> = rel
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => s.to_str().map(String::from),
+                _ => None,
+            })
+            .collect();
 
         if ft.is_dir() {
-            let subtree_oid = write_tree_from_dir(repo, &entry.path())?;
-            builder.insert(name_str, subtree_oid, 0o040_000)?;
+            collect_dir_entries(root, &abs, out)?;
         } else if ft.is_symlink() {
-            write_symlink_entry(repo, &mut builder, name_str, &entry.path())?;
+            out.push(DirEntry {
+                components,
+                abs_path: abs,
+                kind: DirEntryKind::Symlink,
+            });
         } else {
-            let content = fs::read(entry.path())?;
-            let blob_oid = repo.blob(&content)?;
-            let mode = file_mode(&entry.path());
-            builder.insert(name_str, blob_oid, mode)?;
+            let executable = file_mode(&abs) == 0o100_755;
+            out.push(DirEntry {
+                components,
+                abs_path: abs,
+                kind: DirEntryKind::File { executable },
+            });
         }
     }
+    Ok(())
+}
 
-    Ok(builder.write()?)
+fn write_blobs_parallel(
+    store_root: &Path,
+    entries: &[DirEntry],
+) -> Result<Vec<(Vec<String>, Oid, i32)>, Error> {
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let n_threads = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(entries.len());
+
+    let chunk_size = entries.len().div_ceil(n_threads);
+
+    let results: Vec<Result<Vec<_>, Error>> = thread::scope(|s| {
+        let handles: Vec<_> = entries
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || {
+                    let repo = Repository::open_bare(store_root)?;
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for entry in chunk {
+                        let (oid, mode) = write_dir_entry_blob(&repo, entry)?;
+                        out.push((entry.components.clone(), oid, mode));
+                    }
+                    Ok::<_, Error>(out)
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let mut all = Vec::with_capacity(entries.len());
+    for r in results {
+        all.extend(r?);
+    }
+    Ok(all)
+}
+
+fn write_dir_entry_blob(repo: &Repository, entry: &DirEntry) -> Result<(Oid, i32), Error> {
+    match entry.kind {
+        DirEntryKind::File { executable } => {
+            let content = fs::read(&entry.abs_path)?;
+            let oid = write_blob(repo, &content)?;
+            let mode = if executable { 0o100_755 } else { 0o100_644 };
+            Ok((oid, mode))
+        }
+        DirEntryKind::Symlink => {
+            let target = read_symlink_bytes(&entry.abs_path)?;
+            let oid = write_blob(repo, &target)?;
+            Ok((oid, 0o12_0000))
+        }
+    }
+}
+
+/// Write a blob, skipping compression if it already exists.
+///
+/// libgit2's `git_odb_write` hashes first and short-circuits when the
+/// object is already present, so this is a thin wrapper for clarity.
+fn write_blob(repo: &Repository, content: &[u8]) -> Result<Oid, Error> {
+    Ok(repo.blob(content)?)
 }
 
 #[cfg(unix)]
-fn write_symlink_entry(
-    repo: &Repository,
-    builder: &mut git2::TreeBuilder<'_>,
-    name: &str,
-    path: &Path,
-) -> Result<(), Error> {
+fn read_symlink_bytes(path: &Path) -> Result<Vec<u8>, Error> {
     use std::os::unix::ffi::OsStrExt;
     let target = fs::read_link(path)?;
-    let blob_oid = repo.blob(target.as_os_str().as_bytes())?;
-    builder.insert(name, blob_oid, 0o12_0000)?;
-    Ok(())
+    Ok(target.as_os_str().as_bytes().to_vec())
 }
 
 #[cfg(not(unix))]
-fn write_symlink_entry(
-    _repo: &Repository,
-    _builder: &mut git2::TreeBuilder<'_>,
-    _name: &str,
-    _path: &Path,
-) -> Result<(), Error> {
-    Ok(())
+fn read_symlink_bytes(_path: &Path) -> Result<Vec<u8>, Error> {
+    Ok(Vec::new())
 }
 
 #[cfg(unix)]
@@ -149,13 +247,13 @@ pub fn import_tarball(store: &Store, path: &Path, strip_prefix: usize) -> Result
                 let target_str = target.to_str().ok_or_else(|| {
                     Error::Config("non-UTF-8 symlink target in tarball".into())
                 })?;
-                let oid = repo.blob(target_str.as_bytes())?;
+                let oid = write_blob(repo,target_str.as_bytes())?;
                 insert_tree_node(&mut root, components, oid, 0o12_0000);
             }
         } else {
             let mut content = Vec::new();
             entry.read_to_end(&mut content)?;
-            let oid = repo.blob(&content)?;
+            let oid = write_blob(repo,&content)?;
             let mode = if entry.header().mode()? & 0o111 != 0 {
                 0o100_755
             } else {
@@ -183,15 +281,18 @@ fn is_gzipped(path: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Import an OCI image into the store.
-///
-/// Not yet implemented. Returns an error.
 pub fn import_oci(_store: &Store, _image_ref: &str) -> Result<Oid, Error> {
     todo!("OCI import")
 }
 
 // ---------------------------------------------------------------------------
-// In-memory tree builder for tarball import
+// In-memory tree builder
 // ---------------------------------------------------------------------------
+//
+// Used by both directory and tarball imports. Tar entries arrive in flat,
+// arbitrary order, so we accumulate the nested structure in memory before
+// flushing to Git tree objects bottom-up. The directory import reuses this
+// after parallel blob writing.
 
 enum TreeNode {
     Blob { oid: Oid, mode: i32 },
