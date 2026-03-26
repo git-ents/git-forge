@@ -122,11 +122,16 @@ pub enum Command {
     Status,
 
     /// Track a toolchain in toolchains.toml.
+    ///
+    /// Source may be a URL, local path (directory or tarball), or a tree OID.
+    /// When --name is omitted, it is derived from the first component of the
+    /// source basename split on `-`, `_`, or `.`.
     Track {
-        /// Toolchain name.
-        name: String,
+        /// Toolchain name (derived from source basename if omitted).
+        #[arg(long)]
+        name: Option<String>,
 
-        /// Source URI or local path to import, or an existing tree OID.
+        /// URL, local path, or tree OID.
         source: String,
 
         /// Strip N leading path components from tarball entries.

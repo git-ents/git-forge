@@ -1,5 +1,6 @@
 //! `hearth` binary — CLI entrypoint.
 
+use std::io::Read;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -171,11 +172,15 @@ fn run() -> Result<(), Error> {
                 ToolchainsConfig::default()
             };
 
+            let name = name.unwrap_or_else(|| derive_name(&source));
+
             // If source looks like a tree OID, just record it directly.
             let oid = if git2::Oid::from_str(&source).is_ok() {
                 source.clone()
+            } else if source.starts_with("http://") || source.starts_with("https://") {
+                let tmp = download_to_temp(&source)?;
+                import_tarball(&store, tmp.path(), strip_prefix)?.to_string()
             } else {
-                // Treat as a path — import as tarball or directory.
                 let path = PathBuf::from(&source);
                 if path.is_dir() {
                     import_dir(&store, &path)?.to_string()
@@ -238,6 +243,56 @@ fn print_diff(repo: &git2::Repository, oid_a: git2::Oid, oid_b: git2::Oid) -> Re
         true
     })?;
     Ok(())
+}
+
+/// Derive a toolchain name from a source string.
+///
+/// Takes the basename (last path/URL segment), strips known archive
+/// extensions, then returns the first component split on `-`, `_`, or `.`.
+fn derive_name(source: &str) -> String {
+    let basename = source.rsplit('/').next().unwrap_or(source);
+    let stem = basename
+        .strip_suffix(".tar.gz")
+        .or_else(|| basename.strip_suffix(".tgz"))
+        .or_else(|| basename.strip_suffix(".tar"))
+        .unwrap_or(basename);
+    stem.split(['-', '_', '.'])
+        .next()
+        .unwrap_or(stem)
+        .to_string()
+}
+
+/// Download a URL to a named temporary file.
+fn download_to_temp(url: &str) -> Result<tempfile::NamedTempFile, Error> {
+    let suffix = if url.ends_with(".tar.gz") || url.ends_with(".tgz") {
+        ".tar.gz"
+    } else if url.ends_with(".tar") {
+        ".tar"
+    } else {
+        ""
+    };
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_global(Some(std::time::Duration::from_secs(600)))
+            .build(),
+    );
+    let resp = agent
+        .get(url)
+        .call()
+        .map_err(|e| Error::Config(format!("failed to fetch {url}: {e}")))?;
+    let mut reader = resp.into_body().into_reader();
+    let mut tmp = tempfile::Builder::new().suffix(suffix).tempfile()?;
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| Error::Config(format!("failed reading response: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        std::io::Write::write_all(&mut tmp, &buf[..n])?;
+    }
+    Ok(tmp)
 }
 
 fn print_status(store: &Store) -> Result<(), Error> {
