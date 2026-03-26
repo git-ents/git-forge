@@ -1,0 +1,7 @@
+[project]
+default = "rust"
+
+[env.rust]
+toolchains = ["rust"]
+extras = ["/usr/bin"]
+isolation = 1
