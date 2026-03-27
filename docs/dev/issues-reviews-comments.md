@@ -114,21 +114,50 @@ refs/forge/issue/<oid> → commit → tree
 ```
 
 No `author` blob — the first commit's author (from the git commit object) is the issue creator.
+No `created` or `updated` blobs — use the commit's author timestamp.
 
 ### Review
 
 ```text
 refs/forge/review/<oid> → commit → tree
 ├── meta/
-│   ├── target_branch   # UTF-8 blob
 │   ├── state           # "open", "merged", or "closed"
-│   └── created         # RFC 3339 timestamp
+│   ├── ref             # optional UTF-8 blob: source ref name (e.g. "feature-branch")
+│   └── target/
+│       ├── base        # OID blob (optional — absent for single-object reviews)
+│       └── head        # OID blob (required)
+├── objects/            # pinned git objects to prevent GC
+│   ├── <oid>           # blob (mode 100644), tree (mode 040000), or commit (mode 160000)
+│   └── ...
 ├── title               # plain text
 └── description         # markdown
 ```
 
-No `author` blob.
+No `author` blob — the first commit's author (from the git commit object) is the review creator.
+No `created` or `updated` blobs — use the commit's author timestamp.
 No revisions tree — revision tracking is out of scope for now.
+
+**Target types.**
+Reviews can target a blob, a tree (including a synthetic tree of blobs), a commit, or a commit range.
+Object types are resolved dynamically via `git2::Object::kind()` (libgit2 `git_object_type`), not stored.
+
+- Single object: only `meta/target/head` is present.
+- Commit range: both `meta/target/base` and `meta/target/head` are present,
+  using standard gitrevisions `base..head` semantics.
+- Ref sugar: `forge review new main..feature` resolves the ref to a commit range at creation time and stores the ref name in `meta/ref`.
+  When `meta/ref` is present, `forge sync` (or an explicit refresh) re-resolves the ref and updates `meta/target/*` and `objects/` accordingly.
+
+**GC protection.**
+The `objects/` tree stores the actual reviewed git objects as tree entries, keeping them reachable from the review ref and safe from garbage collection.
+All three object types are supported natively via git tree entry modes: blobs (`100644`), trees (`040000`), and commits/gitlinks (`160000`).
+The `git2` crate's `TreeBuilder::insert` and `FileMode` enum support all three modes.
+When a review target is updated (e.g. after a rebase), the new objects are added to `objects/`; old objects remain reachable in earlier commits on the review ref (append-only).
+
+**Comment re-anchoring after rebase.**
+When a review's target is updated, comments anchored to the old target are not moved or deleted.
+They remain reachable from earlier review commits.
+A blame-style following algorithm re-anchors comments to the new target: for each anchored comment, read the blob at the original anchor, trace each line through `git blame` on the new target, and map to the equivalent line in the new revision.
+When following fails (deleted lines, heavy rewrites), the comment is left anchored to its original object — a future server or product can surface these as "outdated" in the same way GitHub does.
 
 ## Approach
 
@@ -148,7 +177,7 @@ Add to `[workspace.dependencies]`:
 
 ```toml
 git2 = "0.20.4"
-git-ledger = "0.1.0-alpha.1"
+git-ledger = "0.1.0-alpha.2"
 git-chain = "0.1.0-alpha.1"
 tempfile = "3"
 octocrab = "0.44"
@@ -260,7 +289,7 @@ The `oid` is the initial commit OID (permanent identity). `display_id` is `None`
 | LedgerEntry field | Issue field | Notes |
 |---|---|---|
 | `"title"` | `title` | UTF-8 blob |
-| `"meta/state"` | `state` | `"open"` or `"closed"` |
+| `"state"` | `state` | `"open"` or `"closed"` |
 | `"body"` | `body` | UTF-8 blob |
 | `"labels/<name>"` | `labels` | Empty blob, name is the label |
 | `"assignees/<name>"` | `assignees` | Empty blob, name is contributor ID |
@@ -289,32 +318,33 @@ Add `pub mod review;` to `lib.rs`.
 **Types**:
 
 - `ReviewState { Open, Merged, Closed }` — derives `Serialize`
-- `Review { oid: String, display_id: Option<String>, title, target_branch, state, created, description }` — derives `Serialize`
+- `ReviewTarget { head: String, base: Option<String> }` — derives `Serialize`
+- `Review { oid: String, display_id: Option<String>, title, target: ReviewTarget, source_ref: Option<String>, state, description }` — derives `Serialize`
 
 Same as issues: `oid` is the initial commit OID, `display_id` is `None` while staged, `Some("GH1")` for GitHub-imported.
+No timestamp fields — use the git commit's author date for created/updated.
 
 **Field mapping** (LedgerEntry ↔ Review):
 
 | LedgerEntry field | Review field | Format |
 |---|---|---|
-| `"meta/target_branch"` | target_branch | UTF-8 blob |
 | `"meta/state"` | state | `"open"`, `"merged"`, or `"closed"` |
-| `"meta/created"` | created | RFC 3339 timestamp blob |
+| `"meta/ref"` | source_ref | optional UTF-8 blob (ref name) |
+| `"meta/target/head"` | target.head | OID string |
+| `"meta/target/base"` | target.base | optional OID string |
+| `"objects/<oid>"` | (not in struct) | pinned objects, managed internally |
 | `"title"` | title | plain text |
 | `"description"` | description | markdown |
-
-**Helpers**:
-
-- `now_rfc3339() -> String` — format current time as RFC 3339 using only `std::time`
 
 **Functions**:
 
 - `review_from_entry(entry: &LedgerEntry) -> Result<Review>`
-- `create_review(repo, title, description, target_branch) -> Result<Review>` — creates entity ref keyed by initial commit OID, writes OID → "pending" to index
+- `create_review(repo, title, description, target: ReviewTarget, source_ref: Option<&str>) -> Result<Review>` — creates entity ref keyed by initial commit OID, pins target objects in `objects/`, writes OID → "pending" to index
 - `get_review(repo, oid_or_id) -> Result<Review>`
 - `list_reviews(repo) -> Result<Vec<Review>>`
 - `list_reviews_by_state(repo, state) -> Result<Vec<Review>>`
 - `update_review(repo, oid_or_id, title?, description?, state?) -> Result<Review>`
+- `refresh_review_target(repo, oid_or_id) -> Result<Review>` — re-resolves `meta/ref` to update `meta/target/*` and `objects/`; no-op if `meta/ref` is absent
 
 **Verify**: `cargo check -p git-forge`
 
@@ -416,11 +446,17 @@ fn test_repo() -> (TempDir, Repository) {
 
 - `create_returns_oid`
 - `create_stores_all_fields`
+- `create_with_commit_range_target`
+- `create_with_single_blob_target`
+- `create_with_source_ref`
+- `objects_tree_pins_target`
 - `get_review_roundtrip`
 - `list_reviews`
 - `list_reviews_by_state`
 - `update_title_and_description`
 - `update_state_to_merged`
+- `refresh_target_updates_objects`
+- `refresh_noop_without_ref`
 
 ### Step 4.4: Comment tests (`tests/comment.rs`)
 
@@ -589,7 +625,7 @@ Thin wrapper over `octocrab` to page through all results.
 | `assignees[].login` | `assignees` | GitHub login as contributor ID |
 | `user.login` | commit author name | used as git signature name in ledger commit |
 | `created_at` | commit author timestamp | RFC 3339 → git time |
-| `base.ref` | `target_branch` | review only |
+| `base.ref` | `meta/ref` + `meta/target/head` | review only; ref stored for refresh, HEAD commit resolved and pinned in `objects/` |
 | issue `number` | display ID | stored as `"<sigil><number>"`, e.g. `"GH1"` |
 
 For the git signature on imported commits, use `(user.login, "<login>@github.invalid")` so authorship is preserved without exposing real emails.
@@ -603,7 +639,7 @@ The commit timestamp should use `created_at` from the GitHub payload, not the cu
   3. Fetch all issues (excluding PRs)
   4. For each: if `"issues/<n>"` in sync state → skip; else call `git_forge::issue::create_issue`, write display ID `"<sigil><n>"` to index immediately (no "pending"), update sync state
   5. Save sync state
-- `import_reviews(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<ImportReport>` — async; same flow using `fetch_pulls` and `git_forge::review::create_review`
+- `import_reviews(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<ImportReport>` — async; same flow using `fetch_pulls` and `git_forge::review::create_review`; maps `base.ref` → `source_ref`, resolves `head.sha` → `ReviewTarget { head, base: None }`; pins the head commit in `objects/`
 - `import_issue_comments(repo: &Repository, cfg: &GitHubSyncConfig, github_number: u64) -> Result<ImportReport>` — async; fetches issue comments, calls `git_forge::comment::add_comment` per comment, skips if chain entry already exists (check by `GhIssueComment.id` stored as trailer `Github-Id: <id>`)
 - `import_review_comments(repo: &Repository, cfg: &GitHubSyncConfig, github_number: u64) -> Result<ImportReport>` — async; maps `GhReviewComment.commit_id` + `line` to `Anchor::Object { oid: commit_id, range: Some("<line>-<line>") }`, calls `add_comment`
 - `import_all(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<ImportReport>` — calls `import_issues` then `import_reviews`, then imports comments for each
