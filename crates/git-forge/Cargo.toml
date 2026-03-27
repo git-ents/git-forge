@@ -14,7 +14,7 @@ required-features = ["cli"]
 [features]
 default = ["cli", "exe"]
 exe = ["dep:facet-json"]
-cli = ["exe", "dep:clap", "dep:clap_mangen"]
+cli = ["exe", "dep:figue"]
 
 [dependencies]
 thiserror = { workspace = true }
@@ -24,8 +24,7 @@ git-ledger = { workspace = true }
 git-chain = { workspace = true }
 facet = { workspace = true }
 facet-json = { workspace = true, optional = true }
-clap = { workspace = true, optional = true }
-clap_mangen = { workspace = true, optional = true }
+figue = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -20,8 +20,7 @@ all = "warn"
 pedantic = "warn"
 
 [workspace.dependencies]
-clap = { version = "4.5.60", features = ["derive"] }
-clap_mangen = "0.2.31"
+figue = "2"
 anyhow = "1"
 git-forge = { path = "crates/git-forge" }
 forge-github = { path = "crates/forge-github" }

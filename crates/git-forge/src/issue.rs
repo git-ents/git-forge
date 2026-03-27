@@ -10,7 +10,6 @@ use crate::{Error, Result, Store};
 
 /// The open/closed lifecycle state of an issue.
 #[derive(Debug, Clone, Serialize, Facet, PartialEq, Eq)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[repr(u8)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueState {

@@ -1,113 +1,124 @@
 //! CLI shape for the `forge` binary.
 //!
-//! This module contains only clap type definitions — no execution logic.
+//! This module contains only figue type definitions — no execution logic.
 //! See [`crate::exe`] for the executor.
 
-use clap::{Parser, Subcommand};
+use facet::Facet;
+use figue::{self as args, FigueBuiltins};
 
 use crate::issue::IssueState;
 
 /// Local-first Git forge CLI.
-#[derive(Parser)]
-#[command(name = "forge", author, version)]
+#[derive(Facet, Debug)]
 pub struct Cli {
     /// Output results as JSON.
-    #[arg(long, global = true)]
+    #[facet(args::named)]
     pub json: bool,
 
     /// Subcommand to run.
-    #[command(subcommand)]
+    #[facet(args::subcommand)]
     pub command: Command,
+
+    /// Built-in flags (--help, --version, --completions).
+    #[facet(flatten)]
+    pub builtins: FigueBuiltins,
 }
 
 /// Top-level subcommands.
-#[derive(Subcommand)]
+#[derive(Facet, Debug)]
+#[repr(u8)]
 pub enum Command {
     /// Manage issues.
     Issue {
         /// Issue subcommand.
-        #[command(subcommand)]
+        #[facet(args::subcommand)]
         command: IssueCommand,
     },
 }
 
 /// Issue subcommands.
-#[derive(Subcommand)]
+#[derive(Facet, Debug)]
+#[repr(u8)]
 pub enum IssueCommand {
     /// Create a new issue.
     New {
         /// Issue title.
+        #[facet(args::positional)]
         title: String,
 
         /// Issue body (Markdown).
-        #[arg(long)]
+        #[facet(args::named)]
         body: Option<String>,
 
         /// Labels to attach.
-        #[arg(long = "label", short = 'l')]
+        #[facet(args::named, args::short = 'l', rename = "label")]
         labels: Vec<String>,
 
         /// Contributor IDs to assign.
-        #[arg(long = "assignee", short = 'a')]
+        #[facet(args::named, args::short = 'a', rename = "assignee")]
         assignees: Vec<String>,
     },
 
     /// Show an issue.
     Show {
         /// Display ID or OID prefix (e.g. `3`, `ab3f`, `GH1`).
+        #[facet(args::positional)]
         reference: String,
     },
 
     /// List issues.
     List {
         /// Filter by state.
-        #[arg(long)]
+        #[facet(args::named)]
         state: Option<IssueState>,
     },
 
     /// Edit an issue.
     Edit {
         /// Display ID or OID prefix.
+        #[facet(args::positional)]
         reference: String,
 
         /// New title.
-        #[arg(long)]
+        #[facet(args::named)]
         title: Option<String>,
 
         /// New body (Markdown).
-        #[arg(long)]
+        #[facet(args::named)]
         body: Option<String>,
 
         /// New state.
-        #[arg(long)]
+        #[facet(args::named)]
         state: Option<IssueState>,
 
         /// Labels to add.
-        #[arg(long = "add-label")]
+        #[facet(args::named, rename = "add-label")]
         add_labels: Vec<String>,
 
         /// Labels to remove.
-        #[arg(long = "remove-label")]
+        #[facet(args::named, rename = "remove-label")]
         remove_labels: Vec<String>,
 
         /// Assignees to add.
-        #[arg(long = "add-assignee")]
+        #[facet(args::named, rename = "add-assignee")]
         add_assignees: Vec<String>,
 
         /// Assignees to remove.
-        #[arg(long = "remove-assignee")]
+        #[facet(args::named, rename = "remove-assignee")]
         remove_assignees: Vec<String>,
     },
 
     /// Close an issue.
     Close {
         /// Display ID or OID prefix.
+        #[facet(args::positional)]
         reference: String,
     },
 
     /// Reopen a closed issue.
     Reopen {
         /// Display ID or OID prefix.
+        #[facet(args::positional)]
         reference: String,
     },
 }
