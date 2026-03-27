@@ -222,7 +222,7 @@ fn print_issue(issue: &Issue, json: bool) {
         );
         return;
     }
-    let id = issue.display_id.as_deref().unwrap_or(&issue.oid[..8]);
+    let id = issue.display_id.as_deref().unwrap_or(&issue.oid);
     println!("issue #{id}");
     println!("title:     {}", issue.title);
     println!("state:     {}", issue.state.as_str());
@@ -240,7 +240,7 @@ fn print_issue(issue: &Issue, json: bool) {
 
 fn print_issue_list(issues: &[Issue]) {
     for issue in issues {
-        let id = issue.display_id.as_deref().unwrap_or(&issue.oid[..8]);
+        let id = issue.display_id.as_deref().unwrap_or(&issue.oid);
         println!("#{id:<10}  {}  [{}]", issue.title, issue.state.as_str());
     }
 }
