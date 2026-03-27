@@ -537,7 +537,7 @@ Pull request types (`GhPull`, `GhReviewComment`, `GhRef`) are added in Phase 3.
 | `created_at` | commit author timestamp | RFC 3339 → git time |
 | issue `number` | display ID alias | stored as `"<sigil><number>"`, e.g. `"GH1"` |
 
-For the git signature on imported commits, use `(user.login, "<login>@github.invalid")` so authorship is preserved without exposing real emails.
+For the git signature on imported commits, use `(user.login, "<login>@users.noreply.github.com")` so authorship is preserved without exposing real emails.
 The commit timestamp should use `created_at` from the GitHub payload, not the current time.
 
 **Functions**:
