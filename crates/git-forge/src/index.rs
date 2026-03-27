@@ -1,13 +1,16 @@
-use anyhow::{Result, anyhow};
+use crate::{Error, Result};
 use git2::{ErrorCode, ObjectType, Repository};
 use std::collections::HashMap;
 
 /// Read all key→value entries from a flat index ref tree.
-/// Returns an empty map when the ref does not yet exist.
-pub(crate) fn read_index(repo: &Repository, index_ref: &str) -> Result<HashMap<String, String>> {
+/// Returns `None` when the ref does not yet exist.
+pub(crate) fn read_index(
+    repo: &Repository,
+    index_ref: &str,
+) -> Result<Option<HashMap<String, String>>> {
     let reference = match repo.find_reference(index_ref) {
         Ok(r) => r,
-        Err(e) if e.code() == ErrorCode::NotFound => return Ok(HashMap::new()),
+        Err(e) if e.code() == ErrorCode::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
     let commit = reference.peel_to_commit()?;
@@ -15,18 +18,23 @@ pub(crate) fn read_index(repo: &Repository, index_ref: &str) -> Result<HashMap<S
     let mut map = HashMap::new();
     for entry in &tree {
         if entry.kind() == Some(ObjectType::Blob)
-            && let Some(name) = entry.name() {
-                let blob = repo.find_blob(entry.id())?;
-                let value = String::from_utf8_lossy(blob.content()).into_owned();
-                map.insert(name.to_string(), value);
-            }
+            && let Some(name) = entry.name()
+        {
+            let blob = repo.find_blob(entry.id())?;
+            let value = String::from_utf8_lossy(blob.content()).into_owned();
+            map.insert(name.to_string(), value);
+        }
     }
-    Ok(map)
+    Ok(Some(map))
 }
 
 /// Upsert entries into an index ref, creating it if absent.
 /// Each entry is a `(key, value)` pair written as a blob named `key`.
-pub(crate) fn index_upsert(repo: &Repository, index_ref: &str, entries: &[(&str, &str)]) -> Result<()> {
+pub(crate) fn index_upsert(
+    repo: &Repository,
+    index_ref: &str,
+    entries: &[(&str, &str)],
+) -> Result<()> {
     let parent = match repo.find_reference(index_ref) {
         Ok(r) => Some(r.peel_to_commit()?),
         Err(e) if e.code() == ErrorCode::NotFound => None,
@@ -48,7 +56,14 @@ pub(crate) fn index_upsert(repo: &Repository, index_ref: &str, entries: &[(&str,
     let tree = repo.find_tree(tree_oid)?;
     let sig = repo.signature()?;
     let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
-    repo.commit(Some(index_ref), &sig, &sig, "update index", &tree, &parents)?;
+    repo.commit(
+        Some(index_ref),
+        &sig,
+        &sig,
+        "forge: update index",
+        &tree,
+        &parents,
+    )?;
     Ok(())
 }
 
@@ -59,7 +74,11 @@ pub(crate) fn index_upsert(repo: &Repository, index_ref: &str, entries: &[(&str,
 /// 2. 40-char hex → exact OID key lookup.
 /// 3. Shorter hex string → OID prefix match.
 /// 4. Sigil-prefixed ID (e.g. `"GH1"`) or alias → direct key lookup.
-pub(crate) fn resolve_oid(index: &HashMap<String, String>, oid_or_id: &str) -> Result<String> {
+pub(crate) fn resolve_oid(
+    index: Option<&HashMap<String, String>>,
+    oid_or_id: &str,
+) -> Result<String> {
+    let index = index.ok_or_else(|| Error::NotFound(oid_or_id.to_string()))?;
     let is_hex = |s: &str| s.chars().all(|c| c.is_ascii_hexdigit());
 
     // All digits → display ID
@@ -67,7 +86,7 @@ pub(crate) fn resolve_oid(index: &HashMap<String, String>, oid_or_id: &str) -> R
         return index
             .get(oid_or_id)
             .cloned()
-            .ok_or_else(|| anyhow!("no entity with display ID #{oid_or_id}"));
+            .ok_or_else(|| Error::NotFound(oid_or_id.to_string()));
     }
 
     // 40-char hex → exact OID key
@@ -83,9 +102,9 @@ pub(crate) fn resolve_oid(index: &HashMap<String, String>, oid_or_id: &str) -> R
             .collect();
         matches.sort();
         return match matches.len() {
-            0 => Err(anyhow!("no entity matching #{oid_or_id}")),
+            0 => Err(Error::NotFound(oid_or_id.to_string())),
             1 => Ok(matches[0].clone()),
-            _ => Err(anyhow!("ambiguous OID prefix #{oid_or_id}")),
+            _ => Err(Error::Ambiguous(oid_or_id.to_string())),
         };
     }
 
@@ -94,11 +113,10 @@ pub(crate) fn resolve_oid(index: &HashMap<String, String>, oid_or_id: &str) -> R
         if val.len() == 40 && is_hex(val) {
             return Ok(val.clone());
         }
-        // val is itself a display ID
         if let Some(oid) = index.get(val.as_str()) {
             return Ok(oid.clone());
         }
     }
 
-    Err(anyhow!("no entity matching #{oid_or_id}"))
+    Err(Error::NotFound(oid_or_id.to_string()))
 }
