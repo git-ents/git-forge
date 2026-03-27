@@ -7,6 +7,9 @@ pub mod refs;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+#[cfg(feature = "cli")]
+pub mod interactive;
+
 #[cfg(feature = "exe")]
 pub mod exe;
 

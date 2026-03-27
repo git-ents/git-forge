@@ -4,6 +4,7 @@
 //! forge operation. The `run` method (available with the `cli` feature) dispatches
 //! from a parsed [`crate::cli::Cli`] and writes output to stdout.
 
+use std::io::IsTerminal;
 use std::path::Path;
 
 use git2::Repository;
@@ -112,6 +113,7 @@ impl Executor {
     ///
     /// # Panics
     /// Panics if facet-json fails to serialize a value (indicates a bug).
+    #[allow(clippy::too_many_lines)]
     pub fn run(&self, cli: &crate::cli::Cli) -> Result<()> {
         use crate::cli::{Command, IssueCommand};
 
@@ -122,15 +124,24 @@ impl Executor {
                     body,
                     labels,
                     assignees,
+                    interactive,
                 } => {
-                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-                    let assignees: Vec<&str> = assignees.iter().map(String::as_str).collect();
-                    let issue = self.create_issue(
-                        title,
-                        body.as_deref().unwrap_or(""),
-                        &labels,
-                        &assignees,
-                    )?;
+                    let interactive =
+                        *interactive || (title.is_none() && std::io::stdin().is_terminal());
+                    let (title, body, labels, assignees) = if interactive {
+                        let input = crate::interactive::prompt_new_issue(title.as_deref())?;
+                        (input.title, input.body, input.labels, input.assignees)
+                    } else {
+                        (
+                            title.clone().unwrap_or_default(),
+                            body.clone().unwrap_or_default(),
+                            labels.clone(),
+                            assignees.clone(),
+                        )
+                    };
+                    let labels_ref: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let assignees_ref: Vec<&str> = assignees.iter().map(String::as_str).collect();
+                    let issue = self.create_issue(&title, &body, &labels_ref, &assignees_ref)?;
                     print_issue(&issue, cli.json);
                 }
 
@@ -160,7 +171,31 @@ impl Executor {
                     remove_labels,
                     add_assignees,
                     remove_assignees,
+                    interactive,
                 } => {
+                    let no_fields = title.is_none()
+                        && body.is_none()
+                        && state.is_none()
+                        && add_labels.is_empty()
+                        && remove_labels.is_empty()
+                        && add_assignees.is_empty()
+                        && remove_assignees.is_empty();
+                    let interactive = *interactive || (no_fields && std::io::stdin().is_terminal());
+                    let (eff_title, eff_body, eff_state): (
+                        Option<String>,
+                        Option<String>,
+                        Option<IssueState>,
+                    ) = if interactive {
+                        let current = self.get_issue(reference)?;
+                        let input = crate::interactive::prompt_edit_issue(&current)?;
+                        (
+                            input.title.or_else(|| title.clone()),
+                            input.body.or_else(|| body.clone()),
+                            input.state.or_else(|| state.clone()),
+                        )
+                    } else {
+                        (title.clone(), body.clone(), state.clone())
+                    };
                     let add_labels: Vec<&str> = add_labels.iter().map(String::as_str).collect();
                     let remove_labels: Vec<&str> =
                         remove_labels.iter().map(String::as_str).collect();
@@ -170,9 +205,9 @@ impl Executor {
                         remove_assignees.iter().map(String::as_str).collect();
                     let issue = self.update_issue(
                         reference,
-                        title.as_deref(),
-                        body.as_deref(),
-                        state.as_ref(),
+                        eff_title.as_deref(),
+                        eff_body.as_deref(),
+                        eff_state.as_ref(),
                         &add_labels,
                         &remove_labels,
                         &add_assignees,

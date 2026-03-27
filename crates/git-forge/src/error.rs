@@ -15,6 +15,9 @@ pub enum Error {
     /// A field contains an unrecognized state value.
     #[error("invalid state: {0}")]
     InvalidState(String),
+    /// The user cancelled an interactive prompt.
+    #[error("interrupted")]
+    Interrupted,
 }
 
 /// Convenience result alias.

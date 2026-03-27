@@ -42,9 +42,9 @@ pub enum Command {
 pub enum IssueCommand {
     /// Create a new issue.
     New {
-        /// Issue title.
+        /// Issue title (prompted interactively if omitted).
         #[facet(args::positional)]
-        title: String,
+        title: Option<String>,
 
         /// Issue body (Markdown).
         #[facet(args::named)]
@@ -57,6 +57,10 @@ pub enum IssueCommand {
         /// Contributor IDs to assign.
         #[facet(args::named, args::short = 'a', rename = "assignee")]
         assignees: Vec<String>,
+
+        /// Prompt for all fields interactively.
+        #[facet(args::named, args::short = 'i')]
+        interactive: bool,
     },
 
     /// Show an issue.
@@ -106,6 +110,10 @@ pub enum IssueCommand {
         /// Assignees to remove.
         #[facet(args::named, rename = "remove-assignee")]
         remove_assignees: Vec<String>,
+
+        /// Prompt for title, body, and state interactively.
+        #[facet(args::named, args::short = 'i')]
+        interactive: bool,
     },
 
     /// Close an issue.
