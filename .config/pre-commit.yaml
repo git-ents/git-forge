@@ -19,6 +19,20 @@ repos:
     hooks:
       - id: typos
         args: [--write-changes, --force-exclude, --config, .config/typos.toml]
+  - repo: local
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --
+        types: [rust]
+        pass_filenames: false
+      - id: clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        types: [rust]
+        pass_filenames: false
   - repo: https://github.com/crate-ci/committed
     rev: v1.1.10
     hooks:
