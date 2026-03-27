@@ -610,6 +610,7 @@ dependencies = [
  "git2",
  "octocrab",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",
