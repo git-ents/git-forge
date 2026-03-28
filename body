@@ -1,0 +1,1 @@
+`comment new blob/<sha>` stores the Anchor as `commit/<HEAD>` instead of the specified blob. The blob target is not preserved in the comment object or its display.
