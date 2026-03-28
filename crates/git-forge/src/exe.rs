@@ -500,12 +500,11 @@ impl Executor {
                     let mut issues = self.list_issues(state.as_ref())?;
 
                     if let Some(p) = platform {
-                        let prefixes: Vec<String> =
-                            p.split(',').map(|s| format!("{}#", s.trim())).collect();
+                        let prefixes: Vec<&str> = p.split(',').map(str::trim).collect();
                         issues.retain(|i| {
-                            i.display_id.as_deref().is_some_and(|id| {
-                                prefixes.iter().any(|pfx| id.starts_with(pfx.as_str()))
-                            })
+                            i.display_id
+                                .as_deref()
+                                .is_some_and(|id| prefixes.iter().any(|pfx| id.starts_with(pfx)))
                         });
                     }
 

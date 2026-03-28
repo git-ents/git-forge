@@ -124,7 +124,7 @@ pub enum IssueCommand {
         #[facet(args::named)]
         state: Option<IssueState>,
 
-        /// Filter by platform sigil (comma-separated, e.g. `GH,GL`).
+        /// Filter by platform sigil (comma-separated, e.g. `GH#,GL#`).
         #[facet(args::named, args::short = 'p')]
         platform: Option<String>,
 
