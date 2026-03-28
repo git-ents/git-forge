@@ -7,10 +7,20 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
+use facet::Facet;
 use git2::{ErrorCode, ObjectType, Repository};
 
 use crate::issue::{Issue, IssueState};
 use crate::{Error, Result, Store};
+
+/// A provider configuration entry for JSON serialization.
+#[derive(Facet)]
+pub struct ConfigEntry {
+    provider: String,
+    owner: String,
+    repo: String,
+    sigil: String,
+}
 
 /// Owns a [`Repository`] and executes forge operations.
 pub struct Executor {
@@ -106,7 +116,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a remote is not found or its URL is unrecognized.
-    pub fn config_init(&self, remotes: &[&str]) -> Result<Vec<(String, String, String)>> {
+    pub fn config_init(&self, remotes: &[&str]) -> Result<Vec<ConfigEntry>> {
         let mut added = Vec::new();
         for remote_name in remotes {
             let remote = self
@@ -117,13 +127,18 @@ impl Executor {
                 .url()
                 .ok_or_else(|| Error::Config(format!("remote {remote_name} has no URL")))?;
             let (provider, owner, repo) = parse_remote_url(url)?;
-            let sigil = default_sigil(&provider);
+            let sigil = default_sigil(&provider).to_string();
             crate::refs::write_config_blob(
                 &self.repo,
                 &format!("provider/{provider}/{owner}/{repo}/sigil"),
-                sigil,
+                &sigil,
             )?;
-            added.push((provider, owner, repo));
+            added.push(ConfigEntry {
+                provider,
+                owner,
+                repo,
+                sigil,
+            });
         }
         Ok(added)
     }
@@ -153,7 +168,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
-    pub fn config_list(&self) -> Result<Vec<(String, String, String, String)>> {
+    pub fn config_list(&self) -> Result<Vec<ConfigEntry>> {
         let reference = match self.repo.find_reference(crate::refs::CONFIG) {
             Ok(r) => r,
             Err(e) if e.code() == ErrorCode::NotFound => return Ok(Vec::new()),
@@ -196,12 +211,12 @@ impl Executor {
                         &format!("provider/{provider}/{owner}/{repo_name}/sigil"),
                     )?
                     .unwrap_or_default();
-                    entries.push((
-                        provider.to_string(),
-                        owner.to_string(),
-                        repo_name.to_string(),
+                    entries.push(ConfigEntry {
+                        provider: provider.to_string(),
+                        owner: owner.to_string(),
+                        repo: repo_name.to_string(),
                         sigil,
-                    ));
+                    });
                 }
             }
         }
@@ -385,16 +400,13 @@ impl Executor {
                     let remote = remote.as_deref().unwrap_or("origin");
                     let added = self.config_init(&[remote])?;
                     if cli.json {
-                        let json: Vec<String> = added
-                            .iter()
-                            .map(|(p, o, r)| {
-                                format!(r#"{{"provider":"{p}","owner":"{o}","repo":"{r}"}}"#)
-                            })
-                            .collect();
-                        println!("[{}]", json.join(","));
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&added).expect("serialize")
+                        );
                     } else {
-                        for (provider, owner, repo) in &added {
-                            println!("added {provider}/{owner}/{repo}");
+                        for entry in &added {
+                            println!("added {}/{}/{}", entry.provider, entry.owner, entry.repo);
                         }
                     }
                 }
@@ -414,18 +426,16 @@ impl Executor {
                 ConfigCommand::List => {
                     let entries = self.config_list()?;
                     if cli.json {
-                        let json: Vec<String> = entries
-                            .iter()
-                            .map(|(p, o, r, s)| {
-                                format!(
-                                    r#"{{"provider":"{p}","owner":"{o}","repo":"{r}","sigil":"{s}"}}"#
-                                )
-                            })
-                            .collect();
-                        println!("[{}]", json.join(","));
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&entries).expect("serialize")
+                        );
                     } else {
-                        for (provider, owner, repo, sigil) in &entries {
-                            println!("{provider}/{owner}/{repo}  sigil={sigil}");
+                        for entry in &entries {
+                            println!(
+                                "{}/{}/{}  sigil={}",
+                                entry.provider, entry.owner, entry.repo, entry.sigil
+                            );
                         }
                     }
                 }
