@@ -9,8 +9,13 @@
   "draft-pull-request": true,
   "pull-request-title-pattern": "release: `${component}` v${version}",
   "pull-request-footer": "This release was generated with [Release Please](https://github.com/googleapis/release-please).",
+  "prerelease": true,
+  "release-as": "0.0.1-alpha.1",
   "packages": {
-    "crates/git-forge": {}
+    "crates/git-forge": {},
+    "crates/forge-github": {},
+    "crates/forge-mcp": {},
+    "crates/forge-server": {}
   },
   "plugins": [{ "type": "sentence-case" }, { "type": "cargo-workspace" }],
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
