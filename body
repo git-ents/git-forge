@@ -1,0 +1,1 @@
+`issue new ""` creates an issue with no title. Should reject empty/whitespace-only titles.
