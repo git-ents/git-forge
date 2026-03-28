@@ -492,8 +492,33 @@ impl Executor {
                     print_issue(&issue, cli.json);
                 }
 
-                IssueCommand::List { state } => {
-                    let issues = self.list_issues(state.as_ref())?;
+                IssueCommand::List {
+                    state,
+                    platform,
+                    id,
+                } => {
+                    let mut issues = self.list_issues(state.as_ref())?;
+
+                    if let Some(p) = platform {
+                        let prefixes: Vec<String> =
+                            p.split(',').map(|s| format!("{}#", s.trim())).collect();
+                        issues.retain(|i| {
+                            i.display_id.as_deref().is_some_and(|id| {
+                                prefixes.iter().any(|pfx| id.starts_with(pfx.as_str()))
+                            })
+                        });
+                    }
+
+                    if let Some(id_filter) = id {
+                        let needles: Vec<&str> = id_filter.split(',').map(str::trim).collect();
+                        issues.retain(|i| {
+                            needles.iter().any(|needle| {
+                                i.display_id.as_deref().is_some_and(|id| id == *needle)
+                                    || i.oid.starts_with(needle)
+                            })
+                        });
+                    }
+
                     if cli.json {
                         println!(
                             "{}",
@@ -669,7 +694,7 @@ fn print_issue_list(issues: &[Issue], filter: Option<&IssueState>, color: bool) 
 
             let id = if let Some(id) = issue.display_id.as_deref() {
                 let (prefix, num) = parse_display_id(id);
-                format!("{state_color}{dim}{prefix}{reset}{state_color}{bold}{num:0>pad$}{reset}")
+                format!("{dim}{prefix}{reset}{state_color}{bold}{num:0>pad$}{reset}")
             } else {
                 format!("{dim}{}{reset}", &issue.oid[..8])
             };

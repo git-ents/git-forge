@@ -123,6 +123,14 @@ pub enum IssueCommand {
         /// Filter by state.
         #[facet(args::named)]
         state: Option<IssueState>,
+
+        /// Filter by platform sigil (comma-separated, e.g. `GH,GL`).
+        #[facet(args::named, args::short = 'p')]
+        platform: Option<String>,
+
+        /// Filter by display ID or OID prefix (comma-separated).
+        #[facet(args::named)]
+        id: Option<String>,
     },
 
     /// Edit an issue.
