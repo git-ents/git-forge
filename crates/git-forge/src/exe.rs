@@ -497,7 +497,25 @@ impl Executor {
                     platform,
                     id,
                 } => {
-                    let mut issues = self.list_issues(state.as_ref())?;
+                    let states: Vec<IssueState> = state
+                        .as_deref()
+                        .map(|s| {
+                            s.split(',')
+                                .map(|v| v.trim().parse())
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+
+                    let mut issues = if states.len() == 1 {
+                        self.list_issues(Some(&states[0]))?
+                    } else {
+                        let mut all = self.list_issues(None)?;
+                        if !states.is_empty() {
+                            all.retain(|i| states.contains(&i.state));
+                        }
+                        all
+                    };
 
                     if let Some(p) = platform {
                         let prefixes: Vec<&str> = p.split(',').map(str::trim).collect();
@@ -525,7 +543,12 @@ impl Executor {
                         );
                     } else {
                         let color = std::io::stdout().is_terminal();
-                        print_issue_list(&issues, state.as_ref(), color);
+                        let single_state = if states.len() == 1 {
+                            Some(&states[0])
+                        } else {
+                            None
+                        };
+                        print_issue_list(&issues, single_state, color);
                     }
                 }
 
