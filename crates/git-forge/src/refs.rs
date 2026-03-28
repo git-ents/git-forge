@@ -72,7 +72,7 @@ pub fn write_config_blob(repo: &Repository, path: &str, value: &str) -> Result<(
     Ok(())
 }
 
-/// Recursively build a tree, inserting `blob_oid` at `parts[0]/parts[1]/.../leaf`.
+/// Build a tree, inserting `leaf_oid` as a blob at `parts[0]/parts[1]/.../leaf`.
 ///
 /// # Errors
 /// Returns an error if a git operation fails.
@@ -82,23 +82,32 @@ pub fn build_tree(
     parts: &[&str],
     leaf_oid: git2::Oid,
 ) -> Result<git2::Oid> {
-    let mut builder = if let Some(t) = base {
-        repo.treebuilder(Some(t))?
-    } else {
-        repo.treebuilder(None)?
-    };
-
-    if parts.len() == 1 {
-        builder.insert(parts[0], leaf_oid, 0o100_644)?;
-    } else {
-        let child_base: Option<git2::Tree<'_>> = base
-            .and_then(|t| t.get_name(parts[0]))
-            .filter(|e| e.kind() == Some(ObjectType::Tree))
-            .map(|e| repo.find_tree(e.id()))
-            .transpose()?;
-        let child_oid = build_tree(repo, child_base.as_ref(), &parts[1..], leaf_oid)?;
-        builder.insert(parts[0], child_oid, 0o040_000)?;
+    // Walk down, collecting (segment, existing_tree_oid) pairs.
+    let mut pairs: Vec<(&str, Option<git2::Oid>)> = Vec::new();
+    let mut current = base.map(git2::Tree::id);
+    for &seg in parts {
+        pairs.push((seg, current));
+        current = match current {
+            Some(oid) => repo
+                .find_tree(oid)?
+                .get_name(seg)
+                .filter(|e| e.kind() == Some(ObjectType::Tree))
+                .map(|e| e.id()),
+            None => None,
+        };
     }
 
-    Ok(builder.write()?)
+    // Fold bottom-up: insert leaf blob, then wrap each parent.
+    let mut child_oid = leaf_oid;
+    let mut mode = 0o100_644; // first insertion is a blob
+    for (seg, tree_oid) in pairs.into_iter().rev() {
+        let mut builder = match tree_oid {
+            Some(oid) => repo.treebuilder(Some(&repo.find_tree(oid)?))?,
+            None => repo.treebuilder(None)?,
+        };
+        builder.insert(seg, child_oid, mode)?;
+        child_oid = builder.write()?;
+        mode = 0o040_000; // subsequent insertions are trees
+    }
+    Ok(child_oid)
 }
