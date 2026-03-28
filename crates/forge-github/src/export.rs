@@ -47,7 +47,8 @@ pub async fn export_issues(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<
         .await
         {
             Ok(number) => {
-                let display_id = format!("{}{number}", cfg.sigil);
+                let sigil = cfg.sigils.get("issue").map_or("GH#", String::as_str);
+                let display_id = format!("{sigil}{number}");
                 if let Err(e) = store.write_display_id(ISSUE_INDEX, &display_id, &issue.oid) {
                     eprintln!("forge: failed to write display ID for issue {number}: {e}");
                     report.failed += 1;

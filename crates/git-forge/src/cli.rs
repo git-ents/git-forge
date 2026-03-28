@@ -65,10 +65,6 @@ pub enum ConfigCommand {
         /// Repository name.
         #[facet(args::positional)]
         repo: String,
-
-        /// Sigil prefix for cross-references.
-        #[facet(args::named)]
-        sigil: Option<String>,
     },
     /// List all configured providers.
     List,

@@ -31,7 +31,8 @@ pub async fn import_issues(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<
             continue;
         }
 
-        let display_id = format!("{}{}", cfg.sigil, issue.number);
+        let sigil = cfg.sigils.get("issue").map_or("GH#", String::as_str);
+        let display_id = format!("{sigil}{}", issue.number);
         let login = &issue.user.login;
         let email = format!("{login}@users.noreply.github.com");
         let source = format!(

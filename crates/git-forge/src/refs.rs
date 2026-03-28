@@ -1,5 +1,7 @@
 //! Ref prefix constants and tree helpers for the forge namespace.
 
+use std::collections::BTreeMap;
+
 use git2::{ErrorCode, ObjectType, Repository};
 
 use crate::Result;
@@ -70,6 +72,43 @@ pub fn write_config_blob(repo: &Repository, path: &str, value: &str) -> Result<(
         &parents,
     )?;
     Ok(())
+}
+
+/// Read all blob entries from a subtree at `path` under `refs/forge/config`.
+///
+/// Returns a map of entry name → UTF-8 content. Returns an empty map when the
+/// ref or any path segment does not exist.
+///
+/// # Errors
+/// Returns an error if a git operation fails.
+pub fn read_config_subtree(repo: &Repository, path: &str) -> Result<BTreeMap<String, String>> {
+    let reference = match repo.find_reference(CONFIG) {
+        Ok(r) => r,
+        Err(e) if e.code() == ErrorCode::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let root_tree = reference.peel_to_commit()?.tree()?;
+    let subtree_entry = match root_tree.get_path(std::path::Path::new(path)) {
+        Ok(e) => e,
+        Err(e) if e.code() == ErrorCode::NotFound => return Ok(BTreeMap::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let subtree = repo.find_tree(subtree_entry.id())?;
+    let mut map = BTreeMap::new();
+    for entry in &subtree {
+        if entry.kind() != Some(ObjectType::Blob) {
+            continue;
+        }
+        let Some(name) = entry.name() else {
+            continue;
+        };
+        let blob = repo.find_blob(entry.id())?;
+        map.insert(
+            name.to_string(),
+            String::from_utf8_lossy(blob.content()).into_owned(),
+        );
+    }
+    Ok(map)
 }
 
 /// Build a tree, inserting `leaf_oid` as a blob at `parts[0]/parts[1]/.../leaf`.

@@ -4,6 +4,7 @@
 //! forge operation. The `run` method (available with the `cli` feature) dispatches
 //! from a parsed [`crate::cli::Cli`] and writes output to stdout.
 
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -19,7 +20,7 @@ pub struct ConfigEntry {
     provider: String,
     owner: String,
     repo: String,
-    sigil: String,
+    sigils: BTreeMap<String, String>,
 }
 
 /// Owns a [`Repository`] and executes forge operations.
@@ -127,17 +128,20 @@ impl Executor {
                 .url()
                 .ok_or_else(|| Error::Config(format!("remote {remote_name} has no URL")))?;
             let (provider, owner, repo) = parse_remote_url(url)?;
-            let sigil = default_sigil(&provider).to_string();
-            crate::refs::write_config_blob(
-                &self.repo,
-                &format!("provider/{provider}/{owner}/{repo}/sigil"),
-                &sigil,
-            )?;
+            let sigils = default_sigils(&provider);
+            let prefix = format!("provider/{provider}/{owner}/{repo}");
+            for (entity, sigil) in &sigils {
+                crate::refs::write_config_blob(
+                    &self.repo,
+                    &format!("{prefix}/sigil/{entity}"),
+                    sigil,
+                )?;
+            }
             added.push(ConfigEntry {
                 provider,
                 owner,
                 repo,
-                sigil,
+                sigils,
             });
         }
         Ok(added)
@@ -147,19 +151,13 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
-    pub fn config_add(
-        &self,
-        provider: &str,
-        owner: &str,
-        repo: &str,
-        sigil: Option<&str>,
-    ) -> Result<()> {
-        let sigil = sigil.unwrap_or_else(|| default_sigil(provider));
-        crate::refs::write_config_blob(
-            &self.repo,
-            &format!("provider/{provider}/{owner}/{repo}/sigil"),
-            sigil,
-        )
+    pub fn config_add(&self, provider: &str, owner: &str, repo: &str) -> Result<()> {
+        let sigils = default_sigils(provider);
+        let prefix = format!("provider/{provider}/{owner}/{repo}");
+        for (entity, sigil) in &sigils {
+            crate::refs::write_config_blob(&self.repo, &format!("{prefix}/sigil/{entity}"), sigil)?;
+        }
+        Ok(())
     }
 
     /// List all configured provider entries.
@@ -206,16 +204,15 @@ impl Executor {
                     let Some(repo_name) = repo_entry.name() else {
                         continue;
                     };
-                    let sigil = crate::refs::read_config_blob(
+                    let sigils = crate::refs::read_config_subtree(
                         &self.repo,
                         &format!("provider/{provider}/{owner}/{repo_name}/sigil"),
-                    )?
-                    .unwrap_or_default();
+                    )?;
                     entries.push(ConfigEntry {
                         provider: provider.to_string(),
                         owner: owner.to_string(),
                         repo: repo_name.to_string(),
-                        sigil,
+                        sigils,
                     });
                 }
             }
@@ -340,14 +337,18 @@ fn parse_owner_repo(path: &str) -> Result<(String, String)> {
     Ok((owner.to_string(), repo.to_string()))
 }
 
-fn default_sigil(provider: &str) -> &str {
-    match provider {
-        "github" => "GH#",
-        "gitlab" => "GL#",
-        "gitea" => "G#",
-        "tangled" => "T#",
-        _ => "#",
-    }
+fn default_sigils(provider: &str) -> BTreeMap<String, String> {
+    let (issue, review) = match provider {
+        "github" => ("GH#", "GH#"),
+        "gitlab" => ("GL#", "GL!"),
+        "gitea" => ("GT#", "GT!"),
+        "tangled" => ("T#", "T!"),
+        _ => ("#", "!"),
+    };
+    BTreeMap::from([
+        ("issue".to_string(), issue.to_string()),
+        ("review".to_string(), review.to_string()),
+    ])
 }
 
 /// Rebuild a tree chain from the leaf upward, replacing the entry at the
@@ -415,9 +416,8 @@ impl Executor {
                     provider,
                     owner,
                     repo,
-                    sigil,
                 } => {
-                    self.config_add(provider, owner, repo, sigil.as_deref())?;
+                    self.config_add(provider, owner, repo)?;
                     if !cli.json {
                         println!("added {provider}/{owner}/{repo}");
                     }
@@ -432,9 +432,17 @@ impl Executor {
                         );
                     } else {
                         for entry in &entries {
+                            let sigils: Vec<String> = entry
+                                .sigils
+                                .iter()
+                                .map(|(k, v)| format!("{k}={v}"))
+                                .collect();
                             println!(
-                                "{}/{}/{}  sigil={}",
-                                entry.provider, entry.owner, entry.repo, entry.sigil
+                                "{}/{}/{}  {}",
+                                entry.provider,
+                                entry.owner,
+                                entry.repo,
+                                sigils.join(" "),
                             );
                         }
                     }

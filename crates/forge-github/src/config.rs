@@ -1,5 +1,7 @@
 //! GitHub sync configuration stored in `refs/forge/config`.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use git_forge::refs;
 use git2::{ErrorCode, ObjectType, Repository};
@@ -10,8 +12,8 @@ pub struct GitHubSyncConfig {
     pub owner: String,
     /// GitHub repository name.
     pub repo: String,
-    /// Sigil prefix used for cross-references (default `"GH#"`).
-    pub sigil: String,
+    /// Entity kind → sigil prefix (e.g. `"issue"` → `"GH#"`).
+    pub sigils: BTreeMap<String, String>,
     /// Personal access token; falls back to `GITHUB_TOKEN` env var when `None`.
     pub token: Option<String>,
 }
@@ -71,13 +73,12 @@ pub fn read_github_config(
     owner: &str,
     repo_name: &str,
 ) -> Result<GitHubSyncConfig> {
-    let sigil =
-        refs::read_config_blob(repo, &format!("provider/github/{owner}/{repo_name}/sigil"))?
-            .unwrap_or_else(|| "GH#".to_string());
+    let sigil_path = format!("provider/github/{owner}/{repo_name}/sigil");
+    let sigils = refs::read_config_subtree(repo, &sigil_path)?;
     Ok(GitHubSyncConfig {
         owner: owner.to_string(),
         repo: repo_name.to_string(),
-        sigil,
+        sigils,
         token: None,
     })
 }
@@ -87,6 +88,9 @@ pub fn read_github_config(
 /// # Errors
 /// Returns an error if a git operation fails.
 pub fn write_github_config(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<()> {
-    let path = format!("provider/github/{}/{}/sigil", cfg.owner, cfg.repo);
-    Ok(refs::write_config_blob(repo, &path, &cfg.sigil)?)
+    let prefix = format!("provider/github/{}/{}", cfg.owner, cfg.repo);
+    for (entity, sigil) in &cfg.sigils {
+        refs::write_config_blob(repo, &format!("{prefix}/sigil/{entity}"), sigil)?;
+    }
+    Ok(())
 }
