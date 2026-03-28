@@ -500,7 +500,8 @@ impl Executor {
                             facet_json::to_string_pretty(&issues).expect("serialize")
                         );
                     } else {
-                        print_issue_list(&issues);
+                        let color = std::io::stdout().is_terminal();
+                        print_issue_list(&issues, state.as_ref(), color);
                     }
                 }
 
@@ -623,8 +624,13 @@ fn parse_display_id(id: &str) -> (&str, u64) {
     (prefix, num)
 }
 
-fn print_issue_list(issues: &[Issue]) {
+fn print_issue_list(issues: &[Issue], filter: Option<&IssueState>, color: bool) {
     use comfy_table::{Cell, Table};
+
+    if issues.is_empty() {
+        println!("No issues found.");
+        return;
+    }
 
     let mut sorted: Vec<&Issue> = issues.iter().collect();
     sorted.sort_by(|a, b| {
@@ -633,7 +639,13 @@ fn print_issue_list(issues: &[Issue]) {
         sa.cmp(sb).then(na.cmp(&nb))
     });
 
-    // Determine zero-pad width per sigil prefix.
+    // Summary line.
+    match filter {
+        Some(s) => println!("Showing {} {} issues\n", sorted.len(), s.as_str()),
+        None => println!("Showing {} issues\n", sorted.len()),
+    }
+
+    // Determine zero-pad width from the largest number.
     let max_num: u64 = sorted
         .iter()
         .filter_map(|i| i.display_id.as_deref())
@@ -644,22 +656,48 @@ fn print_issue_list(issues: &[Issue]) {
 
     let mut table = Table::new();
     table.load_preset(comfy_table::presets::NOTHING);
-    table.set_header(vec![
-        Cell::new("ID"),
-        Cell::new("Title"),
-        Cell::new("State"),
-    ]);
+
     for issue in sorted {
-        let id_str = if let Some(id) = issue.display_id.as_deref() {
-            let (prefix, num) = parse_display_id(id);
-            format!("{prefix}{num:0>pad$}")
+        let (id_str, labels_str) = if color {
+            let state_color = match issue.state {
+                IssueState::Open => "\x1b[32m",   // green
+                IssueState::Closed => "\x1b[35m", // magenta
+            };
+            let reset = "\x1b[0m";
+            let dim = "\x1b[2m";
+            let bold = "\x1b[1m";
+
+            let id = if let Some(id) = issue.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{state_color}{dim}{prefix}{reset}{state_color}{bold}{num:0>pad$}{reset}")
+            } else {
+                format!("{dim}{}{reset}", &issue.oid[..8])
+            };
+
+            let labels = issue
+                .labels
+                .iter()
+                .map(|l| format!("{dim}{l}{reset}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            (id, labels)
         } else {
-            issue.oid[..8].to_string()
+            let id = if let Some(id) = issue.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{prefix}{num:0>pad$}")
+            } else {
+                issue.oid[..8].to_string()
+            };
+
+            let labels = issue.labels.join(", ");
+            (id, labels)
         };
+
         table.add_row(vec![
             Cell::new(format!("#{id_str}")),
             Cell::new(&issue.title),
-            Cell::new(issue.state.as_str()),
+            Cell::new(labels_str),
         ]);
     }
     println!("{table}");
