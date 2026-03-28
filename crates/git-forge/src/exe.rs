@@ -515,8 +515,11 @@ impl Executor {
                         })
                         .transpose()?
                         .unwrap_or_default();
-                    let platforms: Vec<String> =
-                        platform.as_deref().map(&split).unwrap_or_default();
+                    let platforms: Vec<String> = platform
+                        .as_deref()
+                        .filter(|s| !s.eq_ignore_ascii_case("all"))
+                        .map(&split)
+                        .unwrap_or_default();
                     let ids: Vec<String> = id.as_deref().map(split).unwrap_or_default();
 
                     let mut issues = if states.len() == 1 {
