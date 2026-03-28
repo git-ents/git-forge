@@ -285,11 +285,35 @@ fn parse_remote_url(url: &str) -> Result<(String, String, String)> {
 }
 
 fn host_to_provider(host: &str) -> Result<String> {
-    match host {
-        "github.com" => Ok("github".to_string()),
-        other => Err(Error::Config(format!(
-            "unrecognized host: {other} (use `forge config add` for manual setup)"
-        ))),
+    // Strip the TLD (last dot-separated segment) to get the meaningful host portion.
+    let host_without_tld = match host.rsplit_once('.') {
+        Some((prefix, _tld)) => prefix,
+        None => host, // no dot at all, treat the whole thing as the prefix
+    };
+    if host_without_tld.is_empty() {
+        return Err(Error::Config(format!(
+            "unrecognized host: '{host}' (use `forge config add` for manual setup)"
+        )));
+    }
+
+    if host.contains("github") {
+        Ok("github".to_string())
+    } else if host.contains("gitlab") {
+        Err(Error::Config(format!(
+            "unrecognized host: '{host}' (GitLab is not yet supported; use `forge config add` for manual setup)"
+        )))
+    } else if host.contains("gitea") {
+        Err(Error::Config(format!(
+            "unrecognized host: '{host}' (Gitea is not yet supported; use `forge config add` for manual setup)"
+        )))
+    } else if host.contains("tangled") {
+        Err(Error::Config(format!(
+            "unrecognized host: '{host}' (Tangled is not yet supported, but we're glad you're in the Atmosphere; use `forge config add` for manual setup)"
+        )))
+    } else {
+        Err(Error::Config(format!(
+            "unrecognized host: '{host}' (use `forge config add` for manual setup)"
+        )))
     }
 }
 
@@ -304,6 +328,9 @@ fn parse_owner_repo(path: &str) -> Result<(String, String)> {
 fn default_sigil(provider: &str) -> &str {
     match provider {
         "github" => "GH#",
+        "gitlab" => "GL#",
+        "gitea" => "G#",
+        "tangled" => "T#",
         _ => "#",
     }
 }
@@ -316,22 +343,23 @@ fn rebuild_tree_upward(
     segments: &[&str],
     new_oid: git2::Oid,
 ) -> Result<git2::Oid> {
-    if segments.is_empty() {
-        return Ok(new_oid);
+    // Walk down, collecting (segment, parent_tree_oid) pairs.
+    let mut pairs: Vec<(&str, git2::Oid)> = Vec::new();
+    let mut current_oid = root.id();
+    for &seg in segments {
+        pairs.push((seg, current_oid));
+        let tree = repo.find_tree(current_oid)?;
+        current_oid = tree
+            .get_name(seg)
+            .ok_or_else(|| Error::Config(format!("missing tree entry: {seg}")))?
+            .id();
     }
 
-    // Walk down to collect trees for each segment except the last.
-    let mut trees = vec![root.clone()];
-    for &seg in &segments[..segments.len() - 1] {
-        let oid = trees.last().unwrap().get_name(seg).unwrap().id();
-        trees.push(repo.find_tree(oid)?);
-    }
-
-    // Rebuild bottom-up.
+    // Fold bottom-up: each parent re-inserts its child.
     let mut child_oid = new_oid;
-    for (i, seg) in segments.iter().enumerate().rev() {
-        let base = &trees[i];
-        let mut builder = repo.treebuilder(Some(base))?;
+    for (seg, parent_oid) in pairs.into_iter().rev() {
+        let parent = repo.find_tree(parent_oid)?;
+        let mut builder = repo.treebuilder(Some(&parent))?;
         builder.insert(seg, child_oid, 0o040_000)?;
         child_oid = builder.write()?;
     }
