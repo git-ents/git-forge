@@ -492,15 +492,78 @@ impl Executor {
                     print_issue(&issue, cli.json);
                 }
 
-                IssueCommand::List { state } => {
-                    let issues = self.list_issues(state.as_ref())?;
+                IssueCommand::List {
+                    state,
+                    platform,
+                    id,
+                } => {
+                    let split = |s: &str| -> Vec<String> {
+                        s.split(',')
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .collect()
+                    };
+
+                    let states: Vec<IssueState> = state
+                        .as_deref()
+                        .filter(|s| !s.eq_ignore_ascii_case("all"))
+                        .map(|s| {
+                            split(s)
+                                .iter()
+                                .map(|v| v.parse())
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    let platforms: Vec<String> = platform
+                        .as_deref()
+                        .filter(|s| !s.eq_ignore_ascii_case("all"))
+                        .map(&split)
+                        .unwrap_or_default();
+                    let ids: Vec<String> = id.as_deref().map(split).unwrap_or_default();
+
+                    let mut issues = if states.len() == 1 {
+                        self.list_issues(Some(&states[0]))?
+                    } else {
+                        let mut all = self.list_issues(None)?;
+                        if !states.is_empty() {
+                            all.retain(|i| states.contains(&i.state));
+                        }
+                        all
+                    };
+
+                    if !platforms.is_empty() {
+                        issues.retain(|i| {
+                            i.display_id.as_deref().is_some_and(|id| {
+                                platforms.iter().any(|pfx| id.starts_with(pfx.as_str()))
+                            })
+                        });
+                    }
+
+                    if !ids.is_empty() {
+                        issues.retain(|i| {
+                            ids.iter().any(|needle| {
+                                i.display_id
+                                    .as_deref()
+                                    .is_some_and(|id| id == needle.as_str())
+                                    || i.oid.starts_with(needle.as_str())
+                            })
+                        });
+                    }
+
                     if cli.json {
                         println!(
                             "{}",
                             facet_json::to_string_pretty(&issues).expect("serialize")
                         );
                     } else {
-                        print_issue_list(&issues);
+                        let color = std::io::stdout().is_terminal();
+                        let single_state = if states.len() == 1 {
+                            Some(&states[0])
+                        } else {
+                            None
+                        };
+                        print_issue_list(&issues, single_state, color);
                     }
                 }
 
@@ -615,9 +678,89 @@ fn print_issue(issue: &Issue, json: bool) {
     }
 }
 
-fn print_issue_list(issues: &[Issue]) {
-    for issue in issues {
-        let id = issue.display_id.as_deref().unwrap_or(&issue.oid);
-        println!("#{id:<10}  {}  [{}]", issue.title, issue.state.as_str());
+/// Extract `(sigil, number)` from a display ID like `"GH#4"` → `("GH#", 4)`.
+fn parse_display_id(id: &str) -> (&str, u64) {
+    let num_start = id.find(|c: char| c.is_ascii_digit()).unwrap_or(id.len());
+    let (prefix, num_str) = id.split_at(num_start);
+    let num = num_str.parse().unwrap_or(u64::MAX);
+    (prefix, num)
+}
+
+fn print_issue_list(issues: &[Issue], filter: Option<&IssueState>, color: bool) {
+    use comfy_table::{Cell, Table};
+
+    if issues.is_empty() {
+        println!("No issues found.");
+        return;
     }
+
+    let mut sorted: Vec<&Issue> = issues.iter().collect();
+    sorted.sort_by(|a, b| {
+        let (sa, na) = parse_display_id(a.display_id.as_deref().unwrap_or(""));
+        let (sb, nb) = parse_display_id(b.display_id.as_deref().unwrap_or(""));
+        sa.cmp(sb).then(na.cmp(&nb))
+    });
+
+    // Summary line.
+    match filter {
+        Some(s) => println!("Showing {} {} issues\n", sorted.len(), s.as_str()),
+        None => println!("Showing {} issues\n", sorted.len()),
+    }
+
+    // Determine zero-pad width from the largest number.
+    let max_num: u64 = sorted
+        .iter()
+        .filter_map(|i| i.display_id.as_deref())
+        .map(|id| parse_display_id(id).1)
+        .max()
+        .unwrap_or(0);
+    let pad = max_num.max(1).ilog10() as usize + 1;
+
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::NOTHING);
+
+    for issue in sorted {
+        let (id_str, labels_str) = if color {
+            let state_color = match issue.state {
+                IssueState::Open => "\x1b[32m",   // green
+                IssueState::Closed => "\x1b[35m", // magenta
+            };
+            let reset = "\x1b[0m";
+            let dim = "\x1b[2m";
+            let bold = "\x1b[1m";
+
+            let id = if let Some(id) = issue.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{dim}{prefix}{reset}{state_color}{bold}{num:0>pad$}{reset}")
+            } else {
+                format!("{dim}{}{reset}", &issue.oid[..8])
+            };
+
+            let labels = issue
+                .labels
+                .iter()
+                .map(|l| format!("{dim}{l}{reset}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            (id, labels)
+        } else {
+            let id = if let Some(id) = issue.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{prefix}{num:0>pad$}")
+            } else {
+                issue.oid[..8].to_string()
+            };
+
+            let labels = issue.labels.join(", ");
+            (id, labels)
+        };
+
+        table.add_row(vec![
+            Cell::new(&id_str),
+            Cell::new(&issue.title),
+            Cell::new(labels_str),
+        ]);
+    }
+    println!("{table}");
 }
