@@ -4,7 +4,7 @@ use facet::Facet;
 use git_ledger::{IdStrategy, Ledger, LedgerEntry, Mutation};
 use serde::Serialize;
 
-use crate::index::{index_upsert, read_index, resolve_oid};
+use crate::index::{display_id_for_oid, index_upsert, read_index, resolve_oid};
 use crate::refs::{ISSUE_INDEX, ISSUE_PREFIX};
 use crate::{Error, Result, Store};
 
@@ -84,11 +84,6 @@ fn issue_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<I
         }
     }
 
-    let display_id = match display_id.as_deref() {
-        Some("pending") | None => None,
-        Some(_) => display_id,
-    };
-
     Ok(Issue {
         oid: entry.id.clone(),
         display_id,
@@ -139,8 +134,6 @@ impl Store<'_> {
             "create issue",
             None,
         )?;
-
-        index_upsert(self.repo, ISSUE_INDEX, &[(&entry.id, "pending")])?;
 
         Ok(Issue {
             oid: entry.id,
@@ -205,11 +198,7 @@ impl Store<'_> {
             Some(author),
         )?;
 
-        index_upsert(
-            self.repo,
-            ISSUE_INDEX,
-            &[(&entry.id, &entry.id), (display_id, &entry.id)],
-        )?;
+        index_upsert(self.repo, ISSUE_INDEX, &[(display_id, &entry.id)])?;
 
         Ok(Issue {
             oid: entry.id.clone(),
@@ -234,10 +223,11 @@ impl Store<'_> {
     /// Returns [`Error::NotFound`] if the issue does not exist, or a git error on failure.
     pub fn get_issue(&self, oid_or_id: &str) -> Result<Issue> {
         let index = read_index(self.repo, ISSUE_INDEX)?;
-        let oid = resolve_oid(index.as_ref(), oid_or_id)?;
+        let known_oids = self.repo.list(ISSUE_PREFIX)?;
+        let oid = resolve_oid(index.as_ref(), &known_oids, oid_or_id)?;
         let ref_name = format!("{ISSUE_PREFIX}{oid}");
         let entry = self.repo.read(&ref_name)?;
-        let display_id = index.as_ref().and_then(|m| m.get(&oid)).cloned();
+        let display_id = display_id_for_oid(index.as_ref(), &oid);
         issue_from_entry(&entry, display_id)
     }
 
@@ -252,7 +242,7 @@ impl Store<'_> {
             .map(|oid| {
                 let ref_name = format!("{ISSUE_PREFIX}{oid}");
                 let entry = self.repo.read(&ref_name)?;
-                let display_id = index.as_ref().and_then(|m| m.get(&oid)).cloned();
+                let display_id = display_id_for_oid(index.as_ref(), &oid);
                 issue_from_entry(&entry, display_id)
             })
             .collect()
@@ -287,7 +277,8 @@ impl Store<'_> {
         remove_assignees: &[&str],
     ) -> Result<Issue> {
         let index = read_index(self.repo, ISSUE_INDEX)?;
-        let oid = resolve_oid(index.as_ref(), oid_or_id)?;
+        let known_oids = self.repo.list(ISSUE_PREFIX)?;
+        let oid = resolve_oid(index.as_ref(), &known_oids, oid_or_id)?;
         let ref_name = format!("{ISSUE_PREFIX}{oid}");
 
         let add_label_keys: Vec<String> =
@@ -330,7 +321,7 @@ impl Store<'_> {
         }
 
         let entry = self.repo.update(&ref_name, &mutations, "update issue")?;
-        let display_id = index.as_ref().and_then(|m| m.get(&oid)).cloned();
+        let display_id = display_id_for_oid(index.as_ref(), &oid);
         issue_from_entry(&entry, display_id)
     }
 }

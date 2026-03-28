@@ -70,35 +70,38 @@ pub(crate) fn index_upsert(
 /// Resolve a user-supplied `oid_or_id` string to a full 40-char OID string.
 ///
 /// Resolution order:
-/// 1. All-digit string → display ID lookup.
-/// 2. 40-char hex → exact OID key lookup.
-/// 3. Shorter hex string → OID prefix match.
-/// 4. Sigil-prefixed ID (e.g. `"GH1"`) or alias → direct key lookup.
+/// 1. Index alias lookup (e.g. `"GH#1"`, `"auth-bug"`).
+/// 2. 40-char hex → exact match in `known_oids`.
+/// 3. Shorter hex → OID prefix match in `known_oids`.
+///
+/// `known_oids` is the list of all entity OIDs (from `Ledger::list`).
 pub(crate) fn resolve_oid(
     index: Option<&HashMap<String, String>>,
+    known_oids: &[String],
     oid_or_id: &str,
 ) -> Result<String> {
-    let index = index.ok_or_else(|| Error::NotFound(oid_or_id.to_string()))?;
     let is_hex = |s: &str| s.chars().all(|c| c.is_ascii_hexdigit());
 
-    // All digits → display ID
-    if !oid_or_id.is_empty() && oid_or_id.chars().all(|c| c.is_ascii_digit()) {
-        return index
-            .get(oid_or_id)
-            .cloned()
-            .ok_or_else(|| Error::NotFound(oid_or_id.to_string()));
+    // Index alias lookup (sigil-prefixed ID, user alias, etc.)
+    if let Some(index) = index
+        && let Some(val) = index.get(oid_or_id)
+        && val.len() == 40
+        && is_hex(val)
+    {
+        return Ok(val.clone());
     }
 
-    // 40-char hex → exact OID key
-    if oid_or_id.len() == 40 && is_hex(oid_or_id) && index.contains_key(oid_or_id) {
-        return Ok(oid_or_id.to_string());
-    }
+    // Hex string → match against known OIDs
+    if is_hex(oid_or_id) && !oid_or_id.is_empty() {
+        // Exact 40-char match
+        if oid_or_id.len() == 40 && known_oids.iter().any(|o| o == oid_or_id) {
+            return Ok(oid_or_id.to_string());
+        }
 
-    // Shorter hex → prefix match on OID keys
-    if is_hex(oid_or_id) {
-        let mut matches: Vec<&String> = index
-            .keys()
-            .filter(|k| k.len() == 40 && k.starts_with(oid_or_id))
+        // Prefix match
+        let mut matches: Vec<&String> = known_oids
+            .iter()
+            .filter(|o| o.starts_with(oid_or_id))
             .collect();
         matches.sort();
         return match matches.len() {
@@ -108,15 +111,17 @@ pub(crate) fn resolve_oid(
         };
     }
 
-    // Sigil-prefixed ID or alias
-    if let Some(val) = index.get(oid_or_id) {
-        if val.len() == 40 && is_hex(val) {
-            return Ok(val.clone());
-        }
-        if let Some(oid) = index.get(val.as_str()) {
-            return Ok(oid.clone());
-        }
-    }
-
     Err(Error::NotFound(oid_or_id.to_string()))
+}
+
+/// Reverse-lookup: find the display ID that maps to a given OID.
+pub(crate) fn display_id_for_oid(
+    index: Option<&HashMap<String, String>>,
+    oid: &str,
+) -> Option<String> {
+    index?.iter().find_map(
+        |(key, val)| {
+            if val == oid { Some(key.clone()) } else { None }
+        },
+    )
 }

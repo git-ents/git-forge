@@ -29,71 +29,56 @@ No UUIDs.
 
 ### Index
 
-The index ref maps display IDs to OIDs and vice versa:
+The index ref maps display IDs to OIDs:
 
 ```text
 refs/forge/meta/index/issues → commit → tree
-  3         → blob "ab3f1c9e..."       # display ID → OID (local)
-  ab3f1c9e  → blob "3"                # OID → display ID
-  ff02c817  → blob "pending"          # staged, not yet synced
-  auth-bug  → blob "3"                # user alias → display ID
-  GH1       → blob "cc91d4f2..."      # GitHub issue #1 → OID (sigil-prefixed)
-  cc91d4f2  → blob "GH1"             # OID → display ID (GitHub-namespaced)
+  GH#1      → blob "cc91d4f2..."      # GitHub issue #1 → OID (sigil-prefixed)
+  auth-bug  → blob "cc91d4f2..."      # user alias → OID
 ```
 
-Display IDs are strings: pure-numeric for local entities (`"3"`), sigil-prefixed for remote-sourced entities (`"GH1"`).
-The sigil is configurable (see Phase 1 Step 1.6); `"GH"` is the default for GitHub.
+Display IDs are sigil-prefixed strings assigned by external sources (e.g. `"GH#1"` for GitHub).
+The sigil is configurable (see Phase 1 Step 1.6); `"GH#"` is the default for GitHub.
+Locally-created issues have no display ID — they are addressable by OID prefix until synced to an external source.
 
 ### Resolution
 
 Users reference entities with the `#` sigil.
-The input after `#` is resolved through the index:
+The input after `#` is resolved:
 
-1. All digits → display ID lookup (e.g. `#3`).
-2. Otherwise → OID prefix or alias lookup (e.g. `#ab3f`, `#auth-bug`, `#GH1`).
+1. OID prefix match against entity refs (e.g. `#ab3f` → `refs/forge/issues/ab3f...`).
+2. Index alias lookup (e.g. `#GH#1`, `#auth-bug`).
 3. OID prefixes work like git SHAs — shortest unambiguous prefix accepted.
-
-Both staged and synced entities resolve through the same mechanism.
-GitHub-imported entities resolve via the sigil-prefixed display ID (e.g. `#GH1`).
 
 ### Entity Creation
 
-Creation always writes a local entity ref immediately.
-Display ID assignment is deferred to sync.
+Creation writes a local entity ref immediately.
+No index entry is written — the issue is addressable by OID prefix.
 
 ```text
 $ forge issue new "Fix auth bug"
-Created issue #ab3f1c9 (pending sync)
+Created issue ab3f1c9
 
 $ forge issue show #ab3f
-# works immediately — indexed at creation time
+# works immediately via OID prefix
 
-$ forge sync
-#ab3f1c9 → #3
+$ forge github sync
+ab3f1c9 → GH#3
 
-$ forge issue show #3     # works
-$ forge issue show #ab3f  # still works
+$ forge issue show #GH#3   # works
+$ forge issue show #ab3f   # still works
 ```
 
 ### Sync and ID Assignment
 
-`forge sync` is a git-only operation — it pushes/fetches entity refs and index refs.
-It never talks to the GitHub API.
-
-**Remote exists:**
-
-1. Push entity refs to remote.
-2. Server (trusted committer) assigns display IDs and writes the index.
-3. Client fetches the updated index.
-
-**No remote (air-gapped / local-only):**
-
-1. Client assigns display IDs locally and writes the index itself.
-2. If a remote is added later, the first sync pushes everything.
-   Server may remap display IDs.
-
-Display IDs are convenient but unstable until synced.
+Display IDs are assigned by external sources during sync.
 OID references are always stable.
+
+**GitHub sync:** `forge github sync` pushes local issues to GitHub and imports remote issues.
+Each exported issue gets a `GH#<n>` display ID written to the index.
+
+**No external source (local-only):** Issues are addressed by OID prefix only.
+If an external source is added later, the first sync assigns display IDs.
 
 ### Write Protection
 
@@ -555,19 +540,17 @@ The commit timestamp should use `created_at` from the GitHub payload, not the cu
 
 **Functions**:
 
-- `export_issue(repo: &Repository, cfg: &GitHubSyncConfig, forge_oid: &str) -> Result<u64>` — async
-  1. Check sync state: if `lookup_by_forge_oid(state, "issues", forge_oid)` returns `Some` → already exported, return the GitHub number
-  2. Read issue from `refs/forge/issue/<forge_oid>`
-  3. Call `create_github_issue(client, owner, repo, title, body, labels, assignees)`
-  4. Get back GitHub issue number `n`
-  5. Write `issues/<n> → <forge_oid>` to sync state
-  6. Write `<sigil><n> → <forge_oid>` and `<forge_oid> → <sigil><n>` aliases to index
-  7. Return `n`
-
-- `export_pending_issues(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<SyncReport>` — async
-  1. Scan index for entries with value `"pending"`
-  2. For each pending OID: call `export_issue`
-  3. On success, the pending entry is replaced by the `<sigil><n>` alias
+- `export_issues(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<SyncReport>` — async
+  1. Load sync state
+  2. List all issue refs (`refs/forge/issues/*`)
+  3. For each OID not in sync state (via `lookup_by_forge_oid`): a.
+     Read issue from store b.
+     Call `create_github_issue(client, owner, repo, title, body, labels, assignees)` c.
+     Get back GitHub issue number `n` d.
+     Write `issues/<n> → <forge_oid>` to sync state e.
+     Write `<sigil><n> → <forge_oid>` to the index
+  4. Save sync state
+  5. Return report
 
 - `sync_issue_updates(repo: &Repository, cfg: &GitHubSyncConfig) -> Result<SyncReport>` — async
   1. For each entity in sync state: compare forge entity tip commit with a stored "last synced" marker
