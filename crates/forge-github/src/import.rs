@@ -4,22 +4,10 @@ use anyhow::{Context, Result};
 use git_forge::Store;
 use git2::Repository;
 
+use crate::SyncReport;
 use crate::client::{fetch_issues, make_client};
 use crate::config::GitHubSyncConfig;
 use crate::state::{load_sync_state, save_sync_state};
-
-/// Summary of a single import run.
-#[derive(Debug, Default)]
-pub struct SyncReport {
-    /// Number of entities newly imported.
-    pub imported: usize,
-    /// Number of entities exported (unused in import-only runs).
-    pub exported: usize,
-    /// Number of entities skipped (already present in sync state).
-    pub skipped: usize,
-    /// Number of entities that failed to import.
-    pub failed: usize,
-}
 
 /// Import all GitHub issues from `cfg.owner`/`cfg.repo` into the local forge store.
 ///

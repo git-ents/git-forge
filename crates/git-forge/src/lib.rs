@@ -30,6 +30,16 @@ impl<'a> Store<'a> {
     pub fn new(repo: &'a Repository) -> Self {
         Self { repo }
     }
+
+    /// Write a display ID alias into a ledger entity index.
+    ///
+    /// `index_ref` is the ref that backs the index (e.g. [`refs::ISSUE_INDEX`]).
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn write_display_id(&self, index_ref: &str, display_id: &str, oid: &str) -> Result<()> {
+        index::index_upsert(self.repo, index_ref, &[(display_id, oid)])
+    }
 }
 
 #[cfg(test)]
