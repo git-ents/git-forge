@@ -719,7 +719,7 @@ fn print_issue_list(issues: &[Issue], filter: Option<&IssueState>, color: bool) 
         };
 
         table.add_row(vec![
-            Cell::new(format!("#{id_str}")),
+            Cell::new(&id_str),
             Cell::new(&issue.title),
             Cell::new(labels_str),
         ]);
