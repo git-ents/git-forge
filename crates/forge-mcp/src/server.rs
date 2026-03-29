@@ -3,15 +3,22 @@
 use std::path::PathBuf;
 
 use git2::Repository;
+use rmcp::RoleServer;
+use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::{ServerHandler, tool_handler};
+use rmcp::model::{
+    GetPromptRequestParams, GetPromptResult, ListPromptsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ServerHandler, prompt_handler, tool_handler};
 
 /// MCP server that exposes forge metadata from a Git repository.
 #[derive(Debug, Clone)]
 pub struct ForgeMcpServer {
     repo_path: PathBuf,
     pub(crate) tool_router: ToolRouter<Self>,
+    pub(crate) prompt_router: PromptRouter<Self>,
 }
 
 impl ForgeMcpServer {
@@ -25,6 +32,7 @@ impl ForgeMcpServer {
         Ok(Self {
             repo_path,
             tool_router: Self::issue_router(),
+            prompt_router: Self::prompt_router(),
         })
     }
 
@@ -34,8 +42,14 @@ impl ForgeMcpServer {
 }
 
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for ForgeMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
     }
 }

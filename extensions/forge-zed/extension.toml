@@ -1,0 +1,8 @@
+id = "forge"
+name = "Forge"
+version = "0.0.0"
+schema_version = 1
+authors = ["Joey Carpinelli"]
+description = "Git Forge integration for Zed"
+
+[context_servers.forge-mcp]
