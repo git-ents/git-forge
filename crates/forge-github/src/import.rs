@@ -1,5 +1,7 @@
 //! GitHub → forge import functions.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use git_chain::Chain;
 use git_forge::Store;
@@ -72,20 +74,18 @@ pub async fn import_issues(
         }
     }
 
-    // Save issue state before syncing comments so that newly imported issues
-    // are visible to import_issue_comments when it loads state from disk.
-    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
-
     for issue in &issues {
-        let state_key = format!("issues/{}", issue.number);
-        if state.contains_key(&state_key) {
-            let comment_report = import_issue_comments(repo, cfg, client, issue.number).await?;
+        if state.contains_key(&format!("issues/{}", issue.number)) {
+            let comment_report =
+                import_issue_comments_with_state(repo, cfg, client, issue.number, &mut state)
+                    .await?;
             report.imported += comment_report.imported;
             report.skipped += comment_report.skipped;
             report.failed += comment_report.failed;
         }
     }
 
+    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
     Ok(report)
 }
 
@@ -100,8 +100,20 @@ pub async fn import_issue_comments(
     github_number: u64,
 ) -> Result<SyncReport> {
     let mut state = load_sync_state(repo, &cfg.owner, &cfg.repo)?;
+    let report =
+        import_issue_comments_with_state(repo, cfg, client, github_number, &mut state).await?;
+    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
+    Ok(report)
+}
 
-    let forge_issue_oid = match lookup_by_github_id(&state, "issues", github_number) {
+async fn import_issue_comments_with_state(
+    repo: &Repository,
+    cfg: &GitHubSyncConfig,
+    client: &impl GitHubClient,
+    github_number: u64,
+    state: &mut HashMap<String, String>,
+) -> Result<SyncReport> {
+    let forge_issue_oid = match lookup_by_github_id(state, "issues", github_number) {
         Some(oid) => oid.to_string(),
         None => return Ok(SyncReport::default()),
     };
@@ -142,6 +154,5 @@ pub async fn import_issue_comments(
         }
     }
 
-    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
     Ok(report)
 }

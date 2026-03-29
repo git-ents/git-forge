@@ -1,5 +1,7 @@
 //! forge → GitHub export functions.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use git_forge::Store;
 use git_forge::comment::{issue_comment_ref, list_comments};
@@ -70,18 +72,15 @@ pub async fn export_issues(
         }
     }
 
-    // Save issue state before exporting comments so newly exported issues
-    // are visible to export_issue_comments.
-    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
-
-    let all_issues = store.list_issues()?;
-    for issue in &all_issues {
-        let comment_report = export_issue_comments(repo, cfg, client, &issue.oid).await?;
+    for issue in &issues {
+        let comment_report =
+            export_issue_comments_with_state(repo, cfg, client, &issue.oid, &mut state).await?;
         report.exported += comment_report.exported;
         report.skipped += comment_report.skipped;
         report.failed += comment_report.failed;
     }
 
+    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
     Ok(report)
 }
 
@@ -98,20 +97,30 @@ pub async fn export_issue_comments(
     forge_issue_oid: &str,
 ) -> Result<SyncReport> {
     let mut state = load_sync_state(repo, &cfg.owner, &cfg.repo)?;
+    let report =
+        export_issue_comments_with_state(repo, cfg, client, forge_issue_oid, &mut state).await?;
+    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
+    Ok(report)
+}
 
-    let Some(github_number) = lookup_by_forge_oid(&state, "issues", forge_issue_oid) else {
+async fn export_issue_comments_with_state(
+    repo: &Repository,
+    cfg: &GitHubSyncConfig,
+    client: &impl GitHubClient,
+    forge_issue_oid: &str,
+    state: &mut HashMap<String, String>,
+) -> Result<SyncReport> {
+    let Some(github_number) = lookup_by_forge_oid(state, "issues", forge_issue_oid) else {
         return Ok(SyncReport::default());
     };
 
     let ref_name = issue_comment_ref(forge_issue_oid);
-    let Ok(comments) = list_comments(repo, &ref_name) else {
-        return Ok(SyncReport::default());
-    };
+    let comments = list_comments(repo, &ref_name)?;
 
     let mut report = SyncReport::default();
 
     for comment in &comments {
-        if lookup_by_forge_oid(&state, "comments", &comment.oid).is_some() {
+        if lookup_by_forge_oid(state, "comments", &comment.oid).is_some() {
             report.skipped += 1;
             continue;
         }
@@ -134,6 +143,5 @@ pub async fn export_issue_comments(
         }
     }
 
-    save_sync_state(repo, &cfg.owner, &cfg.repo, &state)?;
     Ok(report)
 }
