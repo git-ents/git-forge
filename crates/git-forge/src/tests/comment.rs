@@ -66,55 +66,58 @@ fn parse_trailers_replaces() {
 }
 
 #[test]
-fn format_trailers_empty() {
-    let result = format_trailers(None, false, None);
-    assert!(result.is_empty());
-}
-
-#[test]
-fn format_trailers_resolved() {
-    let result = format_trailers(None, true, None);
-    assert_eq!(result, "Resolved: true");
-}
-
-#[test]
-fn format_trailers_replaces() {
-    let result = format_trailers(None, false, Some("abc123"));
-    assert_eq!(result, "Replaces: abc123");
-}
-
-#[test]
-fn format_trailers_object_anchor() {
+fn roundtrip_object_anchor_with_range() {
     let anchor = Anchor::Object {
         oid: "deadbeef".to_string(),
         range: Some("10-20".to_string()),
     };
-    let result = format_trailers(Some(&anchor), false, None);
-    assert!(result.contains("Anchor: deadbeef"));
-    assert!(result.contains("Anchor-Range: 10-20"));
+    let trailers = format_trailers(Some(&anchor), false, None);
+    let msg = format!("comment body\n\n{trailers}");
+    let (body, parsed) = parse_trailers(&msg);
+    assert_eq!(body, "comment body");
+    assert_eq!(parsed.get("Anchor").unwrap(), "deadbeef");
+    assert_eq!(parsed.get("Anchor-Range").unwrap(), "10-20");
+    assert!(!parsed.contains_key("Anchor-End"));
 }
 
 #[test]
-fn format_trailers_commit_range_anchor() {
+fn roundtrip_commit_range_anchor() {
     let anchor = Anchor::CommitRange {
         start: "aaa".to_string(),
         end: "bbb".to_string(),
     };
-    let result = format_trailers(Some(&anchor), false, None);
-    assert!(result.contains("Anchor: aaa"));
-    assert!(result.contains("Anchor-End: bbb"));
+    let trailers = format_trailers(Some(&anchor), false, None);
+    let msg = format!("comment body\n\n{trailers}");
+    let (body, parsed) = parse_trailers(&msg);
+    assert_eq!(body, "comment body");
+    assert_eq!(parsed.get("Anchor").unwrap(), "aaa");
+    assert_eq!(parsed.get("Anchor-End").unwrap(), "bbb");
+    assert!(!parsed.contains_key("Anchor-Range"));
 }
 
 #[test]
-fn format_trailers_combined() {
+fn roundtrip_all_trailers() {
     let anchor = Anchor::Object {
         oid: "deadbeef".to_string(),
-        range: None,
+        range: Some("5-10".to_string()),
     };
-    let result = format_trailers(Some(&anchor), true, Some("orig123"));
-    assert!(result.contains("Anchor: deadbeef"));
-    assert!(result.contains("Resolved: true"));
-    assert!(result.contains("Replaces: orig123"));
+    let trailers = format_trailers(Some(&anchor), true, Some("orig123"));
+    let msg = format!("multi-paragraph\n\nbody text\n\n{trailers}");
+    let (body, parsed) = parse_trailers(&msg);
+    assert_eq!(body, "multi-paragraph\n\nbody text");
+    assert_eq!(parsed.get("Anchor").unwrap(), "deadbeef");
+    assert_eq!(parsed.get("Anchor-Range").unwrap(), "5-10");
+    assert_eq!(parsed.get("Resolved").unwrap(), "true");
+    assert_eq!(parsed.get("Replaces").unwrap(), "orig123");
+}
+
+#[test]
+fn roundtrip_no_trailers() {
+    let trailers = format_trailers(None, false, None);
+    assert!(trailers.is_empty());
+    let (body, parsed) = parse_trailers("just a body");
+    assert_eq!(body, "just a body");
+    assert!(parsed.is_empty());
 }
 
 #[test]
@@ -126,14 +129,6 @@ fn parse_trailers_colon_in_value() {
 }
 
 #[test]
-fn parse_trailers_empty_body_with_double_newline() {
-    let msg = "\n\nResolved: true";
-    let (body, trailers) = parse_trailers(msg);
-    assert!(body.is_empty());
-    assert_eq!(trailers.get("Resolved").unwrap(), "true");
-}
-
-#[test]
 fn parse_trailers_multiple_paragraphs_body() {
     let msg = "first paragraph\n\nsecond paragraph\n\nAnchor: deadbeef";
     let (body, trailers) = parse_trailers(msg);
@@ -142,12 +137,15 @@ fn parse_trailers_multiple_paragraphs_body() {
 }
 
 #[test]
-fn format_trailers_object_anchor_no_range() {
+fn roundtrip_object_anchor_no_range() {
     let anchor = Anchor::Object {
         oid: "deadbeef".to_string(),
         range: None,
     };
-    let result = format_trailers(Some(&anchor), false, None);
-    assert_eq!(result, "Anchor: deadbeef");
-    assert!(!result.contains("Anchor-Range"));
+    let trailers = format_trailers(Some(&anchor), false, None);
+    let msg = format!("body\n\n{trailers}");
+    let (body, parsed) = parse_trailers(&msg);
+    assert_eq!(body, "body");
+    assert_eq!(parsed.get("Anchor").unwrap(), "deadbeef");
+    assert!(!parsed.contains_key("Anchor-Range"));
 }

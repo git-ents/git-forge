@@ -6,8 +6,7 @@ use tempfile::TempDir;
 
 use git_forge::Store;
 use git_forge::comment::{
-    Anchor, add_comment, add_reply, edit_comment, issue_comment_ref, list_comments,
-    resolve_comment, review_comment_ref,
+    Anchor, add_comment, add_reply, edit_comment, issue_comment_ref, list_comments, resolve_comment,
 };
 use git_forge::exe::Executor;
 
@@ -203,10 +202,22 @@ fn resolve_comment_with_message() {
 }
 
 #[test]
-fn review_comment_ref_format() {
-    let ref_name = review_comment_ref("abc123");
-    assert!(ref_name.starts_with("refs/forge/comments/review/"));
-    assert!(ref_name.ends_with("abc123"));
+fn deep_thread_reply_to_reply() {
+    let (_dir, repo) = test_repo();
+    let ref_name = issue_comment_ref("abc123");
+    let root = add_comment(&repo, &ref_name, "root", None).unwrap();
+    let child = add_reply(&repo, &ref_name, "child", &root.oid, None).unwrap();
+    let grandchild = add_reply(&repo, &ref_name, "grandchild", &child.oid, None).unwrap();
+    // unrelated top-level comment should not appear in the thread
+    add_comment(&repo, &ref_name, "unrelated", None).unwrap();
+
+    let thread = git_forge::comment::list_thread(&repo, &ref_name, &root.oid).unwrap();
+    let oids: Vec<&str> = thread.iter().map(|c| c.oid.as_str()).collect();
+    assert_eq!(thread.len(), 3);
+    assert!(oids.contains(&root.oid.as_str()));
+    assert!(oids.contains(&child.oid.as_str()));
+    assert!(oids.contains(&grandchild.oid.as_str()));
+    assert_eq!(grandchild.reply_to.as_deref(), Some(child.oid.as_str()));
 }
 
 #[test]

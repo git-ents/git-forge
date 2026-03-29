@@ -402,6 +402,26 @@ async fn standalone_export_issue_comments() {
 }
 
 #[tokio::test]
+async fn imported_comment_body_strips_github_id_trailer() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let mut comments_map = HashMap::new();
+    comments_map.insert(1u64, vec![gh_comment(10, "hello from github")]);
+    let client = CommentMockClient::new(vec![gh_issue(1, "Bug")], comments_map);
+
+    import_issues(&repo, &cfg, &client).await.unwrap();
+
+    let store = Store::new(&repo);
+    let issue = store.get_issue("GH#1").unwrap();
+    let ref_name = issue_comment_ref(&issue.oid);
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert_eq!(comments.len(), 1);
+    // The stored message includes "Github-Id: 10" as a trailer, but
+    // list_comments must strip it so consumers see only the original body.
+    assert_eq!(comments[0].body, "hello from github");
+}
+
+#[tokio::test]
 async fn standalone_export_comments_missing_issue_is_noop() {
     let (_dir, repo) = test_repo();
     let cfg = test_config();
