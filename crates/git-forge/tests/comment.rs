@@ -127,7 +127,7 @@ fn anchor_object_with_range() {
     let (_dir, repo) = test_repo();
     let ref_name = issue_comment_ref("abc123");
     let anchor = Anchor::Object {
-        oid: "deadbeef".to_string(),
+        oid: "asdfhjkl".to_string(),
         range: Some("10-20".to_string()),
     };
     let comment = add_comment(&repo, &ref_name, "line comment", Some(&anchor)).unwrap();
@@ -135,7 +135,7 @@ fn anchor_object_with_range() {
     let a = comment.anchor.as_ref().unwrap();
     match a {
         Anchor::Object { oid, range } => {
-            assert_eq!(oid, "deadbeef");
+            assert_eq!(oid, "asdfhjkl");
             assert_eq!(range.as_deref(), Some("10-20"));
         }
         Anchor::CommitRange { .. } => panic!("expected Object anchor"),
@@ -271,7 +271,7 @@ fn edit_preserves_anchor() {
     let (_dir, repo) = test_repo();
     let ref_name = issue_comment_ref("abc123");
     let anchor = Anchor::Object {
-        oid: "deadbeef".to_string(),
+        oid: "asdfhjkl".to_string(),
         range: Some("5-10".to_string()),
     };
     let original = add_comment(&repo, &ref_name, "original", Some(&anchor)).unwrap();
@@ -281,7 +281,7 @@ fn edit_preserves_anchor() {
     assert_eq!(edited.replaces.as_deref(), Some(original.oid.as_str()));
     match edited.anchor.as_ref().unwrap() {
         Anchor::Object { oid, range } => {
-            assert_eq!(oid, "deadbeef");
+            assert_eq!(oid, "asdfhjkl");
             assert_eq!(range.as_deref(), Some("5-10"));
         }
         Anchor::CommitRange { .. } => panic!("expected Object anchor"),
