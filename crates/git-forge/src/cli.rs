@@ -29,6 +29,12 @@ pub enum Command {
         #[command(subcommand)]
         command: IssueCommand,
     },
+    /// Manage comments on issues.
+    Comment {
+        /// Comment subcommand.
+        #[command(subcommand)]
+        command: CommentCommand,
+    },
     /// Manage provider configuration.
     Config {
         /// Config subcommand.
@@ -69,6 +75,55 @@ pub enum ConfigCommand {
 
         /// Repository name.
         repo: String,
+    },
+}
+
+/// Comment subcommands.
+#[derive(Subcommand, Debug)]
+pub enum CommentCommand {
+    /// Add a top-level comment to an issue.
+    Add {
+        /// Issue display ID or OID prefix.
+        #[arg(long)]
+        issue: String,
+
+        /// Comment body (Markdown).
+        body: Option<String>,
+    },
+
+    /// Reply to an existing comment.
+    Reply {
+        /// Issue display ID or OID prefix.
+        #[arg(long)]
+        issue: String,
+
+        /// OID of the comment to reply to.
+        #[arg(long = "to")]
+        reply_to: String,
+
+        /// Comment body (Markdown).
+        body: Option<String>,
+    },
+
+    /// Resolve a comment thread.
+    Resolve {
+        /// Issue display ID or OID prefix.
+        #[arg(long)]
+        issue: String,
+
+        /// OID of the comment that starts the thread.
+        #[arg(long = "thread")]
+        thread: String,
+
+        /// Optional resolution message.
+        message: Option<String>,
+    },
+
+    /// List comments on an issue.
+    List {
+        /// Issue display ID or OID prefix.
+        #[arg(long)]
+        issue: String,
     },
 }
 

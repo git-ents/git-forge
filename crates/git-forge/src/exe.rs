@@ -11,6 +11,9 @@ use std::path::Path;
 use facet::Facet;
 use git2::{ErrorCode, ObjectType, Repository};
 
+use crate::comment::{
+    Anchor, Comment, add_comment, add_reply, issue_comment_ref, list_comments, resolve_comment,
+};
 use crate::issue::{Issue, IssueState};
 use crate::{Error, Result, Store};
 
@@ -113,6 +116,62 @@ impl Executor {
             remove_assignees,
         )
     }
+    /// Add a comment to an issue.
+    ///
+    /// # Errors
+    /// Returns an error if the issue is not found or a git operation fails.
+    pub fn add_issue_comment(
+        &self,
+        issue_ref: &str,
+        body: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        let issue = self.store().get_issue(issue_ref)?;
+        let ref_name = issue_comment_ref(&issue.oid);
+        add_comment(&self.repo, &ref_name, body, anchor)
+    }
+
+    /// Reply to a comment on an issue.
+    ///
+    /// # Errors
+    /// Returns an error if the issue is not found or a git operation fails.
+    pub fn reply_issue_comment(
+        &self,
+        issue_ref: &str,
+        body: &str,
+        reply_to_oid: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        let issue = self.store().get_issue(issue_ref)?;
+        let ref_name = issue_comment_ref(&issue.oid);
+        add_reply(&self.repo, &ref_name, body, reply_to_oid, anchor)
+    }
+
+    /// Resolve a comment thread on an issue.
+    ///
+    /// # Errors
+    /// Returns an error if the issue is not found or a git operation fails.
+    pub fn resolve_issue_comment(
+        &self,
+        issue_ref: &str,
+        thread_oid: &str,
+        message: Option<&str>,
+    ) -> Result<Comment> {
+        let issue = self.store().get_issue(issue_ref)?;
+        let ref_name = issue_comment_ref(&issue.oid);
+        resolve_comment(&self.repo, &ref_name, thread_oid, message)
+    }
+
+    /// List comments on an issue.
+    ///
+    /// # Errors
+    /// Returns an error if the issue is not found or a git operation fails.
+    pub fn list_issue_comments(&self, issue_ref: &str) -> Result<Vec<Comment>> {
+        let issue = self.store().get_issue(issue_ref)?;
+        let ref_name = issue_comment_ref(&issue.oid);
+        list_comments(&self.repo, &ref_name)
+    }
+
     /// Auto-detect provider config from git remote URL(s).
     ///
     /// # Errors
@@ -393,7 +452,7 @@ impl Executor {
     /// Panics if facet-json fails to serialize a value (indicates a bug).
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, cli: &crate::cli::Cli) -> Result<()> {
-        use crate::cli::{Command, ConfigCommand, IssueCommand};
+        use crate::cli::{Command, CommentCommand, ConfigCommand, IssueCommand};
 
         match &cli.command {
             Command::Config { command } => match command {
@@ -456,6 +515,45 @@ impl Executor {
                     self.config_remove(provider, owner, repo)?;
                     if !cli.json {
                         println!("removed {provider}/{owner}/{repo}");
+                    }
+                }
+            },
+
+            Command::Comment { command } => match command {
+                CommentCommand::Add { issue, body } => {
+                    let body = body.as_deref().unwrap_or("");
+                    let comment = self.add_issue_comment(issue, body, None)?;
+                    print_comment(&comment, cli.json);
+                }
+
+                CommentCommand::Reply {
+                    issue,
+                    reply_to,
+                    body,
+                } => {
+                    let body = body.as_deref().unwrap_or("");
+                    let comment = self.reply_issue_comment(issue, body, reply_to, None)?;
+                    print_comment(&comment, cli.json);
+                }
+
+                CommentCommand::Resolve {
+                    issue,
+                    thread,
+                    message,
+                } => {
+                    let comment = self.resolve_issue_comment(issue, thread, message.as_deref())?;
+                    print_comment(&comment, cli.json);
+                }
+
+                CommentCommand::List { issue } => {
+                    let comments = self.list_issue_comments(issue)?;
+                    if cli.json {
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&comments).expect("serialize")
+                        );
+                    } else {
+                        print_comment_list(&comments);
                     }
                 }
             },
@@ -651,6 +749,57 @@ impl Executor {
             },
         }
         Ok(())
+    }
+}
+
+fn print_comment(comment: &Comment, json: bool) {
+    if json {
+        println!(
+            "{}",
+            facet_json::to_string_pretty(comment).expect("serialize")
+        );
+        return;
+    }
+    println!("comment {}", &comment.oid[..8]);
+    println!(
+        "author:  {} <{}>",
+        comment.author_name, comment.author_email
+    );
+    if comment.resolved {
+        println!("resolved");
+    }
+    if let Some(ref r) = comment.replaces {
+        println!("replaces: {}", &r[..8.min(r.len())]);
+    }
+    if !comment.body.is_empty() {
+        println!();
+        println!("{}", comment.body);
+    }
+}
+
+fn print_comment_list(comments: &[Comment]) {
+    if comments.is_empty() {
+        println!("No comments.");
+        return;
+    }
+    println!("{} comment(s)\n", comments.len());
+    for c in comments {
+        let short = &c.oid[..8];
+        let reply_marker = if c.reply_to.is_some() { "↳ " } else { "" };
+        let resolved_marker = if c.resolved { " [resolved]" } else { "" };
+        println!("{reply_marker}{short}{resolved_marker}  {}", c.author_name);
+        if !c.body.is_empty() {
+            let preview: String = c
+                .body
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(72)
+                .collect();
+            println!("  {preview}");
+        }
+        println!();
     }
 }
 
