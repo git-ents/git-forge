@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::issue::IssueState;
+use crate::review::ReviewState;
 
 /// Local-first Git forge CLI.
 #[derive(Parser, Debug)]
@@ -31,7 +32,13 @@ pub enum Command {
         #[command(subcommand)]
         command: IssueCommand,
     },
-    /// Manage comments on issues.
+    /// Manage reviews.
+    Review {
+        /// Review subcommand.
+        #[command(subcommand)]
+        command: ReviewCommand,
+    },
+    /// Manage comments on issues or reviews.
     Comment {
         /// Comment subcommand.
         #[command(subcommand)]
@@ -83,11 +90,15 @@ pub enum ConfigCommand {
 /// Comment subcommands.
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
-    /// Add a top-level comment to an issue.
+    /// Add a top-level comment to an issue or review.
     Add {
         /// Issue display ID or OID prefix.
-        #[arg(long)]
-        issue: String,
+        #[arg(long, group = "entity")]
+        issue: Option<String>,
+
+        /// Review display ID or OID prefix.
+        #[arg(long, group = "entity")]
+        review: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
@@ -100,8 +111,12 @@ pub enum CommentCommand {
     /// Reply to an existing comment.
     Reply {
         /// Issue display ID or OID prefix.
-        #[arg(long)]
-        issue: String,
+        #[arg(long, group = "entity")]
+        issue: Option<String>,
+
+        /// Review display ID or OID prefix.
+        #[arg(long, group = "entity")]
+        review: Option<String>,
 
         /// OID of the comment to reply to.
         #[arg(long = "to")]
@@ -118,8 +133,12 @@ pub enum CommentCommand {
     /// Resolve a comment thread.
     Resolve {
         /// Issue display ID or OID prefix.
-        #[arg(long)]
-        issue: String,
+        #[arg(long, group = "entity")]
+        issue: Option<String>,
+
+        /// Review display ID or OID prefix.
+        #[arg(long, group = "entity")]
+        review: Option<String>,
 
         /// OID of the comment that starts the thread.
         #[arg(long = "thread")]
@@ -133,11 +152,92 @@ pub enum CommentCommand {
         file: Option<PathBuf>,
     },
 
-    /// List comments on an issue.
+    /// List comments on an issue or review.
     List {
         /// Issue display ID or OID prefix.
+        #[arg(long, group = "entity")]
+        issue: Option<String>,
+
+        /// Review display ID or OID prefix.
+        #[arg(long, group = "entity")]
+        review: Option<String>,
+    },
+}
+
+/// Review subcommands.
+#[derive(Subcommand, Debug)]
+pub enum ReviewCommand {
+    /// Create a new review.
+    New {
+        /// Review title.
+        title: Option<String>,
+
+        /// Description (Markdown).
         #[arg(long)]
-        issue: String,
+        body: Option<String>,
+
+        /// Read body from a file.
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+
+        /// Head object OID or ref.
+        #[arg(long)]
+        head: String,
+
+        /// Base object OID or ref (for commit ranges).
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Source ref name to track for refreshes.
+        #[arg(long = "ref")]
+        source_ref: Option<String>,
+    },
+
+    /// Show a review.
+    Show {
+        /// Display ID or OID prefix.
+        reference: String,
+    },
+
+    /// List reviews.
+    List {
+        /// Filter by state (comma-separated, e.g. `open,merged,closed`).
+        #[arg(long)]
+        state: Option<String>,
+    },
+
+    /// Edit a review.
+    Edit {
+        /// Display ID or OID prefix.
+        reference: String,
+
+        /// New title.
+        #[arg(long)]
+        title: Option<String>,
+
+        /// New description (Markdown).
+        #[arg(long)]
+        body: Option<String>,
+
+        /// Read body from a file.
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+
+        /// New state.
+        #[arg(long)]
+        state: Option<ReviewState>,
+    },
+
+    /// Close a review without merging.
+    Close {
+        /// Display ID or OID prefix.
+        reference: String,
+    },
+
+    /// Mark a review as merged.
+    Merge {
+        /// Display ID or OID prefix.
+        reference: String,
     },
 }
 

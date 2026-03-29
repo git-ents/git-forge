@@ -13,8 +13,10 @@ use git2::{ErrorCode, ObjectType, Repository};
 
 use crate::comment::{
     Anchor, Comment, add_comment, add_reply, issue_comment_ref, list_comments, resolve_comment,
+    review_comment_ref,
 };
 use crate::issue::{Issue, IssueState};
+use crate::review::{Review, ReviewState, ReviewTarget};
 use crate::{Error, Result, Store};
 
 /// A provider configuration entry for JSON serialization.
@@ -171,6 +173,123 @@ impl Executor {
         let ref_name = issue_comment_ref(&issue.oid);
         list_comments(&self.repo, &ref_name)
     }
+
+    // -----------------------------------------------------------------------
+    // Reviews
+    // -----------------------------------------------------------------------
+
+    /// Create a new review.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn create_review(
+        &self,
+        title: &str,
+        description: &str,
+        target: &ReviewTarget,
+        source_ref: Option<&str>,
+    ) -> Result<Review> {
+        self.store()
+            .create_review(title, description, target, source_ref)
+    }
+
+    /// Fetch a review by display ID or OID prefix.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::NotFound`] if no matching review exists.
+    pub fn get_review(&self, reference: &str) -> Result<Review> {
+        self.store().get_review(reference)
+    }
+
+    /// List all reviews, optionally filtered by state.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn list_reviews(&self, state: Option<&ReviewState>) -> Result<Vec<Review>> {
+        match state {
+            Some(s) => self.store().list_reviews_by_state(s),
+            None => self.store().list_reviews(),
+        }
+    }
+
+    /// Apply a partial update to a review.
+    ///
+    /// # Errors
+    /// Returns [`crate::Error::NotFound`] if the review does not exist.
+    pub fn update_review(
+        &self,
+        reference: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        state: Option<&ReviewState>,
+    ) -> Result<Review> {
+        self.store()
+            .update_review(reference, title, description, state)
+    }
+
+    // -----------------------------------------------------------------------
+    // Review comments
+    // -----------------------------------------------------------------------
+
+    /// Add a comment to a review.
+    ///
+    /// # Errors
+    /// Returns an error if the review is not found or a git operation fails.
+    pub fn add_review_comment(
+        &self,
+        review_ref: &str,
+        body: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        let review = self.store().get_review(review_ref)?;
+        let ref_name = review_comment_ref(&review.oid);
+        add_comment(&self.repo, &ref_name, body, anchor)
+    }
+
+    /// Reply to a comment on a review.
+    ///
+    /// # Errors
+    /// Returns an error if the review is not found or a git operation fails.
+    pub fn reply_review_comment(
+        &self,
+        review_ref: &str,
+        body: &str,
+        reply_to_oid: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        let review = self.store().get_review(review_ref)?;
+        let ref_name = review_comment_ref(&review.oid);
+        add_reply(&self.repo, &ref_name, body, reply_to_oid, anchor)
+    }
+
+    /// Resolve a comment thread on a review.
+    ///
+    /// # Errors
+    /// Returns an error if the review is not found or a git operation fails.
+    pub fn resolve_review_comment(
+        &self,
+        review_ref: &str,
+        thread_oid: &str,
+        message: Option<&str>,
+    ) -> Result<Comment> {
+        let review = self.store().get_review(review_ref)?;
+        let ref_name = review_comment_ref(&review.oid);
+        resolve_comment(&self.repo, &ref_name, thread_oid, message)
+    }
+
+    /// List comments on a review.
+    ///
+    /// # Errors
+    /// Returns an error if the review is not found or a git operation fails.
+    pub fn list_review_comments(&self, review_ref: &str) -> Result<Vec<Comment>> {
+        let review = self.store().get_review(review_ref)?;
+        let ref_name = review_comment_ref(&review.oid);
+        list_comments(&self.repo, &ref_name)
+    }
+
+    // -----------------------------------------------------------------------
+    // Config
+    // -----------------------------------------------------------------------
 
     /// Auto-detect provider config from git remote URL(s).
     ///
@@ -452,7 +571,7 @@ impl Executor {
     /// Panics if facet-json fails to serialize a value (indicates a bug).
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, cli: &crate::cli::Cli) -> Result<()> {
-        use crate::cli::{Command, CommentCommand, ConfigCommand, IssueCommand};
+        use crate::cli::{Command, CommentCommand, ConfigCommand, IssueCommand, ReviewCommand};
 
         match &cli.command {
             Command::Config { command } => match command {
@@ -520,38 +639,73 @@ impl Executor {
             },
 
             Command::Comment { command } => match command {
-                CommentCommand::Add { issue, body, file } => {
+                CommentCommand::Add {
+                    issue,
+                    review,
+                    body,
+                    file,
+                } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
-                    let comment = self.add_issue_comment(issue, &body, None)?;
+                    let comment = if let Some(r) = review {
+                        self.add_review_comment(r, &body, None)?
+                    } else {
+                        let issue = issue
+                            .as_deref()
+                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
+                        self.add_issue_comment(issue, &body, None)?
+                    };
                     print_comment(&comment, cli.json);
                 }
 
                 CommentCommand::Reply {
                     issue,
+                    review,
                     reply_to,
                     body,
                     file,
                 } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
-                    let comment = self.reply_issue_comment(issue, &body, reply_to, None)?;
+                    let comment = if let Some(r) = review {
+                        self.reply_review_comment(r, &body, reply_to, None)?
+                    } else {
+                        let issue = issue
+                            .as_deref()
+                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
+                        self.reply_issue_comment(issue, &body, reply_to, None)?
+                    };
                     print_comment(&comment, cli.json);
                 }
 
                 CommentCommand::Resolve {
                     issue,
+                    review,
                     thread,
                     message,
                     file,
                 } => {
                     let resolved = crate::input::resolve_body(message.clone(), file.clone())?;
-                    let comment = self.resolve_issue_comment(issue, thread, resolved.as_deref())?;
+                    let comment = if let Some(r) = review {
+                        self.resolve_review_comment(r, thread, resolved.as_deref())?
+                    } else {
+                        let issue = issue
+                            .as_deref()
+                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
+                        self.resolve_issue_comment(issue, thread, resolved.as_deref())?
+                    };
                     print_comment(&comment, cli.json);
                 }
 
-                CommentCommand::List { issue } => {
-                    let comments = self.list_issue_comments(issue)?;
+                CommentCommand::List { issue, review } => {
+                    let comments = if let Some(r) = review {
+                        self.list_review_comments(r)?
+                    } else {
+                        let issue = issue
+                            .as_deref()
+                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
+                        self.list_issue_comments(issue)?
+                    };
                     if cli.json {
                         println!(
                             "{}",
@@ -560,6 +714,94 @@ impl Executor {
                     } else {
                         print_comment_list(&comments);
                     }
+                }
+            },
+
+            Command::Review { command } => match command {
+                ReviewCommand::New {
+                    title,
+                    body,
+                    file,
+                    head,
+                    base,
+                    source_ref,
+                } => {
+                    let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
+                    let title = title.as_deref().unwrap_or("");
+                    let description = resolved_body.as_deref().unwrap_or("");
+                    let target = ReviewTarget {
+                        head: head.clone(),
+                        base: base.clone(),
+                    };
+                    let review =
+                        self.create_review(title, description, &target, source_ref.as_deref())?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::Show { reference } => {
+                    let review = self.get_review(reference)?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::List { state } => {
+                    let states: Vec<ReviewState> = state
+                        .as_deref()
+                        .filter(|s| !s.eq_ignore_ascii_case("all"))
+                        .map(|s| {
+                            s.split(',')
+                                .map(|v| v.trim().parse())
+                                .collect::<Result<Vec<_>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+
+                    let reviews = if states.len() == 1 {
+                        self.list_reviews(Some(&states[0]))?
+                    } else {
+                        let mut all = self.list_reviews(None)?;
+                        if !states.is_empty() {
+                            all.retain(|r| states.contains(&r.state));
+                        }
+                        all
+                    };
+
+                    if cli.json {
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&reviews).expect("serialize")
+                        );
+                    } else {
+                        print_review_list(&reviews);
+                    }
+                }
+
+                ReviewCommand::Edit {
+                    reference,
+                    title,
+                    body,
+                    file,
+                    state,
+                } => {
+                    let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
+                    let review = self.update_review(
+                        reference,
+                        title.as_deref(),
+                        resolved_body.as_deref(),
+                        state.as_ref(),
+                    )?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::Close { reference } => {
+                    let review =
+                        self.update_review(reference, None, None, Some(&ReviewState::Closed))?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::Merge { reference } => {
+                    let review =
+                        self.update_review(reference, None, None, Some(&ReviewState::Merged))?;
+                    print_review(&review, cli.json);
                 }
             },
 
@@ -923,4 +1165,47 @@ fn print_issue_list(issues: &[Issue], filter: Option<&IssueState>, color: bool) 
         ]);
     }
     println!("{table}");
+}
+
+fn print_review(review: &Review, json: bool) {
+    if json {
+        println!(
+            "{}",
+            facet_json::to_string_pretty(review).expect("serialize")
+        );
+        return;
+    }
+    let id = review.display_id.as_deref().unwrap_or(&review.oid);
+    println!("review #{id}");
+    println!("title:       {}", review.title);
+    println!("state:       {}", review.state.as_str());
+    println!(
+        "target.head: {}",
+        &review.target.head[..review.target.head.len().min(8)]
+    );
+    if let Some(ref base) = review.target.base {
+        println!("target.base: {}", &base[..base.len().min(8)]);
+    }
+    if let Some(ref sref) = review.source_ref {
+        println!("ref:         {sref}");
+    }
+    if !review.description.is_empty() {
+        println!();
+        println!("{}", review.description);
+    }
+}
+
+fn print_review_list(reviews: &[Review]) {
+    if reviews.is_empty() {
+        println!("No reviews found.");
+        return;
+    }
+    println!("Showing {} reviews\n", reviews.len());
+    for review in reviews {
+        let id = review
+            .display_id
+            .as_deref()
+            .unwrap_or(&review.oid[..review.oid.len().min(8)]);
+        println!("{id}  {}  {}", review.state.as_str(), review.title);
+    }
 }
