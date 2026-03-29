@@ -1,69 +1,60 @@
 //! CLI shape for the `forge` binary.
 //!
-//! This module contains only figue type definitions — no execution logic.
+//! This module contains only clap type definitions — no execution logic.
 //! See [`crate::exe`] for the executor.
 
-use facet::Facet;
-use figue::{self as args, FigueBuiltins};
+use clap::{Parser, Subcommand};
 
 use crate::issue::IssueState;
 
 /// Local-first Git forge CLI.
-#[derive(Facet, Debug)]
+#[derive(Parser, Debug)]
+#[command(version)]
 pub struct Cli {
     /// Output results as JSON.
-    #[facet(args::named)]
+    #[arg(long)]
     pub json: bool,
 
     /// Subcommand to run.
-    #[facet(args::subcommand)]
+    #[command(subcommand)]
     pub command: Command,
-
-    /// Built-in flags (--help, --version, --completions).
-    #[facet(flatten)]
-    pub builtins: FigueBuiltins,
 }
 
 /// Top-level subcommands.
-#[derive(Facet, Debug)]
-#[repr(u8)]
+#[derive(Subcommand, Debug)]
 pub enum Command {
     /// Manage issues.
     Issue {
         /// Issue subcommand.
-        #[facet(args::subcommand)]
+        #[command(subcommand)]
         command: IssueCommand,
     },
     /// Manage provider configuration.
     Config {
         /// Config subcommand.
-        #[facet(args::subcommand)]
+        #[command(subcommand)]
         command: ConfigCommand,
     },
 }
 
 /// Config subcommands.
-#[derive(Facet, Debug)]
-#[repr(u8)]
+#[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
     /// Auto-detect provider from git remote URL(s).
     Init {
         /// Remote name to parse (default: origin).
-        #[facet(args::named, args::short = 'r')]
+        #[arg(long, short = 'r')]
         remote: Option<String>,
     },
     /// Add a provider config entry.
     Add {
         /// Provider name (e.g. "github").
-        #[facet(args::positional)]
         provider: String,
 
         /// Repository owner or organization.
-        #[facet(args::positional)]
         owner: String,
 
         /// Repository name.
-        #[facet(args::positional)]
         repo: String,
     },
     /// List all configured providers.
@@ -71,118 +62,109 @@ pub enum ConfigCommand {
     /// Remove a provider config entry.
     Remove {
         /// Provider name.
-        #[facet(args::positional)]
         provider: String,
 
         /// Repository owner or organization.
-        #[facet(args::positional)]
         owner: String,
 
         /// Repository name.
-        #[facet(args::positional)]
         repo: String,
     },
 }
 
 /// Issue subcommands.
-#[derive(Facet, Debug)]
-#[repr(u8)]
+#[derive(Subcommand, Debug)]
 pub enum IssueCommand {
     /// Create a new issue.
     New {
         /// Issue title (prompted interactively if omitted).
-        #[facet(args::positional)]
         title: Option<String>,
 
         /// Issue body (Markdown).
-        #[facet(args::named)]
+        #[arg(long)]
         body: Option<String>,
 
         /// Labels to attach.
-        #[facet(args::named, args::short = 'l', rename = "label")]
+        #[arg(long = "label", short = 'l')]
         labels: Vec<String>,
 
         /// Contributor IDs to assign.
-        #[facet(args::named, args::short = 'a', rename = "assignee")]
+        #[arg(long = "assignee", short = 'a')]
         assignees: Vec<String>,
 
         /// Prompt for all fields interactively.
-        #[facet(args::named, args::short = 'i')]
+        #[arg(long, short = 'i')]
         interactive: bool,
     },
 
     /// Show an issue.
     Show {
         /// Display ID or OID prefix (e.g. `3`, `ab3f`, `GH1`).
-        #[facet(args::positional)]
         reference: String,
     },
 
     /// List issues.
     List {
         /// Filter by state (comma-separated, e.g. `open,closed`).
-        #[facet(args::named)]
+        #[arg(long)]
         state: Option<String>,
 
         /// Filter by platform sigil (comma-separated, e.g. `GH#,GL#`).
-        #[facet(args::named, args::short = 'p')]
+        #[arg(long, short = 'p')]
         platform: Option<String>,
 
         /// Filter by display ID or OID prefix (comma-separated).
-        #[facet(args::named)]
+        #[arg(long)]
         id: Option<String>,
     },
 
     /// Edit an issue.
     Edit {
         /// Display ID or OID prefix.
-        #[facet(args::positional)]
         reference: String,
 
         /// New title.
-        #[facet(args::named)]
+        #[arg(long)]
         title: Option<String>,
 
         /// New body (Markdown).
-        #[facet(args::named)]
+        #[arg(long)]
         body: Option<String>,
 
         /// New state.
-        #[facet(args::named)]
+        #[arg(long)]
         state: Option<IssueState>,
 
         /// Labels to add.
-        #[facet(args::named, rename = "add-label")]
+        #[arg(long = "add-label")]
         add_labels: Vec<String>,
 
         /// Labels to remove.
-        #[facet(args::named, rename = "remove-label")]
+        #[arg(long = "remove-label")]
         remove_labels: Vec<String>,
 
         /// Assignees to add.
-        #[facet(args::named, rename = "add-assignee")]
+        #[arg(long = "add-assignee")]
         add_assignees: Vec<String>,
 
         /// Assignees to remove.
-        #[facet(args::named, rename = "remove-assignee")]
+        #[arg(long = "remove-assignee")]
         remove_assignees: Vec<String>,
 
         /// Prompt for title, body, and state interactively.
-        #[facet(args::named, args::short = 'i')]
+        #[arg(long, short = 'i')]
         interactive: bool,
     },
 
     /// Close an issue.
     Close {
         /// Display ID or OID prefix.
-        #[facet(args::positional)]
         reference: String,
     },
 
     /// Reopen a closed issue.
     Reopen {
         /// Display ID or OID prefix.
-        #[facet(args::positional)]
         reference: String,
     },
 }

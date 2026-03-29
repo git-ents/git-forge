@@ -4,35 +4,31 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use facet::Facet;
-use figue::{self as args, FigueBuiltins};
+use clap::Parser;
 use forge_github::GitHubAdapter;
 use forge_github::config::discover_github_configs;
 use git_forge::sync::RemoteSync;
 use git2::Repository;
 
 /// Forge sync daemon — watches refs and coordinates GitHub sync.
-#[derive(Facet, Debug)]
+#[derive(Parser, Debug)]
+#[command(version)]
 struct Args {
     /// Path to the git repository (default: current directory).
-    #[facet(args::named, default = PathBuf::from("."))]
+    #[arg(long, default_value = ".")]
     repo: PathBuf,
 
     /// Seconds between sync polls.
-    #[facet(args::named, default = 60u64)]
+    #[arg(long, default_value_t = 60u64)]
     poll_interval: u64,
 
     /// Run a single sync pass and exit.
-    #[facet(args::named)]
+    #[arg(long)]
     once: bool,
-
-    /// Built-in flags (--help, --version, --completions).
-    #[facet(flatten)]
-    builtins: FigueBuiltins,
 }
 
 fn main() -> Result<()> {
-    let args: Args = figue::from_std_args().unwrap();
+    let args = Args::parse();
     let repo = Repository::discover(&args.repo)?;
 
     let configs = discover_github_configs(&repo)?;
