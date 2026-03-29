@@ -94,10 +94,21 @@ pub fn format_trailers(anchor: Option<&Anchor>, resolved: bool, replaces: Option
     lines.join("\n")
 }
 
+/// Known trailer keys recognized by the comment system.
+const KNOWN_TRAILER_KEYS: &[&str] = &[
+    "Anchor",
+    "Anchor-Range",
+    "Anchor-End",
+    "Resolved",
+    "Replaces",
+    "Github-Id",
+];
+
 /// Split a commit message into `(body, trailers)`.
 ///
 /// The trailer block is the last paragraph where every non-empty line
-/// matches `[\w-]+: .+`.
+/// is a known forge trailer (`Key: value`). Unknown keys are left in
+/// the body so that user-authored text is never misinterpreted.
 #[must_use]
 pub fn parse_trailers(message: &str) -> (String, HashMap<String, String>) {
     let paragraphs: Vec<&str> = message.split("\n\n").collect();
@@ -110,10 +121,7 @@ pub fn parse_trailers(message: &str) -> (String, HashMap<String, String>) {
                     let Some((key, _val)) = line.split_once(": ") else {
                         return false;
                     };
-                    !key.is_empty()
-                        && key
-                            .chars()
-                            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    KNOWN_TRAILER_KEYS.contains(&key)
                 }
             })
     };

@@ -1,1 +1,1 @@
-// Comment tests — implemented in Phase 4.
+// Comment unit tests live in tests/comment.rs (integration tests).
