@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::Result;
 use forge_github::client::{GhIssue, GhIssueComment, GhLabel, GhUser, GitHubClient};
 use forge_github::config::GitHubSyncConfig;
-use forge_github::export::export_issues;
-use forge_github::import::import_issues;
+use forge_github::export::{export_issue_comments, export_issues};
+use forge_github::import::{import_issue_comments, import_issues};
 use git_forge::Store;
 use git_forge::comment::{add_comment, issue_comment_ref, list_comments};
 use git2::Repository;
@@ -156,6 +156,17 @@ fn gh_comment(id: u64, body: &str) -> GhIssueComment {
     }
 }
 
+fn gh_comment_empty_body(id: u64) -> GhIssueComment {
+    GhIssueComment {
+        id,
+        body: None,
+        user: GhUser {
+            login: "commenter".into(),
+        },
+        created_at: "2025-01-02T00:00:00Z".into(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -283,4 +294,123 @@ async fn roundtrip_comments_no_duplicates() {
     // Verify only one extra chain entry (the imported github comment).
     let comments = list_comments(&repo, &ref_name).unwrap();
     assert_eq!(comments.len(), 2); // our local + the imported one
+}
+
+#[tokio::test]
+async fn import_comments_for_new_issue_in_same_pass() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let mut comments_map = HashMap::new();
+    comments_map.insert(5u64, vec![gh_comment(50, "comment on new issue")]);
+    let client = CommentMockClient::new(vec![gh_issue(5, "Fresh issue")], comments_map);
+
+    // Single import pass should create both the issue and its comments.
+    let report = import_issues(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.imported, 2); // 1 issue + 1 comment
+
+    let store = Store::new(&repo);
+    let issue = store.get_issue("GH#5").unwrap();
+    let ref_name = issue_comment_ref(&issue.oid);
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].body.contains("comment on new issue"));
+}
+
+#[tokio::test]
+async fn import_comment_with_empty_body() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let mut comments_map = HashMap::new();
+    comments_map.insert(1u64, vec![gh_comment_empty_body(20)]);
+    let client = CommentMockClient::new(vec![gh_issue(1, "Bug")], comments_map);
+
+    let report = import_issues(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.imported, 2); // 1 issue + 1 comment
+
+    let store = Store::new(&repo);
+    let issue = store.get_issue("GH#1").unwrap();
+    let ref_name = issue_comment_ref(&issue.oid);
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert_eq!(comments.len(), 1);
+    // Empty body should only produce the Github-Id trailer, which is parsed out.
+    assert!(comments[0].body.is_empty());
+}
+
+#[tokio::test]
+async fn standalone_import_issue_comments() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    // First import the issue so state has it.
+    let client = CommentMockClient::new(vec![gh_issue(1, "Bug")], HashMap::new());
+    import_issues(&repo, &cfg, &client).await.unwrap();
+
+    // Now add comments via the standalone function.
+    let mut comments_map = HashMap::new();
+    comments_map.insert(1u64, vec![gh_comment(30, "standalone import")]);
+    let client2 = CommentMockClient::new(Vec::new(), comments_map);
+    let report = import_issue_comments(&repo, &cfg, &client2, 1)
+        .await
+        .unwrap();
+    assert_eq!(report.imported, 1);
+
+    let store = Store::new(&repo);
+    let issue = store.get_issue("GH#1").unwrap();
+    let ref_name = issue_comment_ref(&issue.oid);
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert_eq!(comments.len(), 1);
+    assert!(comments[0].body.contains("standalone import"));
+}
+
+#[tokio::test]
+async fn standalone_import_comments_missing_issue_is_noop() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let client = CommentMockClient::new(Vec::new(), HashMap::new());
+
+    // Issue 99 was never imported, so this should be a no-op.
+    let report = import_issue_comments(&repo, &cfg, &client, 99)
+        .await
+        .unwrap();
+    assert_eq!(report.imported, 0);
+    assert_eq!(report.skipped, 0);
+    assert_eq!(report.failed, 0);
+}
+
+#[tokio::test]
+async fn standalone_export_issue_comments() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let client = CommentMockClient::new(Vec::new(), HashMap::new());
+
+    // Create and export an issue first.
+    let store = Store::new(&repo);
+    let issue = store.create_issue("Local", "body", &[], &[]).unwrap();
+    export_issues(&repo, &cfg, &client).await.unwrap();
+
+    // Add a comment and export via standalone function.
+    let ref_name = issue_comment_ref(&issue.oid);
+    add_comment(&repo, &ref_name, "standalone export", None).unwrap();
+
+    let report = export_issue_comments(&repo, &cfg, &client, &issue.oid)
+        .await
+        .unwrap();
+    assert_eq!(report.exported, 1);
+
+    let created = client.created_comments.borrow();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].1, "standalone export");
+}
+
+#[tokio::test]
+async fn standalone_export_comments_missing_issue_is_noop() {
+    let (_dir, repo) = test_repo();
+    let cfg = test_config();
+    let client = CommentMockClient::new(Vec::new(), HashMap::new());
+
+    let report = export_issue_comments(&repo, &cfg, &client, "nonexistent_oid")
+        .await
+        .unwrap();
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.skipped, 0);
+    assert_eq!(report.failed, 0);
 }

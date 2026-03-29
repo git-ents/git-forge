@@ -4,9 +4,12 @@
 use git2::Repository;
 use tempfile::TempDir;
 
+use git_forge::Store;
 use git_forge::comment::{
-    Anchor, add_comment, add_reply, edit_comment, issue_comment_ref, list_comments, resolve_comment,
+    Anchor, add_comment, add_reply, edit_comment, issue_comment_ref, list_comments,
+    resolve_comment, review_comment_ref,
 };
+use git_forge::exe::Executor;
 
 fn test_repo() -> (TempDir, Repository) {
     let dir = TempDir::new().expect("temp dir");
@@ -157,5 +160,119 @@ fn anchor_commit_range() {
             assert_eq!(end, "bbb");
         }
         Anchor::Object { .. } => panic!("expected CommitRange anchor"),
+    }
+}
+
+#[test]
+fn body_with_trailer_like_text_survives_roundtrip() {
+    let (_dir, repo) = test_repo();
+    let ref_name = issue_comment_ref("abc123");
+    let body = "The fix is: set Key: value in the config\nSigned-off-by: someone";
+    let comment = add_comment(&repo, &ref_name, body, None).unwrap();
+
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body, body);
+    assert_eq!(comments[0].oid, comment.oid);
+}
+
+#[test]
+fn list_comments_empty_chain() {
+    let (_dir, repo) = test_repo();
+    let ref_name = issue_comment_ref("nonexistent");
+    let comments = list_comments(&repo, &ref_name).unwrap();
+    assert!(comments.is_empty());
+}
+
+#[test]
+fn resolve_comment_with_message() {
+    let (_dir, repo) = test_repo();
+    let ref_name = issue_comment_ref("abc123");
+    let root = add_comment(&repo, &ref_name, "needs work", None).unwrap();
+    let resolution = resolve_comment(
+        &repo,
+        &ref_name,
+        &root.oid,
+        Some("addressed in latest push"),
+    )
+    .unwrap();
+
+    assert!(resolution.resolved);
+    assert_eq!(resolution.body, "addressed in latest push");
+    assert_eq!(resolution.reply_to.as_deref(), Some(root.oid.as_str()));
+}
+
+#[test]
+fn review_comment_ref_format() {
+    let ref_name = review_comment_ref("abc123");
+    assert!(ref_name.starts_with("refs/forge/comments/review/"));
+    assert!(ref_name.ends_with("abc123"));
+}
+
+#[test]
+fn executor_add_and_list_comments() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let issue = store.create_issue("Test issue", "body", &[], &[]).unwrap();
+    let exec = Executor::from_path(repo.path().parent().unwrap()).unwrap();
+
+    let c1 = exec.add_issue_comment(&issue.oid, "first", None).unwrap();
+    let c2 = exec.add_issue_comment(&issue.oid, "second", None).unwrap();
+
+    let comments = exec.list_issue_comments(&issue.oid).unwrap();
+    assert_eq!(comments.len(), 2);
+    let oids: Vec<&str> = comments.iter().map(|c| c.oid.as_str()).collect();
+    assert!(oids.contains(&c1.oid.as_str()));
+    assert!(oids.contains(&c2.oid.as_str()));
+}
+
+#[test]
+fn executor_reply_and_resolve() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let issue = store.create_issue("Test issue", "body", &[], &[]).unwrap();
+    let exec = Executor::from_path(repo.path().parent().unwrap()).unwrap();
+
+    let root = exec.add_issue_comment(&issue.oid, "root", None).unwrap();
+    let reply = exec
+        .reply_issue_comment(&issue.oid, "reply text", &root.oid, None)
+        .unwrap();
+    assert_eq!(reply.reply_to.as_deref(), Some(root.oid.as_str()));
+
+    let resolved = exec
+        .resolve_issue_comment(&issue.oid, &root.oid, Some("done"))
+        .unwrap();
+    assert!(resolved.resolved);
+    assert_eq!(resolved.body, "done");
+}
+
+#[test]
+fn executor_comment_on_nonexistent_issue() {
+    let (_dir, repo) = test_repo();
+    let exec = Executor::from_path(repo.path().parent().unwrap()).unwrap();
+
+    let result = exec.add_issue_comment("nonexistent", "body", None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_preserves_anchor() {
+    let (_dir, repo) = test_repo();
+    let ref_name = issue_comment_ref("abc123");
+    let anchor = Anchor::Object {
+        oid: "deadbeef".to_string(),
+        range: Some("5-10".to_string()),
+    };
+    let original = add_comment(&repo, &ref_name, "original", Some(&anchor)).unwrap();
+    let edited = edit_comment(&repo, &ref_name, &original.oid, "edited", Some(&anchor)).unwrap();
+
+    assert_eq!(edited.body, "edited");
+    assert_eq!(edited.replaces.as_deref(), Some(original.oid.as_str()));
+    match edited.anchor.as_ref().unwrap() {
+        Anchor::Object { oid, range } => {
+            assert_eq!(oid, "deadbeef");
+            assert_eq!(range.as_deref(), Some("5-10"));
+        }
+        Anchor::CommitRange { .. } => panic!("expected Object anchor"),
     }
 }
