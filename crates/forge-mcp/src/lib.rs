@@ -4,6 +4,7 @@
 //! that runs the server over stdio.
 
 mod issue;
+mod prompt;
 mod server;
 
 pub use server::ForgeMcpServer;
