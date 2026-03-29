@@ -43,7 +43,7 @@ impl ForgeMcpServer {
             .open_repo()
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         let store = Store::new(&repo);
-        let issues = match args.state.as_deref() {
+        let issues = match args.state.filter(|s| !s.is_empty()).as_deref() {
             None => store.list_issues(),
             Some(s) => s.parse::<IssueState>().map_or_else(
                 |_| Err(git_forge::Error::InvalidState(s.to_string())),
