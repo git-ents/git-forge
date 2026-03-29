@@ -760,7 +760,7 @@ fn print_comment(comment: &Comment, json: bool) {
         );
         return;
     }
-    println!("comment {}", &comment.oid[..8]);
+    println!("comment {}", &comment.oid[..comment.oid.len().min(8)]);
     println!(
         "author:  {} <{}>",
         comment.author_name, comment.author_email
@@ -784,7 +784,7 @@ fn print_comment_list(comments: &[Comment]) {
     }
     println!("{} comment(s)\n", comments.len());
     for c in comments {
-        let short = &c.oid[..8];
+        let short = &c.oid[..c.oid.len().min(8)];
         let reply_marker = if c.reply_to.is_some() { "↳ " } else { "" };
         let resolved_marker = if c.resolved { " [resolved]" } else { "" };
         println!("{reply_marker}{short}{resolved_marker}  {}", c.author_name);
