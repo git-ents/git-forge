@@ -642,18 +642,24 @@ impl Executor {
                 CommentCommand::Add {
                     issue,
                     review,
+                    anchor,
+                    range,
                     body,
                     file,
                 } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
+                    let anchor = anchor.as_deref().map(|oid| Anchor::Object {
+                        oid: oid.to_string(),
+                        range: range.clone(),
+                    });
                     let comment = if let Some(r) = review {
-                        self.add_review_comment(r, &body, None)?
+                        self.add_review_comment(r, &body, anchor.as_ref())?
                     } else {
                         let issue = issue
                             .as_deref()
                             .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.add_issue_comment(issue, &body, None)?
+                        self.add_issue_comment(issue, &body, anchor.as_ref())?
                     };
                     print_comment(&comment, cli.json);
                 }
@@ -662,18 +668,24 @@ impl Executor {
                     issue,
                     review,
                     reply_to,
+                    anchor,
+                    range,
                     body,
                     file,
                 } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
+                    let anchor = anchor.as_deref().map(|oid| Anchor::Object {
+                        oid: oid.to_string(),
+                        range: range.clone(),
+                    });
                     let comment = if let Some(r) = review {
-                        self.reply_review_comment(r, &body, reply_to, None)?
+                        self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
                     } else {
                         let issue = issue
                             .as_deref()
                             .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.reply_issue_comment(issue, &body, reply_to, None)?
+                        self.reply_issue_comment(issue, &body, reply_to, anchor.as_ref())?
                     };
                     print_comment(&comment, cli.json);
                 }

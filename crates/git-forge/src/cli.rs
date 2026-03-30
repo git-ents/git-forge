@@ -100,6 +100,14 @@ pub enum CommentCommand {
         #[arg(long, group = "entity")]
         review: Option<String>,
 
+        /// Anchor the comment to a git object (blob, commit, or tree OID).
+        #[arg(long)]
+        anchor: Option<String>,
+
+        /// Line range within the anchored object (e.g. "10-20").
+        #[arg(long, requires = "anchor")]
+        range: Option<String>,
+
         /// Comment body (Markdown).
         body: Option<String>,
 
@@ -121,6 +129,14 @@ pub enum CommentCommand {
         /// OID of the comment to reply to.
         #[arg(long = "to")]
         reply_to: String,
+
+        /// Anchor the reply to a git object (blob, commit, or tree OID).
+        #[arg(long)]
+        anchor: Option<String>,
+
+        /// Line range within the anchored object (e.g. "10-20").
+        #[arg(long, requires = "anchor")]
+        range: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
