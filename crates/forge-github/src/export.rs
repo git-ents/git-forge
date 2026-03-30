@@ -13,6 +13,15 @@ use crate::client::GitHubClient;
 use crate::config::GitHubSyncConfig;
 use crate::state::{load_sync_state, lookup_by_forge_oid, save_sync_state};
 
+/// Returns `true` if the string looks like a branch name rather than a raw OID.
+fn is_branch_name(s: &str) -> bool {
+    let len = s.len();
+    if (len == 40 || len == 64) && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    !s.is_empty()
+}
+
 /// Export locally-created issues to GitHub.
 ///
 /// Issues already recorded in the sync state are skipped. Each exported issue
@@ -171,8 +180,29 @@ pub async fn export_reviews(
             continue;
         }
 
-        // Need source_ref and target to create a PR.
-        let head_ref = review.source_ref.as_deref().unwrap_or(&review.target.head);
+        // A GitHub PR requires a branch name as the head ref.  Reviews
+        // created with --path or --head (without --ref) store only an OID,
+        // which GitHub cannot accept.
+        let Some(ref source_ref) = review.source_ref else {
+            eprintln!(
+                "forge: skipping review {} — no --ref; \
+                 cannot create a GitHub PR without a branch name",
+                review.oid,
+            );
+            report.unexportable += 1;
+            continue;
+        };
+
+        if !is_branch_name(source_ref) {
+            eprintln!(
+                "forge: skipping review {} — source ref \"{source_ref}\" looks like \
+                 a raw OID, not a branch name",
+                review.oid,
+            );
+            report.unexportable += 1;
+            continue;
+        }
+
         let base_ref = review.target.base.as_deref().unwrap_or("main");
 
         match client
@@ -181,7 +211,7 @@ pub async fn export_reviews(
                 &cfg.repo,
                 &review.title,
                 &review.description,
-                head_ref,
+                source_ref,
                 base_ref,
             )
             .await
@@ -341,5 +371,6 @@ pub async fn export_all(
         exported: issue_report.exported + review_report.exported,
         skipped: issue_report.skipped + review_report.skipped,
         failed: issue_report.failed + review_report.failed,
+        unexportable: issue_report.unexportable + review_report.unexportable,
     })
 }

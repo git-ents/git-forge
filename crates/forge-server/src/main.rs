@@ -70,8 +70,8 @@ async fn sync_one(repo: &Repository, adapter: &GitHubAdapter) -> Result<()> {
 
     let export = adapter.export_all(repo).await?;
     eprintln!(
-        "forge-server: export {label}: exported={} skipped={} failed={}",
-        export.exported, export.skipped, export.failed,
+        "forge-server: export {label}: exported={} skipped={} failed={} unexportable={}",
+        export.exported, export.skipped, export.failed, export.unexportable,
     );
 
     Ok(())

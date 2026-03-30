@@ -340,5 +340,6 @@ pub async fn import_all(
         exported: 0,
         skipped: issue_report.skipped + review_report.skipped,
         failed: issue_report.failed + review_report.failed,
+        unexportable: 0,
     })
 }

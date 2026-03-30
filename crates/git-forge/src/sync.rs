@@ -18,6 +18,8 @@ pub struct SyncReport {
     pub skipped: usize,
     /// Number of entities that failed.
     pub failed: usize,
+    /// Number of entities skipped because they cannot be represented on the remote.
+    pub unexportable: usize,
 }
 
 /// A remote adapter that can import and export forge entities.

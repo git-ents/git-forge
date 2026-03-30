@@ -541,3 +541,70 @@ async fn export_anchored_review_comment_uses_review_api() {
     // The comment should NOT have gone through issue comment API.
     assert!(client.created_comments.borrow().is_empty());
 }
+
+#[tokio::test]
+async fn export_review_without_source_ref_is_unexportable() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(Vec::new());
+    let cfg = test_config();
+
+    let store = Store::new(&repo);
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    store
+        .create_review("No branch", "body", &target, None)
+        .unwrap();
+
+    let report = export_reviews(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.unexportable, 1);
+    assert!(client.created_pulls.borrow().is_empty());
+}
+
+#[tokio::test]
+async fn export_review_with_sha_source_ref_is_unexportable() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(Vec::new());
+    let cfg = test_config();
+
+    let store = Store::new(&repo);
+    let commit = head_oid(&repo);
+    let target = ReviewTarget {
+        head: commit.clone(),
+        base: None,
+    };
+    store
+        .create_review("SHA ref", "body", &target, Some(&commit))
+        .unwrap();
+
+    let report = export_reviews(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.exported, 0);
+    assert_eq!(report.unexportable, 1);
+    assert!(client.created_pulls.borrow().is_empty());
+}
+
+#[tokio::test]
+async fn export_review_with_branch_source_ref_succeeds() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(Vec::new());
+    client.next_pr_number.set(10);
+    let cfg = test_config();
+
+    let store = Store::new(&repo);
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    store
+        .create_review("Branch PR", "body", &target, Some("my-feature"))
+        .unwrap();
+
+    let report = export_reviews(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.exported, 1);
+    assert_eq!(report.unexportable, 0);
+
+    let calls = client.created_pulls.borrow();
+    assert_eq!(calls[0].head, "my-feature");
+}
