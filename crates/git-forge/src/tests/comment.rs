@@ -171,10 +171,10 @@ fn roundtrip_object_anchor_no_range() {
 
 #[test]
 fn parse_trailers_migrated_from() {
-    let msg = "migrated comment\n\nMigrated-From: deadbeef";
+    let msg = "migrated comment\n\nMigrated-From: abc12340";
     let (body, trailers) = parse_trailers(msg);
     assert_eq!(body, "migrated comment");
-    assert_eq!(trailers.get("Migrated-From").unwrap(), "deadbeef");
+    assert_eq!(trailers.get("Migrated-From").unwrap(), "abc12340");
 }
 
 #[test]
