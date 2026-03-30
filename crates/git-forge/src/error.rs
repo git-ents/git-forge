@@ -27,6 +27,9 @@ pub enum Error {
     /// The working tree or index has uncommitted changes.
     #[error("working tree is dirty; use --allow-dirty to proceed")]
     DirtyWorktree,
+    /// The git object type is not valid for this operation.
+    #[error("invalid object type for commenting: {0}; expected commit, blob, or tag")]
+    InvalidObjectType(String),
     /// A configuration error.
     #[error("config: {0}")]
     Config(String),

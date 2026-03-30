@@ -70,17 +70,6 @@ impl Executor {
         Store::new(&self.repo)
     }
 
-    fn check_clean(&self) -> Result<()> {
-        let mut opts = git2::StatusOptions::new();
-        opts.include_untracked(false).include_ignored(false);
-        let statuses = self.repo.statuses(Some(&mut opts))?;
-        if statuses.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::DirtyWorktree)
-        }
-    }
-
     /// Create a new issue.
     ///
     /// # Errors
@@ -963,16 +952,16 @@ impl Executor {
             .ok()
             .map(|o| o.id());
 
-        let dirty = if abs.is_file() {
+        let (dirty, working_oid) = if abs.is_file() {
             let current = self.repo.blob_path(&abs)?;
-            clean_oid.is_none_or(|oid| oid != current)
+            (clean_oid.is_none_or(|oid| oid != current), Some(current))
         } else if abs.is_dir() {
             let mut opts = git2::StatusOptions::new();
             opts.include_untracked(false)
                 .include_ignored(false)
                 .pathspec(format!("{}/*", path.display()));
             let statuses = self.repo.statuses(Some(&mut opts))?;
-            !statuses.is_empty()
+            (!statuses.is_empty(), None)
         } else {
             return Err(Error::NotFound(path.display().to_string()));
         };
@@ -985,9 +974,9 @@ impl Executor {
             return Err(Error::DirtyWorktree);
         }
 
-        // Hash dirty working-tree content into the object store.
-        if abs.is_file() {
-            Ok(self.repo.blob_path(&abs)?.to_string())
+        // Return the already-hashed blob OID, or hash the dirty directory.
+        if let Some(oid) = working_oid {
+            Ok(oid.to_string())
         } else {
             Ok(hash_worktree_dir(&self.repo, &abs)?.to_string())
         }
@@ -1013,16 +1002,57 @@ impl Executor {
             return Ok(obj.id().to_string());
         }
 
-        // If the resolved object is HEAD's commit, hash the whole working tree.
+        // Check if the resolved object points at HEAD (commit or its tree).
         if let Ok(head_ref) = self.repo.head()
             && let Ok(head_commit) = head_ref.peel_to_commit()
-            && obj.id() == head_commit.id()
             && let Some(workdir) = self.repo.workdir()
         {
-            return Ok(hash_worktree_dir(&self.repo, workdir)?.to_string());
+            let is_head_commit = obj.id() == head_commit.id();
+            let is_head_tree = obj.id() == head_commit.tree_id();
+            if is_head_commit || is_head_tree {
+                return Ok(hash_worktree_dir(&self.repo, workdir)?.to_string());
+            }
         }
 
         Ok(obj.id().to_string())
+    }
+
+    /// Resolve `--issue`, `--review`, or `--object` to the comment chain ref name.
+    ///
+    /// Validates that `--object` targets a commit, blob, or tag (not a bare tree).
+    fn resolve_comment_entity(
+        &self,
+        issue: Option<&str>,
+        review: Option<&str>,
+        object: Option<&str>,
+    ) -> Result<String> {
+        if let Some(o) = object {
+            let obj = self
+                .repo
+                .revparse_single(o)
+                .map_err(|_| Error::NotFound(o.to_string()))?;
+            match obj.kind() {
+                Some(ObjectType::Commit | ObjectType::Blob | ObjectType::Tag) => {}
+                Some(other) => return Err(Error::InvalidObjectType(other.to_string())),
+                None => return Err(Error::InvalidObjectType("unknown".into())),
+            }
+            return Ok(object_comment_ref(&obj.id().to_string()));
+        }
+        let review = review.map(String::from).or_else(|| {
+            if issue.is_none() {
+                self.active_review()
+            } else {
+                None
+            }
+        });
+        if let Some(ref r) = review {
+            let review = self.store().get_review(r)?;
+            return Ok(review_comment_ref(&review.oid));
+        }
+        let issue_ref =
+            issue.ok_or_else(|| Error::Config("--issue, --review, or --object required".into()))?;
+        let issue = self.store().get_issue(issue_ref)?;
+        Ok(issue_comment_ref(&issue.oid))
     }
 
     /// Dispatch a parsed CLI command, writing output to stdout.
@@ -1037,10 +1067,6 @@ impl Executor {
         use crate::cli::{
             Command, CommentCommand, ConfigCommand, ContributorCommand, IssueCommand, ReviewCommand,
         };
-
-        if !cli.allow_dirty && !self.repo.is_bare() {
-            self.check_clean()?;
-        }
 
         match &cli.command {
             Command::Config { command } => match command {
@@ -1177,8 +1203,7 @@ impl Executor {
                     interactive,
                 } => {
                     let resolved = crate::input::resolve_body(body.clone(), file.clone())?;
-                    let interactive =
-                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let interactive = *interactive || should_interact(resolved.is_none());
                     let body = if interactive {
                         crate::interactive::prompt_body(resolved.as_deref())?
                     } else {
@@ -1191,31 +1216,12 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let comment = if let Some(o) = object {
-                        let oid = self
-                            .repo
-                            .revparse_single(o)
-                            .map_err(|_| Error::NotFound(o.clone()))?
-                            .id()
-                            .to_string();
-                        self.add_object_comment(&oid, &body, anchor.as_ref())?
-                    } else {
-                        let review = review.clone().or_else(|| {
-                            if issue.is_none() {
-                                self.active_review()
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(ref r) = review {
-                            self.add_review_comment(r, &body, anchor.as_ref())?
-                        } else {
-                            let issue = issue.as_deref().ok_or_else(|| {
-                                Error::Config("--issue, --review, or --object required".into())
-                            })?;
-                            self.add_issue_comment(issue, &body, anchor.as_ref())?
-                        }
-                    };
+                    let ref_name = self.resolve_comment_entity(
+                        issue.as_deref(),
+                        review.as_deref(),
+                        object.as_deref(),
+                    )?;
+                    let comment = add_comment(&self.repo, &ref_name, &body, anchor.as_ref())?;
                     print_comment(&comment, cli.json);
                 }
 
@@ -1234,8 +1240,7 @@ impl Executor {
                     interactive,
                 } => {
                     let resolved = crate::input::resolve_body(body.clone(), file.clone())?;
-                    let interactive =
-                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let interactive = *interactive || should_interact(resolved.is_none());
                     let body = if interactive {
                         crate::interactive::prompt_body(resolved.as_deref())?
                     } else {
@@ -1248,31 +1253,13 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let comment = if let Some(o) = object {
-                        let oid = self
-                            .repo
-                            .revparse_single(o)
-                            .map_err(|_| Error::NotFound(o.clone()))?
-                            .id()
-                            .to_string();
-                        self.reply_object_comment(&oid, &body, reply_to, anchor.as_ref())?
-                    } else {
-                        let review = review.clone().or_else(|| {
-                            if issue.is_none() {
-                                self.active_review()
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(ref r) = review {
-                            self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
-                        } else {
-                            let issue = issue.as_deref().ok_or_else(|| {
-                                Error::Config("--issue, --review, or --object required".into())
-                            })?;
-                            self.reply_issue_comment(issue, &body, reply_to, anchor.as_ref())?
-                        }
-                    };
+                    let ref_name = self.resolve_comment_entity(
+                        issue.as_deref(),
+                        review.as_deref(),
+                        object.as_deref(),
+                    )?;
+                    let comment =
+                        add_reply(&self.repo, &ref_name, &body, reply_to, anchor.as_ref())?;
                     print_comment(&comment, cli.json);
                 }
 
@@ -1286,38 +1273,19 @@ impl Executor {
                     interactive,
                 } => {
                     let resolved = crate::input::resolve_body(message.clone(), file.clone())?;
-                    let interactive =
-                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let interactive = *interactive || should_interact(resolved.is_none());
                     let resolved = if interactive {
                         Some(crate::interactive::prompt_body(resolved.as_deref())?)
                     } else {
                         resolved
                     };
-                    let comment = if let Some(o) = object {
-                        let oid = self
-                            .repo
-                            .revparse_single(o)
-                            .map_err(|_| Error::NotFound(o.clone()))?
-                            .id()
-                            .to_string();
-                        self.resolve_object_comment(&oid, thread, resolved.as_deref())?
-                    } else {
-                        let review = review.clone().or_else(|| {
-                            if issue.is_none() {
-                                self.active_review()
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(ref r) = review {
-                            self.resolve_review_comment(r, thread, resolved.as_deref())?
-                        } else {
-                            let issue = issue.as_deref().ok_or_else(|| {
-                                Error::Config("--issue, --review, or --object required".into())
-                            })?;
-                            self.resolve_issue_comment(issue, thread, resolved.as_deref())?
-                        }
-                    };
+                    let ref_name = self.resolve_comment_entity(
+                        issue.as_deref(),
+                        review.as_deref(),
+                        object.as_deref(),
+                    )?;
+                    let comment =
+                        resolve_comment(&self.repo, &ref_name, thread, resolved.as_deref())?;
                     print_comment(&comment, cli.json);
                 }
 
@@ -1326,31 +1294,12 @@ impl Executor {
                     review,
                     object,
                 } => {
-                    let comments = if let Some(o) = object {
-                        let oid = self
-                            .repo
-                            .revparse_single(o)
-                            .map_err(|_| Error::NotFound(o.clone()))?
-                            .id()
-                            .to_string();
-                        self.list_object_comments(&oid)?
-                    } else {
-                        let review = review.clone().or_else(|| {
-                            if issue.is_none() {
-                                self.active_review()
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(ref r) = review {
-                            self.list_review_comments(r)?
-                        } else {
-                            let issue = issue.as_deref().ok_or_else(|| {
-                                Error::Config("--issue, --review, or --object required".into())
-                            })?;
-                            self.list_issue_comments(issue)?
-                        }
-                    };
+                    let ref_name = self.resolve_comment_entity(
+                        issue.as_deref(),
+                        review.as_deref(),
+                        object.as_deref(),
+                    )?;
+                    let comments = list_comments(&self.repo, &ref_name)?;
                     if cli.json {
                         println!(
                             "{}",
@@ -1374,10 +1323,8 @@ impl Executor {
                     interactive,
                 } => {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
-                    let interactive = *interactive
-                        || (title.is_none()
-                            && resolved_body.is_none()
-                            && std::io::stdin().is_terminal());
+                    let interactive =
+                        *interactive || should_interact(title.is_none() && resolved_body.is_none());
                     let (title, description) = if interactive {
                         let input = crate::interactive::prompt_new_review(title.as_deref())?;
                         (input.title, input.description)
@@ -1394,7 +1341,9 @@ impl Executor {
                     let head_oid = match (head, path) {
                         (Some(h), _) => self.resolve_head(h, cli.allow_dirty)?,
                         (None, Some(p)) => self.resolve_path(p, cli.allow_dirty)?,
-                        _ => unreachable!("clap group ensures one is present"),
+                        _ => {
+                            return Err(Error::Config("--head or --path required".into()));
+                        }
                     };
                     let base_oid = base
                         .as_deref()
@@ -1461,7 +1410,7 @@ impl Executor {
                 } => {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
                     let no_fields = title.is_none() && resolved_body.is_none() && state.is_none();
-                    let interactive = *interactive || (no_fields && std::io::stdin().is_terminal());
+                    let interactive = *interactive || should_interact(no_fields);
                     let (eff_title, eff_body, eff_state): (
                         Option<String>,
                         Option<String>,
@@ -1581,10 +1530,8 @@ impl Executor {
                     interactive,
                 } => {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
-                    let interactive = *interactive
-                        || (title.is_none()
-                            && resolved_body.is_none()
-                            && std::io::stdin().is_terminal());
+                    let interactive =
+                        *interactive || should_interact(title.is_none() && resolved_body.is_none());
                     let (title, body, labels, assignees) = if interactive {
                         let input = crate::interactive::prompt_new_issue(title.as_deref())?;
                         (input.title, input.body, input.labels, input.assignees)
@@ -1702,7 +1649,7 @@ impl Executor {
                         && remove_labels.is_empty()
                         && add_assignees.is_empty()
                         && remove_assignees.is_empty();
-                    let interactive = *interactive || (no_fields && std::io::stdin().is_terminal());
+                    let interactive = *interactive || should_interact(no_fields);
                     let (eff_title, eff_body, eff_state): (
                         Option<String>,
                         Option<String>,
@@ -2021,6 +1968,9 @@ fn walk_tree(
 }
 
 /// Recursively hash a working-tree directory into the object store as a tree.
+///
+/// Respects `.gitignore` rules, follows symlinks, and preserves the executable
+/// bit on files.
 fn hash_worktree_dir(repo: &Repository, dir: &std::path::Path) -> Result<git2::Oid> {
     let mut builder = repo.treebuilder(None)?;
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::result::Result<_, _>>()?;
@@ -2028,19 +1978,54 @@ fn hash_worktree_dir(repo: &Repository, dir: &std::path::Path) -> Result<git2::O
     for entry in entries {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let ft = entry.file_type()?;
-        if ft.is_file() {
-            let oid = repo.blob_path(&entry.path())?;
-            builder.insert(&*name, oid, 0o100_644)?;
-        } else if ft.is_dir() {
-            if name == ".git" {
-                continue;
-            }
-            let oid = hash_worktree_dir(repo, &entry.path())?;
+        let path = entry.path();
+
+        // Skip .git directory/file (submodules use a .git file).
+        if name == ".git" {
+            continue;
+        }
+
+        // Respect .gitignore via libgit2.
+        if repo.status_should_ignore(&path).unwrap_or(false) {
+            continue;
+        }
+
+        // Follow symlinks for the canonical file type.
+        let meta = std::fs::metadata(&path)?;
+        if meta.is_file() {
+            let oid = repo.blob_path(&path)?;
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+                if meta.permissions().mode() & 0o111 != 0 {
+                    0o100_755
+                } else {
+                    0o100_644
+                }
+            };
+            #[cfg(not(unix))]
+            let mode = 0o100_644;
+            builder.insert(&*name, oid, mode)?;
+        } else if meta.is_dir() {
+            let oid = hash_worktree_dir(repo, &path)?;
             builder.insert(&*name, oid, 0o040_000)?;
         }
     }
     Ok(builder.write()?)
+}
+
+/// Return `true` when interactive prompts should be shown.
+///
+/// Requires both stdin and stdout to be a TTY *and* the `FORGE_NO_INTERACTIVE`
+/// env var to be unset. `missing_input` indicates whether the caller still
+/// needs user-supplied content (e.g. no `--body` was given).
+#[cfg(feature = "cli")]
+fn should_interact(missing_input: bool) -> bool {
+    use std::io::IsTerminal;
+    missing_input
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::env::var_os("FORGE_NO_INTERACTIVE").is_none()
 }
 
 fn build_anchor(
