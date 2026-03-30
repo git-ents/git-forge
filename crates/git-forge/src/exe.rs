@@ -263,6 +263,9 @@ impl Executor {
 
     /// Add a comment to a review.
     ///
+    /// Blob-anchored comments are written to `object/<blob_oid>` chains so
+    /// they survive retargeting. Unanchored comments stay on the review chain.
+    ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
     pub fn add_review_comment(
@@ -272,7 +275,7 @@ impl Executor {
         anchor: Option<&Anchor>,
     ) -> Result<Comment> {
         let review = self.store().get_review(review_ref)?;
-        let ref_name = review_comment_ref(&review.oid);
+        let ref_name = self.review_comment_chain_ref(&review.oid, anchor);
         add_comment(&self.repo, &ref_name, body, anchor)
     }
 
@@ -288,7 +291,7 @@ impl Executor {
         anchor: Option<&Anchor>,
     ) -> Result<Comment> {
         let review = self.store().get_review(review_ref)?;
-        let ref_name = review_comment_ref(&review.oid);
+        let ref_name = self.review_comment_chain_ref(&review.oid, anchor);
         add_reply(&self.repo, &ref_name, body, reply_to_oid, anchor)
     }
 
@@ -309,12 +312,56 @@ impl Executor {
 
     /// List comments on a review.
     ///
+    /// Aggregates blob-anchored object comments from the review's target tree
+    /// with unanchored comments from the review chain.
+    ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
     pub fn list_review_comments(&self, review_ref: &str) -> Result<Vec<Comment>> {
         let review = self.store().get_review(review_ref)?;
+        let mut comments = Vec::new();
+
+        // Collect blob-anchored comments from object chains.
+        let files = review_target_files(&self.repo, &review)?;
+        let mut seen_refs = std::collections::HashSet::new();
+        for (_, blob_oid) in &files {
+            if !seen_refs.insert(blob_oid.clone()) {
+                continue;
+            }
+            let ref_name = object_comment_ref(blob_oid);
+            match list_comments(&self.repo, &ref_name) {
+                Ok(cs) => comments.extend(cs),
+                Err(Error::Git(e)) if e.code() == ErrorCode::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Collect review-level (unanchored) comments.
         let ref_name = review_comment_ref(&review.oid);
-        list_comments(&self.repo, &ref_name)
+        match list_comments(&self.repo, &ref_name) {
+            Ok(cs) => comments.extend(cs),
+            Err(Error::Git(e)) if e.code() == ErrorCode::NotFound => {}
+            Err(e) => return Err(e),
+        }
+
+        comments.sort_by_key(|c| c.timestamp);
+        Ok(comments)
+    }
+
+    /// Determine the comment chain ref for a review comment.
+    ///
+    /// Blob-anchored comments go to `object/<blob_oid>`, everything else
+    /// goes to `review/<review_oid>`.
+    fn review_comment_chain_ref(&self, review_oid: &str, anchor: Option<&Anchor>) -> String {
+        if let Some(Anchor::Object { oid, .. }) = anchor
+            && let Ok(obj) = self
+                .repo
+                .find_object(git2::Oid::from_str(oid).unwrap_or(git2::Oid::zero()), None)
+            && obj.kind() == Some(ObjectType::Blob)
+        {
+            return object_comment_ref(oid);
+        }
+        review_comment_ref(review_oid)
     }
 
     // -----------------------------------------------------------------------
