@@ -475,3 +475,65 @@ fn create_review_imported_preserves_base() {
     assert_eq!(fetched.target.base, Some(base_blob));
     assert_eq!(fetched.source_ref, Some("feature".to_string()));
 }
+
+// ---------------------------------------------------------------------------
+// Approvals
+// ---------------------------------------------------------------------------
+
+#[test]
+fn approve_review_records_user() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = store
+        .create_review("Approve me", "", &target, None)
+        .unwrap();
+    assert!(review.approvals.is_empty());
+
+    let approved = store.approve_review(&review.oid, Some("lgtm")).unwrap();
+    assert_eq!(approved.approvals.len(), 1);
+    assert_eq!(approved.approvals[0].0, "test");
+    assert_eq!(approved.approvals[0].1, "lgtm");
+
+    // Round-trip through get_review.
+    let fetched = store.get_review(&review.oid).unwrap();
+    assert_eq!(fetched.approvals.len(), 1);
+    assert_eq!(fetched.approvals[0].0, "test");
+}
+
+#[test]
+fn approve_review_overwrites_previous() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = store.create_review("Overwrite", "", &target, None).unwrap();
+
+    store.approve_review(&review.oid, Some("first")).unwrap();
+    let updated = store.approve_review(&review.oid, Some("second")).unwrap();
+    assert_eq!(updated.approvals.len(), 1);
+    assert_eq!(updated.approvals[0].1, "second");
+}
+
+#[test]
+fn revoke_approval_removes_entry() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = store.create_review("Revoke", "", &target, None).unwrap();
+
+    store.approve_review(&review.oid, None).unwrap();
+    let revoked = store.revoke_approval(&review.oid).unwrap();
+    assert!(revoked.approvals.is_empty());
+
+    let fetched = store.get_review(&review.oid).unwrap();
+    assert!(fetched.approvals.is_empty());
+}

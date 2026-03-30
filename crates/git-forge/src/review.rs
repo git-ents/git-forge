@@ -69,6 +69,8 @@ pub struct Review {
     pub state: ReviewState,
     /// Description in Markdown.
     pub description: String,
+    /// Approvals keyed by contributor name, with an optional message.
+    pub approvals: Vec<(String, String)>,
 }
 
 fn review_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<Review> {
@@ -78,6 +80,7 @@ fn review_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<
     let mut source_ref: Option<String> = None;
     let mut head = String::new();
     let mut base: Option<String> = None;
+    let mut approvals: Vec<(String, String)> = Vec::new();
 
     for (name, value) in &entry.fields {
         let text = || String::from_utf8_lossy(value).into_owned();
@@ -88,6 +91,12 @@ fn review_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<
             "meta/ref" => source_ref = Some(text()),
             "meta/target/head" => head = text(),
             "meta/target/base" => base = Some(text()),
+            _ if name.starts_with("approvals/") => {
+                let user = name.strip_prefix("approvals/").unwrap_or("");
+                if !user.is_empty() {
+                    approvals.push((user.to_string(), text()));
+                }
+            }
             _ => {}
         }
     }
@@ -100,6 +109,7 @@ fn review_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<
         source_ref,
         state,
         description,
+        approvals,
     })
 }
 
@@ -268,6 +278,7 @@ impl Store<'_> {
             source_ref: source_ref.map(String::from),
             state: ReviewState::Open,
             description: description.to_string(),
+            approvals: Vec::new(),
         })
     }
 
@@ -334,6 +345,7 @@ impl Store<'_> {
             source_ref: source_ref.map(String::from),
             state,
             description: description.to_string(),
+            approvals: Vec::new(),
         })
     }
 
@@ -459,6 +471,54 @@ impl Store<'_> {
             .repo
             .update(&ref_name, &mutations, "refresh review target")?;
         fixup_pin_entries(self.repo, &oid, &new_target)?;
+        review_from_entry(&entry, display_id)
+    }
+
+    /// Record an approval on a review from the current git user.
+    ///
+    /// The approval is stored as `approvals/<name>` in the review's ledger
+    /// entry. Approving again overwrites the previous approval message.
+    ///
+    /// # Errors
+    /// Returns an error if the review does not exist or a git operation fails.
+    pub fn approve_review(&self, oid_or_id: &str, message: Option<&str>) -> Result<Review> {
+        let index = read_index(self.repo, REVIEW_INDEX)?;
+        let known_oids = self.repo.list(REVIEW_PREFIX)?;
+        let oid = resolve_oid(index.as_ref(), &known_oids, oid_or_id)?;
+        let ref_name = format!("{REVIEW_PREFIX}{oid}");
+
+        let cfg = self.repo.config()?;
+        let name = cfg
+            .get_string("user.name")
+            .map_err(|_| Error::Config("user.name not set".into()))?;
+
+        let field = format!("approvals/{name}");
+        let body = message.unwrap_or("").as_bytes();
+        let mutations = [Mutation::Set(&field, body)];
+        let entry = self.repo.update(&ref_name, &mutations, "approve review")?;
+        let display_id = display_id_for_oid(index.as_ref(), &oid);
+        review_from_entry(&entry, display_id)
+    }
+
+    /// Revoke an approval on a review from the current git user.
+    ///
+    /// # Errors
+    /// Returns an error if the review does not exist or a git operation fails.
+    pub fn revoke_approval(&self, oid_or_id: &str) -> Result<Review> {
+        let index = read_index(self.repo, REVIEW_INDEX)?;
+        let known_oids = self.repo.list(REVIEW_PREFIX)?;
+        let oid = resolve_oid(index.as_ref(), &known_oids, oid_or_id)?;
+        let ref_name = format!("{REVIEW_PREFIX}{oid}");
+
+        let cfg = self.repo.config()?;
+        let name = cfg
+            .get_string("user.name")
+            .map_err(|_| Error::Config("user.name not set".into()))?;
+
+        let field = format!("approvals/{name}");
+        let mutations = [Mutation::Delete(&field)];
+        let entry = self.repo.update(&ref_name, &mutations, "revoke approval")?;
+        let display_id = display_id_for_oid(index.as_ref(), &oid);
         review_from_entry(&entry, display_id)
     }
 }

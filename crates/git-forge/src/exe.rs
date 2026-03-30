@@ -227,6 +227,22 @@ impl Executor {
             .update_review(reference, title, description, state)
     }
 
+    /// Approve a review as the current git user.
+    ///
+    /// # Errors
+    /// Returns an error if the review does not exist or a git operation fails.
+    pub fn approve_review(&self, reference: &str, message: Option<&str>) -> Result<Review> {
+        self.store().approve_review(reference, message)
+    }
+
+    /// Revoke the current user's approval on a review.
+    ///
+    /// # Errors
+    /// Returns an error if the review does not exist or a git operation fails.
+    pub fn revoke_approval(&self, reference: &str) -> Result<Review> {
+        self.store().revoke_approval(reference)
+    }
+
     // -----------------------------------------------------------------------
     // Review comments
     // -----------------------------------------------------------------------
@@ -838,6 +854,33 @@ impl Executor {
                         self.update_review(reference, None, None, Some(&ReviewState::Closed))?;
                     print_review(&review, cli.json);
                 }
+
+                ReviewCommand::Approve { reference, message } => {
+                    let review = self.approve_review(reference, message.as_deref())?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::Unapprove { reference } => {
+                    let review = self.revoke_approval(reference)?;
+                    print_review(&review, cli.json);
+                }
+
+                ReviewCommand::Files { reference } => {
+                    let review = self.get_review(reference)?;
+                    let files = review_target_files(&self.repo, &review)?;
+                    if cli.json {
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&files).expect("serialize")
+                        );
+                    } else if files.is_empty() {
+                        println!("No files found (target object may not exist locally).");
+                    } else {
+                        for (path, oid) in &files {
+                            println!("{} {path}", &oid[..oid.len().min(12)]);
+                        }
+                    }
+                }
             },
 
             Command::Issue { command } => match command {
@@ -1224,9 +1267,68 @@ fn print_review(review: &Review, json: bool) {
     if let Some(ref sref) = review.source_ref {
         println!("ref:         {sref}");
     }
+    if !review.approvals.is_empty() {
+        let names: Vec<&str> = review.approvals.iter().map(|(n, _)| n.as_str()).collect();
+        println!("approved-by: {}", names.join(", "));
+    }
     if !review.description.is_empty() {
         println!();
         println!("{}", review.description);
+    }
+}
+
+/// Walk the review's target object and return `(path, blob_oid)` pairs.
+fn review_target_files(repo: &git2::Repository, review: &Review) -> Result<Vec<(String, String)>> {
+    let Ok(oid) = git2::Oid::from_str(&review.target.head) else {
+        return Ok(Vec::new());
+    };
+    let Ok(obj) = repo.find_object(oid, None) else {
+        return Ok(Vec::new());
+    };
+
+    let mut files = Vec::new();
+    match obj.kind() {
+        Some(git2::ObjectType::Blob) => {
+            files.push(("(blob)".to_string(), review.target.head.clone()));
+        }
+        Some(git2::ObjectType::Tree) => {
+            let tree = repo.find_tree(oid)?;
+            walk_tree(repo, &tree, "", &mut files);
+        }
+        Some(git2::ObjectType::Commit) => {
+            let commit = repo.find_commit(oid)?;
+            let tree = commit.tree()?;
+            walk_tree(repo, &tree, "", &mut files);
+        }
+        _ => {}
+    }
+    Ok(files)
+}
+
+fn walk_tree(
+    repo: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    prefix: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    for entry in tree {
+        let name = entry.name().unwrap_or("");
+        let path = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        match entry.kind() {
+            Some(git2::ObjectType::Blob) => {
+                out.push((path, entry.id().to_string()));
+            }
+            Some(git2::ObjectType::Tree) => {
+                if let Ok(subtree) = repo.find_tree(entry.id()) {
+                    walk_tree(repo, &subtree, &path, out);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

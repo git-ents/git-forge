@@ -277,6 +277,27 @@ pub enum ReviewCommand {
         /// Display ID or OID prefix.
         reference: String,
     },
+
+    /// Approve a review.
+    Approve {
+        /// Display ID or OID prefix.
+        reference: String,
+
+        /// Optional approval message.
+        message: Option<String>,
+    },
+
+    /// Revoke your approval on a review.
+    Unapprove {
+        /// Display ID or OID prefix.
+        reference: String,
+    },
+
+    /// List files in the review target.
+    Files {
+        /// Display ID or OID prefix.
+        reference: String,
+    },
 }
 
 /// Issue subcommands.
