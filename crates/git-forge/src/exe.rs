@@ -418,15 +418,28 @@ impl Executor {
 
         let wt_name = format!("forge-review-{}", &review.oid[..12.min(review.oid.len())]);
 
-        // If the worktree already exists, return its path.
-        if let Ok(wt) = self.repo.find_worktree(&wt_name)
-            && wt.validate().is_ok()
-        {
-            let wt_repo = Repository::open(wt.path())?;
-            let wt_workdir = wt_repo
-                .workdir()
-                .ok_or_else(|| Error::Config("worktree has no workdir".into()))?;
-            return Ok((review, wt_workdir.to_path_buf()));
+        // If the worktree already exists and is valid, return its path.
+        // If it exists but is stale, prune it so we can recreate below.
+        if let Ok(wt) = self.repo.find_worktree(&wt_name) {
+            if wt.validate().is_ok() {
+                let wt_repo = Repository::open(wt.path())?;
+                let wt_workdir = wt_repo
+                    .workdir()
+                    .ok_or_else(|| Error::Config("worktree has no workdir".into()))?;
+                return Ok((review, wt_workdir.to_path_buf()));
+            }
+            let _ = wt.prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(false)
+                    .working_tree(true),
+            ));
+        }
+
+        // Remove any orphaned worktree admin directory left by a prior failed
+        // checkout or incomplete prune so that `repo.worktree()` can succeed.
+        let stale_admin = self.repo.path().join("worktrees").join(&wt_name);
+        if stale_admin.exists() {
+            let _ = std::fs::remove_dir_all(&stale_admin);
         }
 
         let workdir = self
@@ -469,7 +482,9 @@ impl Executor {
         let branch = self.repo.branch(&branch_name, &head_commit, true)?;
         let branch_ref = branch.into_reference();
 
-        std::fs::create_dir_all(wt_path)?;
+        if let Some(parent) = wt_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
         let mut opts = git2::WorktreeAddOptions::new();
         opts.reference(Some(&branch_ref));
