@@ -643,16 +643,22 @@ impl Executor {
                     issue,
                     review,
                     anchor,
+                    anchor_path,
                     range,
+                    anchor_start,
+                    anchor_end,
                     body,
                     file,
                 } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
-                    let anchor = anchor.as_deref().map(|oid| Anchor::Object {
-                        oid: oid.to_string(),
-                        range: range.clone(),
-                    });
+                    let anchor = build_anchor(
+                        anchor.as_deref(),
+                        anchor_path.as_deref(),
+                        range.as_deref(),
+                        anchor_start.as_deref(),
+                        anchor_end.as_deref(),
+                    );
                     let comment = if let Some(r) = review {
                         self.add_review_comment(r, &body, anchor.as_ref())?
                     } else {
@@ -669,16 +675,22 @@ impl Executor {
                     review,
                     reply_to,
                     anchor,
+                    anchor_path,
                     range,
+                    anchor_start,
+                    anchor_end,
                     body,
                     file,
                 } => {
                     let body =
                         crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
-                    let anchor = anchor.as_deref().map(|oid| Anchor::Object {
-                        oid: oid.to_string(),
-                        range: range.clone(),
-                    });
+                    let anchor = build_anchor(
+                        anchor.as_deref(),
+                        anchor_path.as_deref(),
+                        range.as_deref(),
+                        anchor_start.as_deref(),
+                        anchor_end.as_deref(),
+                    );
                     let comment = if let Some(r) = review {
                         self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
                     } else {
@@ -741,9 +753,26 @@ impl Executor {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
                     let title = title.as_deref().unwrap_or("");
                     let description = resolved_body.as_deref().unwrap_or("");
+
+                    // Validate that head resolves to a git object.
+                    let head_oid = self
+                        .repo
+                        .revparse_single(head)
+                        .map_err(|_| Error::NotFound(head.clone()))?
+                        .id()
+                        .to_string();
+                    let base_oid = base
+                        .as_deref()
+                        .map(|b| {
+                            self.repo
+                                .revparse_single(b)
+                                .map(|o| o.id().to_string())
+                                .map_err(|_| Error::NotFound(b.to_string()))
+                        })
+                        .transpose()?;
                     let target = ReviewTarget {
-                        head: head.clone(),
-                        base: base.clone(),
+                        head: head_oid,
+                        base: base_oid,
                     };
                     let review =
                         self.create_review(title, description, &target, source_ref.as_deref())?;
@@ -1193,10 +1222,10 @@ fn print_review(review: &Review, json: bool) {
     println!("state:       {}", review.state.as_str());
     println!(
         "target.head: {}",
-        &review.target.head[..review.target.head.len().min(8)]
+        &review.target.head[..review.target.head.len().min(12)]
     );
     if let Some(ref base) = review.target.base {
-        println!("target.base: {}", &base[..base.len().min(8)]);
+        println!("target.base: {}", &base[..base.len().min(12)]);
     }
     if let Some(ref sref) = review.source_ref {
         println!("ref:         {sref}");
@@ -1204,6 +1233,29 @@ fn print_review(review: &Review, json: bool) {
     if !review.description.is_empty() {
         println!();
         println!("{}", review.description);
+    }
+}
+
+fn build_anchor(
+    anchor: Option<&str>,
+    anchor_path: Option<&str>,
+    range: Option<&str>,
+    anchor_start: Option<&str>,
+    anchor_end: Option<&str>,
+) -> Option<Anchor> {
+    if let Some(oid) = anchor {
+        Some(Anchor::Object {
+            oid: oid.to_string(),
+            path: anchor_path.map(String::from),
+            range: range.map(String::from),
+        })
+    } else if let (Some(start), Some(end)) = (anchor_start, anchor_end) {
+        Some(Anchor::CommitRange {
+            start: start.to_string(),
+            end: end.to_string(),
+        })
+    } else {
+        None
     }
 }
 
@@ -1217,7 +1269,7 @@ fn print_review_list(reviews: &[Review]) {
         let id = review
             .display_id
             .as_deref()
-            .unwrap_or(&review.oid[..review.oid.len().min(8)]);
+            .unwrap_or(&review.oid[..review.oid.len().min(12)]);
         println!("{id}  {}  {}", review.state.as_str(), review.title);
     }
 }

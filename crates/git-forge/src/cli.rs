@@ -91,22 +91,35 @@ pub enum ConfigCommand {
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
     /// Add a top-level comment to an issue or review.
+    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
     Add {
         /// Issue display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         issue: Option<String>,
 
         /// Review display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         review: Option<String>,
 
         /// Anchor the comment to a git object (blob, commit, or tree OID).
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["anchor_start", "anchor_end"])]
         anchor: Option<String>,
+
+        /// File path within the anchored object.
+        #[arg(long, requires = "anchor")]
+        anchor_path: Option<String>,
 
         /// Line range within the anchored object (e.g. "10-20").
         #[arg(long, requires = "anchor")]
         range: Option<String>,
+
+        /// Start OID for a commit-range anchor.
+        #[arg(long, requires = "anchor_end", conflicts_with = "anchor")]
+        anchor_start: Option<String>,
+
+        /// End OID for a commit-range anchor.
+        #[arg(long, requires = "anchor_start", conflicts_with = "anchor")]
+        anchor_end: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
@@ -117,13 +130,14 @@ pub enum CommentCommand {
     },
 
     /// Reply to an existing comment.
+    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
     Reply {
         /// Issue display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         issue: Option<String>,
 
         /// Review display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         review: Option<String>,
 
         /// OID of the comment to reply to.
@@ -131,12 +145,24 @@ pub enum CommentCommand {
         reply_to: String,
 
         /// Anchor the reply to a git object (blob, commit, or tree OID).
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["anchor_start", "anchor_end"])]
         anchor: Option<String>,
+
+        /// File path within the anchored object.
+        #[arg(long, requires = "anchor")]
+        anchor_path: Option<String>,
 
         /// Line range within the anchored object (e.g. "10-20").
         #[arg(long, requires = "anchor")]
         range: Option<String>,
+
+        /// Start OID for a commit-range anchor.
+        #[arg(long, requires = "anchor_end", conflicts_with = "anchor")]
+        anchor_start: Option<String>,
+
+        /// End OID for a commit-range anchor.
+        #[arg(long, requires = "anchor_start", conflicts_with = "anchor")]
+        anchor_end: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
@@ -147,13 +173,14 @@ pub enum CommentCommand {
     },
 
     /// Resolve a comment thread.
+    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
     Resolve {
         /// Issue display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         issue: Option<String>,
 
         /// Review display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         review: Option<String>,
 
         /// OID of the comment that starts the thread.
@@ -169,13 +196,14 @@ pub enum CommentCommand {
     },
 
     /// List comments on an issue or review.
+    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
     List {
         /// Issue display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         issue: Option<String>,
 
         /// Review display ID or OID prefix.
-        #[arg(long, group = "entity")]
+        #[arg(long)]
         review: Option<String>,
     },
 }

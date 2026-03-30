@@ -467,3 +467,77 @@ async fn roundtrip_reviews_no_duplicates() {
     // Verify no duplicate entity ref.
     assert_eq!(store.list_reviews().unwrap().len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn import_preserves_base_sha_and_head_ref() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(vec![gh_pull(1, "PR", false)]);
+    let cfg = test_config();
+
+    import_reviews(&repo, &cfg, &client).await.unwrap();
+
+    let store = Store::new(&repo);
+    let review = store.get_review("GH#1").unwrap();
+
+    // base SHA should be the pull's base.sha, not None.
+    assert_eq!(
+        review.target.base.as_deref(),
+        Some("0000000000000000000000000000000000000000")
+    );
+    // source_ref should be the head branch name (for refresh_review_target).
+    assert_eq!(review.source_ref.as_deref(), Some("feature"));
+}
+
+#[tokio::test]
+async fn import_merged_pr_state_set_at_creation() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(vec![gh_pull(1, "Merged", true)]);
+    let cfg = test_config();
+
+    let report = import_reviews(&repo, &cfg, &client).await.unwrap();
+    // Only 1 import operation (no separate update step).
+    assert_eq!(report.imported, 1);
+
+    let store = Store::new(&repo);
+    let review = store.get_review("GH#1").unwrap();
+    assert_eq!(review.state, git_forge::review::ReviewState::Merged);
+}
+
+#[tokio::test]
+async fn export_anchored_review_comment_uses_review_api() {
+    let (_dir, repo) = test_repo();
+    let client = ReviewMockClient::new(Vec::new());
+    client.next_pr_number.set(1);
+    let cfg = test_config();
+
+    let store = Store::new(&repo);
+    let commit = head_oid(&repo);
+    let target = ReviewTarget {
+        head: commit.clone(),
+        base: None,
+    };
+    let review = store
+        .create_review("PR", "", &target, Some("feature"))
+        .unwrap();
+
+    export_reviews(&repo, &cfg, &client).await.unwrap();
+
+    // Add an anchored comment with a path.
+    let ref_name = review_comment_ref(&review.oid);
+    let anchor = git_forge::comment::Anchor::Object {
+        oid: commit,
+        path: Some("src/main.rs".to_string()),
+        range: Some("42-42".to_string()),
+    };
+    git_forge::comment::add_comment(&repo, &ref_name, "line note", Some(&anchor)).unwrap();
+
+    let report = export_reviews(&repo, &cfg, &client).await.unwrap();
+    assert_eq!(report.exported, 1);
+
+    // The comment should NOT have gone through issue comment API.
+    assert!(client.created_comments.borrow().is_empty());
+}

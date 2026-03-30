@@ -107,25 +107,38 @@ fn review_from_entry(entry: &LedgerEntry, display_id: Option<String>) -> Result<
     })
 }
 
-/// Pin target objects into the `objects/` subtree of the entity.
+/// Placeholder fields for the `objects/` subtree.
 ///
-/// Returns `(field_name, oid_bytes)` pairs for each object to pin.
+/// These reserve the tree paths during `Ledger::create`; `fixup_pin_entries`
+/// replaces them with tree entries whose OID is the actual target object.
 fn pin_fields(repo: &Repository, target: &ReviewTarget) -> Result<Vec<(String, Vec<u8>)>> {
     let mut fields = Vec::new();
     let head_oid = git2::Oid::from_str(&target.head)?;
-    let head_obj = repo.find_object(head_oid, None)?;
-    let head_mode = object_file_mode(head_obj.kind());
-    fields.push((
-        format!("objects/{}", target.head),
-        mode_tagged_bytes(head_mode),
-    ));
+    repo.find_object(head_oid, None)?; // validate existence
+    fields.push((format!("objects/{}", target.head), Vec::new()));
     if let Some(ref base) = target.base {
         let base_oid = git2::Oid::from_str(base)?;
-        let base_obj = repo.find_object(base_oid, None)?;
-        let base_mode = object_file_mode(base_obj.kind());
-        fields.push((format!("objects/{base}"), mode_tagged_bytes(base_mode)));
+        repo.find_object(base_oid, None)?;
+        fields.push((format!("objects/{base}"), Vec::new()));
     }
     Ok(fields)
+}
+
+/// Like `pin_fields` but silently skips objects that are not in the local repo.
+fn try_pin_fields(repo: &Repository, target: &ReviewTarget) -> Vec<(String, Vec<u8>)> {
+    let mut fields = Vec::new();
+    if let Ok(oid) = git2::Oid::from_str(&target.head)
+        && repo.find_object(oid, None).is_ok()
+    {
+        fields.push((format!("objects/{}", target.head), Vec::new()));
+    }
+    if let Some(ref base) = target.base
+        && let Ok(oid) = git2::Oid::from_str(base)
+        && repo.find_object(oid, None).is_ok()
+    {
+        fields.push((format!("objects/{base}"), Vec::new()));
+    }
+    fields
 }
 
 /// Map a git object type to the tree entry file mode used in the `objects/` tree.
@@ -137,10 +150,88 @@ fn object_file_mode(kind: Option<ObjectType>) -> FileMode {
     }
 }
 
-/// Produce a zero-length byte vec — the actual content is irrelevant for pin
-/// entries since the OID is in the tree entry name.
-fn mode_tagged_bytes(_mode: FileMode) -> Vec<u8> {
-    Vec::new()
+/// Rewrite the `objects/` subtree so each entry's OID points to the actual
+/// git object rather than the placeholder blob created by `Ledger::create`.
+///
+/// This is necessary because `git-ledger` always creates new blobs for field
+/// values; it cannot insert tree entries pointing to arbitrary existing objects.
+fn fixup_pin_entries(repo: &Repository, review_oid: &str, target: &ReviewTarget) -> Result<()> {
+    let ref_name = format!("{REVIEW_PREFIX}{review_oid}");
+    let reference = repo.find_reference(&ref_name)?;
+    let commit = reference.peel_to_commit()?;
+    let root_tree = commit.tree()?;
+
+    // Collect OIDs to pin (only those present locally).
+    let mut pins: Vec<(&str, git2::Oid, FileMode)> = Vec::new();
+    if let Ok(oid) = git2::Oid::from_str(&target.head)
+        && let Ok(obj) = repo.find_object(oid, None)
+    {
+        pins.push((&target.head, oid, object_file_mode(obj.kind())));
+    }
+    if let Some(ref base) = target.base
+        && let Ok(oid) = git2::Oid::from_str(base)
+        && let Ok(obj) = repo.find_object(oid, None)
+    {
+        pins.push((base, oid, object_file_mode(obj.kind())));
+    }
+
+    if pins.is_empty() {
+        return Ok(());
+    }
+
+    // Build the objects/ subtree with correct OIDs.
+    //
+    // Blobs and trees can be referenced directly — this prevents `git gc`
+    // from collecting them. Commits cannot be stored as gitlinks in a
+    // subtree, so we fall back to storing the OID hex as blob content.
+    let existing_objects = root_tree.get_name("objects").and_then(|e| {
+        if e.kind() == Some(ObjectType::Tree) {
+            repo.find_tree(e.id()).ok()
+        } else {
+            None
+        }
+    });
+    let mut obj_builder = repo.treebuilder(existing_objects.as_ref())?;
+    for (name, oid, mode) in &pins {
+        match mode {
+            FileMode::Blob | FileMode::Tree => {
+                obj_builder.insert(name, *oid, i32::from(*mode))?;
+            }
+            _ => {
+                // Commits: store OID hex as blob content (records the target
+                // but cannot prevent GC via tree reference).
+                let content_oid = repo.blob(oid.to_string().as_bytes())?;
+                obj_builder.insert(name, content_oid, 0o100_644)?;
+            }
+        }
+    }
+    let obj_tree_oid = obj_builder.write()?;
+
+    // Rebuild root tree with the fixed objects/ entry.
+    let mut root_builder = repo.treebuilder(Some(&root_tree))?;
+    root_builder.insert("objects", obj_tree_oid, 0o040_000)?;
+    let new_tree_oid = root_builder.write()?;
+    let new_tree = repo.find_tree(new_tree_oid)?;
+
+    // Amend: create new commit with same parent(s), author, message.
+    let sig = commit.author();
+    let parents: Vec<git2::Commit<'_>> = commit
+        .parent_ids()
+        .filter_map(|id| repo.find_commit(id).ok())
+        .collect();
+    let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
+    let new_commit = repo.commit(
+        None,
+        &sig,
+        &sig,
+        commit.message().unwrap_or(""),
+        &new_tree,
+        &parent_refs,
+    )?;
+
+    // Update the ref to point to the amended commit.
+    repo.reference(&ref_name, new_commit, true, "fixup pin entries")?;
+    Ok(())
 }
 
 impl Store<'_> {
@@ -183,6 +274,8 @@ impl Store<'_> {
             None,
         )?;
 
+        fixup_pin_entries(self.repo, &entry.id, target)?;
+
         Ok(Review {
             oid: entry.id,
             display_id: None,
@@ -194,9 +287,10 @@ impl Store<'_> {
         })
     }
 
-    /// Create a review with a custom git author, used when importing from an external source.
+    /// Create a review from an external source with a custom author.
     ///
-    /// `display_id` is written to the index immediately.
+    /// `display_id` is written to the index immediately. Attempts to pin target
+    /// objects; silently skips pinning for objects not available locally.
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
@@ -207,14 +301,18 @@ impl Store<'_> {
         description: &str,
         target: &ReviewTarget,
         source_ref: Option<&str>,
+        state: Option<&ReviewState>,
         display_id: &str,
         author: &git2::Signature<'_>,
         source: &str,
     ) -> Result<Review> {
+        let state = state.cloned().unwrap_or(ReviewState::Open);
+        let state_str = state.as_str().to_string();
+
         let mut fields: Vec<(&str, &[u8])> = vec![
             ("title", title.as_bytes()),
             ("description", description.as_bytes()),
-            ("meta/state", b"open"),
+            ("meta/state", state_str.as_bytes()),
             ("meta/target/head", target.head.as_bytes()),
             ("source/url", source.as_bytes()),
         ];
@@ -225,7 +323,7 @@ impl Store<'_> {
             fields.push(("meta/ref", sref.as_bytes()));
         }
 
-        let pin = pin_fields(self.repo, target)?;
+        let pin = try_pin_fields(self.repo, target);
         let pin_refs: Vec<(&str, &[u8])> = pin
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_slice()))
@@ -240,68 +338,17 @@ impl Store<'_> {
             Some(author),
         )?;
 
-        index_upsert(self.repo, REVIEW_INDEX, &[(display_id, &entry.id)])?;
+        let oid = entry.id.clone();
+        index_upsert(self.repo, REVIEW_INDEX, &[(display_id, &oid)])?;
+        fixup_pin_entries(self.repo, &oid, target)?;
 
         Ok(Review {
-            oid: entry.id.clone(),
+            oid,
             display_id: Some(display_id.to_string()),
             title: title.to_string(),
             target: target.clone(),
             source_ref: source_ref.map(String::from),
-            state: ReviewState::Open,
-            description: description.to_string(),
-        })
-    }
-
-    /// Create a review with a custom git author, skipping object pinning.
-    ///
-    /// Used when importing from an external source where target objects may not
-    /// be available in the local repository (e.g. PR head commits not yet fetched).
-    ///
-    /// # Errors
-    /// Returns an error if a git operation fails.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_review_imported_no_pin(
-        &self,
-        title: &str,
-        description: &str,
-        target: &ReviewTarget,
-        source_ref: Option<&str>,
-        display_id: &str,
-        author: &git2::Signature<'_>,
-        source: &str,
-    ) -> Result<Review> {
-        let mut fields: Vec<(&str, &[u8])> = vec![
-            ("title", title.as_bytes()),
-            ("description", description.as_bytes()),
-            ("meta/state", b"open"),
-            ("meta/target/head", target.head.as_bytes()),
-            ("source/url", source.as_bytes()),
-        ];
-        if let Some(ref base) = target.base {
-            fields.push(("meta/target/base", base.as_bytes()));
-        }
-        if let Some(sref) = source_ref {
-            fields.push(("meta/ref", sref.as_bytes()));
-        }
-
-        let entry = self.repo.create(
-            REVIEW_PREFIX,
-            &IdStrategy::CommitOid,
-            &fields,
-            "forge: create review",
-            Some(author),
-        )?;
-
-        index_upsert(self.repo, REVIEW_INDEX, &[(display_id, &entry.id)])?;
-
-        Ok(Review {
-            oid: entry.id.clone(),
-            display_id: Some(display_id.to_string()),
-            title: title.to_string(),
-            target: target.clone(),
-            source_ref: source_ref.map(String::from),
-            state: ReviewState::Open,
+            state,
             description: description.to_string(),
         })
     }
@@ -427,6 +474,7 @@ impl Store<'_> {
         let entry = self
             .repo
             .update(&ref_name, &mutations, "refresh review target")?;
+        fixup_pin_entries(self.repo, &oid, &new_target)?;
         review_from_entry(&entry, display_id)
     }
 }

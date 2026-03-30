@@ -194,49 +194,31 @@ pub async fn import_reviews(
 
         let body = pull.body.as_deref().unwrap_or("");
 
-        // Map merged + state to ReviewState string for later use.
         let review_state = if pull.merged {
-            "merged"
+            git_forge::review::ReviewState::Merged
+        } else if pull.state == "closed" {
+            git_forge::review::ReviewState::Closed
         } else {
-            match pull.state.as_str() {
-                "closed" => "closed",
-                _ => "open",
-            }
+            git_forge::review::ReviewState::Open
         };
 
         let target = ReviewTarget {
             head: pull.head.sha.clone(),
-            base: None,
+            base: Some(pull.base.sha.clone()),
         };
-        let source_ref = Some(pull.base.ref_field.as_str());
+        let source_ref = Some(pull.head.ref_field.as_str());
 
-        match store.create_review_imported_no_pin(
+        match store.create_review_imported(
             &pull.title,
             body,
             &target,
             source_ref,
+            Some(&review_state),
             &display_id,
             &author,
             &source,
         ) {
             Ok(created) => {
-                if review_state != "open"
-                    && let Err(e) = store.update_review(
-                        &created.oid,
-                        None,
-                        None,
-                        Some(
-                            &review_state
-                                .parse()
-                                .unwrap_or(git_forge::review::ReviewState::Open),
-                        ),
-                    )
-                {
-                    eprintln!(
-                        "forge: failed to set review state for PR {}: {e}",
-                        pull.number
-                    );
-                }
                 state.insert(state_key, created.oid.clone());
                 report.imported += 1;
             }
@@ -309,8 +291,9 @@ async fn import_review_comments_with_state(
 
         // Build trailer block with anchor info and Github-Id.
         let mut trailer_lines = Vec::new();
-        if comment.path.is_some() {
+        if let Some(ref path) = comment.path {
             trailer_lines.push(format!("Anchor: {}", comment.commit_id));
+            trailer_lines.push(format!("Anchor-Path: {path}"));
             if let Some(l) = comment.line {
                 trailer_lines.push(format!("Anchor-Range: {l}-{l}"));
             }

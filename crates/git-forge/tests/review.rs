@@ -357,3 +357,125 @@ fn state_as_str() {
     assert_eq!(ReviewState::Merged.as_str(), "merged");
     assert_eq!(ReviewState::Closed.as_str(), "closed");
 }
+
+// ---------------------------------------------------------------------------
+// Pin entry correctness (issue 5 regression)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pin_entry_blob_references_actual_object() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let blob = make_blob(&repo, b"reviewable content");
+    let blob_oid = git2::Oid::from_str(&blob).unwrap();
+    let target = ReviewTarget {
+        head: blob.clone(),
+        base: None,
+    };
+    let review = store.create_review("Blob pin", "", &target, None).unwrap();
+
+    let ref_name = format!("refs/forge/review/{}", review.oid);
+    let reference = repo.find_reference(&ref_name).unwrap();
+    let tree = reference.peel_to_commit().unwrap().tree().unwrap();
+    let entry = tree
+        .get_path(std::path::Path::new(&format!("objects/{blob}")))
+        .unwrap();
+
+    // For blobs, the tree entry OID must equal the actual blob OID.
+    assert_eq!(entry.id(), blob_oid);
+}
+
+#[test]
+fn pin_entry_commit_stores_oid_content() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let commit = head_oid(&repo);
+    let target = ReviewTarget {
+        head: commit.clone(),
+        base: None,
+    };
+    let review = store
+        .create_review("Commit pin", "", &target, None)
+        .unwrap();
+
+    let ref_name = format!("refs/forge/review/{}", review.oid);
+    let reference = repo.find_reference(&ref_name).unwrap();
+    let tree = reference.peel_to_commit().unwrap().tree().unwrap();
+    let entry = tree
+        .get_path(std::path::Path::new(&format!("objects/{commit}")))
+        .unwrap();
+
+    // For commits, the tree entry is a blob containing the OID hex string.
+    let pinned_blob = repo.find_blob(entry.id()).unwrap();
+    assert_eq!(std::str::from_utf8(pinned_blob.content()).unwrap(), commit);
+}
+
+// ---------------------------------------------------------------------------
+// Imported review with state (issue 7 regression)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_review_imported_with_state() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let commit = head_oid(&repo);
+    let target = ReviewTarget {
+        head: commit,
+        base: None,
+    };
+    let author = git2::Signature::now("bot", "bot@test.com").unwrap();
+    let review = store
+        .create_review_imported(
+            "Merged PR",
+            "",
+            &target,
+            None,
+            Some(&ReviewState::Merged),
+            "GH#99",
+            &author,
+            "https://example.com",
+        )
+        .unwrap();
+
+    assert_eq!(review.state, ReviewState::Merged);
+
+    // Verify it round-trips through get_review.
+    let fetched = store.get_review("GH#99").unwrap();
+    assert_eq!(fetched.state, ReviewState::Merged);
+}
+
+// ---------------------------------------------------------------------------
+// Imported review with base target (issue 2 regression)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_review_imported_preserves_base() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let commit = head_oid(&repo);
+    let base_blob = make_blob(&repo, b"base");
+    let target = ReviewTarget {
+        head: commit,
+        base: Some(base_blob.clone()),
+    };
+    let author = git2::Signature::now("bot", "bot@test.com").unwrap();
+    let review = store
+        .create_review_imported(
+            "PR with base",
+            "",
+            &target,
+            Some("feature"),
+            None,
+            "GH#50",
+            &author,
+            "https://example.com",
+        )
+        .unwrap();
+
+    assert_eq!(review.target.base, Some(base_blob.clone()));
+    assert_eq!(review.source_ref, Some("feature".to_string()));
+
+    let fetched = store.get_review("GH#50").unwrap();
+    assert_eq!(fetched.target.base, Some(base_blob));
+    assert_eq!(fetched.source_ref, Some("feature".to_string()));
+}
