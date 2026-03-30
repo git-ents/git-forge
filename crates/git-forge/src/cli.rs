@@ -346,6 +346,12 @@ pub enum ReviewCommand {
         /// Worktree path (default: ../<repo-name>.review/<reference>).
         path: Option<PathBuf>,
     },
+
+    /// Remove a review worktree created by `checkout`.
+    Done {
+        /// Display ID or OID prefix (inferred from active worktree if omitted).
+        reference: Option<String>,
+    },
 }
 
 /// Issue subcommands.

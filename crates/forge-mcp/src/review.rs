@@ -14,7 +14,7 @@ use crate::server::ForgeMcpServer;
 /// Parameters for the `list_reviews` tool.
 #[derive(Deserialize, JsonSchema)]
 struct ListReviewsParams {
-    /// Filter by state: `"open"`, `"merged"`, or `"closed"`. Omit to return all reviews.
+    /// Filter by state: `"open"` or `"closed"`. Omit to return all reviews.
     state: Option<String>,
 }
 

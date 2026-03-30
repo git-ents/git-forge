@@ -335,17 +335,34 @@ impl Executor {
     /// Check out a review into a git worktree.
     ///
     /// Creates a worktree at `path` (or a default location) with the review's
-    /// head commit checked out, and writes a `forge-review` marker so that
-    /// subsequent commands inside the worktree can detect the active review.
+    /// head checked out, and writes a `forge-review` marker so that subsequent
+    /// commands inside the worktree can detect the active review.
+    ///
+    /// If the worktree already exists for this review, returns its path without
+    /// recreating it.
     ///
     /// # Errors
-    /// Returns an error if the review is not found or a git operation fails.
+    /// Returns an error if the review is not found, the review target is not a
+    /// commit, or a git operation fails.
     pub fn checkout_review(
         &self,
         reference: &str,
         path: Option<&Path>,
     ) -> Result<(Review, std::path::PathBuf)> {
         let review = self.store().get_review(reference)?;
+
+        let wt_name = format!("forge-review-{}", &review.oid[..12.min(review.oid.len())]);
+
+        // If the worktree already exists, return its path.
+        if let Ok(wt) = self.repo.find_worktree(&wt_name)
+            && wt.validate().is_ok()
+        {
+            let wt_repo = Repository::open(wt.path())?;
+            let wt_workdir = wt_repo
+                .workdir()
+                .ok_or_else(|| Error::Config("worktree has no workdir".into()))?;
+            return Ok((review, wt_workdir.to_path_buf()));
+        }
 
         let workdir = self
             .repo
@@ -360,37 +377,103 @@ impl Executor {
             .display_id
             .as_deref()
             .unwrap_or(&review.oid[..12.min(review.oid.len())]);
+        // Sanitize label for use as a path component.
+        let safe_label: String = label
+            .chars()
+            .map(|c| if c == '/' { '_' } else { c })
+            .collect();
         let default_path = workdir
             .parent()
             .unwrap_or(workdir)
             .join(format!("{repo_name}.review"))
-            .join(label);
+            .join(&safe_label);
         let wt_path = path.unwrap_or(&default_path);
+
+        // Resolve the head to a commit (peel trees/blobs → error).
+        let head_oid = git2::Oid::from_str(&review.target.head)?;
+        let head_obj = self.repo.find_object(head_oid, None)?;
+        let head_commit = head_obj.peel_to_commit().map_err(|_| {
+            Error::Config(format!(
+                "review target {} is not a commit",
+                &review.target.head[..12.min(review.target.head.len())]
+            ))
+        })?;
+
+        // Create a branch for the worktree so it has a clean ref.
+        let branch_name = format!("forge/review/{}", &safe_label);
+        let branch = self.repo.branch(&branch_name, &head_commit, true)?;
+        let branch_ref = branch.into_reference();
 
         std::fs::create_dir_all(wt_path)?;
 
-        let wt_name = format!("forge-review-{}", &review.oid[..12.min(review.oid.len())]);
-        let head_oid = git2::Oid::from_str(&review.target.head)?;
-        let head_commit = self.repo.find_commit(head_oid)?;
-
-        // Create the worktree (detached HEAD at the review's head commit).
-        let review_ref = self
-            .repo
-            .find_reference(&format!("refs/forge/review/{}", review.oid))?;
         let mut opts = git2::WorktreeAddOptions::new();
-        opts.reference(Some(&review_ref));
+        opts.reference(Some(&branch_ref));
         let wt = self.repo.worktree(&wt_name, wt_path, Some(&opts))?;
 
-        // Check out the review's head commit in the worktree.
-        let wt_repo = Repository::open(wt.path())?;
-        wt_repo.set_head_detached(head_commit.id())?;
-        wt_repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
-
         // Write the marker file.
+        let wt_repo = Repository::open(wt.path())?;
         let marker_path = wt_repo.path().join("forge-review");
         std::fs::write(&marker_path, &review.oid)?;
 
         Ok((review, wt_path.to_path_buf()))
+    }
+
+    /// Remove a review worktree created by [`checkout_review`].
+    ///
+    /// Prunes the worktree, removes its working directory, and deletes the
+    /// `forge/review/*` branch that was created for it.
+    ///
+    /// If `reference` is `None`, the active review is inferred from the current
+    /// worktree context.
+    ///
+    /// # Errors
+    /// Returns an error if no review context can be determined or a git
+    /// operation fails.
+    pub fn done_review(&self, reference: Option<&str>) -> Result<Review> {
+        let review_oid = match reference {
+            Some(r) => {
+                let review = self.store().get_review(r)?;
+                review.oid.clone()
+            }
+            None => self
+                .active_review()
+                .ok_or_else(|| Error::Config("not in a review worktree".into()))?,
+        };
+
+        let review = self.store().get_review(&review_oid)?;
+        let wt_name = format!("forge-review-{}", &review_oid[..12.min(review_oid.len())]);
+
+        let label = review
+            .display_id
+            .as_deref()
+            .unwrap_or(&review_oid[..12.min(review_oid.len())]);
+        let safe_label: String = label
+            .chars()
+            .map(|c| if c == '/' { '_' } else { c })
+            .collect();
+
+        // Find and remove the worktree.
+        if let Ok(wt) = self.repo.find_worktree(&wt_name) {
+            // Remove the working directory first.
+            if let Ok(wt_repo) = Repository::open(wt.path())
+                && let Some(wd) = wt_repo.workdir()
+            {
+                let _ = std::fs::remove_dir_all(wd);
+            }
+            wt.prune(Some(
+                git2::WorktreePruneOptions::new()
+                    .valid(true)
+                    .working_tree(true),
+            ))?;
+        }
+
+        // Delete the branch we created.
+        let branch_name = format!("forge/review/{safe_label}");
+        if let Ok(mut branch) = self.repo.find_branch(&branch_name, git2::BranchType::Local) {
+            let _ = branch.delete();
+        }
+
+        Ok(review)
     }
 
     // -----------------------------------------------------------------------
@@ -1217,6 +1300,19 @@ impl Executor {
                             .as_deref()
                             .unwrap_or(&review.oid[..review.oid.len().min(12)]);
                         println!("Checked out review {label} to {}", wt_path.display());
+                    }
+                }
+
+                ReviewCommand::Done { reference } => {
+                    let review = self.done_review(reference.as_deref())?;
+                    if cli.json {
+                        print_review(&review, true);
+                    } else {
+                        let label = review
+                            .display_id
+                            .as_deref()
+                            .unwrap_or(&review.oid[..review.oid.len().min(12)]);
+                        println!("Removed review worktree for {label}");
                     }
                 }
             },
