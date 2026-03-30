@@ -354,7 +354,7 @@ async fn import_review_comments_adds_chain() {
 }
 
 #[tokio::test]
-async fn pr_merged_state_maps_correctly() {
+async fn pr_merged_state_maps_to_closed() {
     let (_dir, repo) = test_repo();
     let client = ReviewMockClient::new(vec![gh_pull(1, "Merged PR", true)]);
     let cfg = test_config();
@@ -363,7 +363,7 @@ async fn pr_merged_state_maps_correctly() {
 
     let store = Store::new(&repo);
     let review = store.get_review("GH#1").unwrap();
-    assert_eq!(review.state, ReviewState::Merged);
+    assert_eq!(review.state, ReviewState::Closed);
 }
 
 #[tokio::test]
@@ -504,7 +504,7 @@ async fn import_merged_pr_state_set_at_creation() {
 
     let store = Store::new(&repo);
     let review = store.get_review("GH#1").unwrap();
-    assert_eq!(review.state, git_forge::review::ReviewState::Merged);
+    assert_eq!(review.state, git_forge::review::ReviewState::Closed);
 }
 
 #[tokio::test]

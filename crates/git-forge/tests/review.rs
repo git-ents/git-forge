@@ -219,18 +219,18 @@ fn list_reviews_by_state() {
         head: commit,
         base: None,
     };
-    let to_merge = store.create_review("Merge me", "", &target, None).unwrap();
+    let to_close = store.create_review("Close me", "", &target, None).unwrap();
     store.create_review("Keep open", "", &target, None).unwrap();
     store
-        .update_review(&to_merge.oid, None, None, Some(&ReviewState::Merged))
+        .update_review(&to_close.oid, None, None, Some(&ReviewState::Closed))
         .unwrap();
 
     let open = store.list_reviews_by_state(&ReviewState::Open).unwrap();
-    let merged = store.list_reviews_by_state(&ReviewState::Merged).unwrap();
+    let closed = store.list_reviews_by_state(&ReviewState::Closed).unwrap();
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].title, "Keep open");
-    assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].title, "Merge me");
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].title, "Close me");
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ fn update_title_and_description() {
 }
 
 #[test]
-fn update_state_to_merged() {
+fn update_state_to_closed() {
     let (_dir, repo) = test_repo();
     let store = Store::new(&repo);
     let target = ReviewTarget {
@@ -268,12 +268,12 @@ fn update_state_to_merged() {
     let created = store.create_review("PR", "", &target, None).unwrap();
 
     let updated = store
-        .update_review(&created.oid, None, None, Some(&ReviewState::Merged))
+        .update_review(&created.oid, None, None, Some(&ReviewState::Closed))
         .unwrap();
-    assert_eq!(updated.state, ReviewState::Merged);
+    assert_eq!(updated.state, ReviewState::Closed);
 
     let fetched = store.get_review(&created.oid).unwrap();
-    assert_eq!(fetched.state, ReviewState::Merged);
+    assert_eq!(fetched.state, ReviewState::Closed);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,10 +336,6 @@ fn refresh_noop_without_ref() {
 fn state_from_str_valid() {
     assert_eq!("open".parse::<ReviewState>().unwrap(), ReviewState::Open);
     assert_eq!(
-        "merged".parse::<ReviewState>().unwrap(),
-        ReviewState::Merged
-    );
-    assert_eq!(
         "closed".parse::<ReviewState>().unwrap(),
         ReviewState::Closed
     );
@@ -354,7 +350,6 @@ fn state_from_str_invalid() {
 #[test]
 fn state_as_str() {
     assert_eq!(ReviewState::Open.as_str(), "open");
-    assert_eq!(ReviewState::Merged.as_str(), "merged");
     assert_eq!(ReviewState::Closed.as_str(), "closed");
 }
 
@@ -427,22 +422,22 @@ fn create_review_imported_with_state() {
     let author = git2::Signature::now("bot", "bot@test.com").unwrap();
     let review = store
         .create_review_imported(
-            "Merged PR",
+            "Closed PR",
             "",
             &target,
             None,
-            Some(&ReviewState::Merged),
+            Some(&ReviewState::Closed),
             "GH#99",
             &author,
             "https://example.com",
         )
         .unwrap();
 
-    assert_eq!(review.state, ReviewState::Merged);
+    assert_eq!(review.state, ReviewState::Closed);
 
     // Verify it round-trips through get_review.
     let fetched = store.get_review("GH#99").unwrap();
-    assert_eq!(fetched.state, ReviewState::Merged);
+    assert_eq!(fetched.state, ReviewState::Closed);
 }
 
 // ---------------------------------------------------------------------------

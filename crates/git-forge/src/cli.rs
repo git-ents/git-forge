@@ -245,7 +245,7 @@ pub enum ReviewCommand {
 
     /// List reviews.
     List {
-        /// Filter by state (comma-separated, e.g. `open,merged,closed`).
+        /// Filter by state (comma-separated, e.g. `open,closed`).
         #[arg(long)]
         state: Option<String>,
     },
@@ -272,14 +272,8 @@ pub enum ReviewCommand {
         state: Option<ReviewState>,
     },
 
-    /// Close a review without merging.
+    /// Close a review.
     Close {
-        /// Display ID or OID prefix.
-        reference: String,
-    },
-
-    /// Mark a review as merged.
-    Merge {
         /// Display ID or OID prefix.
         reference: String,
     },

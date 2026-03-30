@@ -838,12 +838,6 @@ impl Executor {
                         self.update_review(reference, None, None, Some(&ReviewState::Closed))?;
                     print_review(&review, cli.json);
                 }
-
-                ReviewCommand::Merge { reference } => {
-                    let review =
-                        self.update_review(reference, None, None, Some(&ReviewState::Merged))?;
-                    print_review(&review, cli.json);
-                }
             },
 
             Command::Issue { command } => match command {

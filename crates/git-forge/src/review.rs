@@ -14,11 +14,9 @@ use crate::{Error, Result, Store};
 #[repr(u8)]
 #[serde(rename_all = "lowercase")]
 pub enum ReviewState {
-    /// Review is open and active.
+    /// Review is open and accepting comments.
     Open,
-    /// Review has been merged.
-    Merged,
-    /// Review has been closed without merging.
+    /// Review has been closed.
     Closed,
 }
 
@@ -28,7 +26,6 @@ impl ReviewState {
     pub fn as_str(&self) -> &'static str {
         match self {
             ReviewState::Open => "open",
-            ReviewState::Merged => "merged",
             ReviewState::Closed => "closed",
         }
     }
@@ -40,7 +37,6 @@ impl std::str::FromStr for ReviewState {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "open" => Ok(ReviewState::Open),
-            "merged" => Ok(ReviewState::Merged),
             "closed" => Ok(ReviewState::Closed),
             _ => Err(Error::InvalidState(s.to_string())),
         }
