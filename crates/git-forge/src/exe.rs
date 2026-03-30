@@ -317,6 +317,83 @@ impl Executor {
     }
 
     // -----------------------------------------------------------------------
+    // Review worktree
+    // -----------------------------------------------------------------------
+
+    /// Return the active review OID if running inside a review worktree.
+    #[must_use]
+    pub fn active_review(&self) -> Option<String> {
+        if !self.repo.is_worktree() {
+            return None;
+        }
+        let marker = self.repo.path().join("forge-review");
+        std::fs::read_to_string(marker)
+            .ok()
+            .map(|s| s.trim().to_string())
+    }
+
+    /// Check out a review into a git worktree.
+    ///
+    /// Creates a worktree at `path` (or a default location) with the review's
+    /// head commit checked out, and writes a `forge-review` marker so that
+    /// subsequent commands inside the worktree can detect the active review.
+    ///
+    /// # Errors
+    /// Returns an error if the review is not found or a git operation fails.
+    pub fn checkout_review(
+        &self,
+        reference: &str,
+        path: Option<&Path>,
+    ) -> Result<(Review, std::path::PathBuf)> {
+        let review = self.store().get_review(reference)?;
+
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| Error::Config("bare repository".into()))?;
+        let repo_name = workdir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("repo");
+
+        let label = review
+            .display_id
+            .as_deref()
+            .unwrap_or(&review.oid[..12.min(review.oid.len())]);
+        let default_path = workdir
+            .parent()
+            .unwrap_or(workdir)
+            .join(format!("{repo_name}.review"))
+            .join(label);
+        let wt_path = path.unwrap_or(&default_path);
+
+        std::fs::create_dir_all(wt_path)?;
+
+        let wt_name = format!("forge-review-{}", &review.oid[..12.min(review.oid.len())]);
+        let head_oid = git2::Oid::from_str(&review.target.head)?;
+        let head_commit = self.repo.find_commit(head_oid)?;
+
+        // Create the worktree (detached HEAD at the review's head commit).
+        let review_ref = self
+            .repo
+            .find_reference(&format!("refs/forge/review/{}", review.oid))?;
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(&review_ref));
+        let wt = self.repo.worktree(&wt_name, wt_path, Some(&opts))?;
+
+        // Check out the review's head commit in the worktree.
+        let wt_repo = Repository::open(wt.path())?;
+        wt_repo.set_head_detached(head_commit.id())?;
+        wt_repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+
+        // Write the marker file.
+        let marker_path = wt_repo.path().join("forge-review");
+        std::fs::write(&marker_path, &review.oid)?;
+
+        Ok((review, wt_path.to_path_buf()))
+    }
+
+    // -----------------------------------------------------------------------
     // Config
     // -----------------------------------------------------------------------
 
@@ -870,7 +947,14 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let comment = if let Some(r) = review {
+                    let review = review.clone().or_else(|| {
+                        if issue.is_none() {
+                            self.active_review()
+                        } else {
+                            None
+                        }
+                    });
+                    let comment = if let Some(ref r) = review {
                         self.add_review_comment(r, &body, anchor.as_ref())?
                     } else {
                         let issue = issue
@@ -902,7 +986,14 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let comment = if let Some(r) = review {
+                    let review = review.clone().or_else(|| {
+                        if issue.is_none() {
+                            self.active_review()
+                        } else {
+                            None
+                        }
+                    });
+                    let comment = if let Some(ref r) = review {
                         self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
                     } else {
                         let issue = issue
@@ -921,7 +1012,14 @@ impl Executor {
                     file,
                 } => {
                     let resolved = crate::input::resolve_body(message.clone(), file.clone())?;
-                    let comment = if let Some(r) = review {
+                    let review = review.clone().or_else(|| {
+                        if issue.is_none() {
+                            self.active_review()
+                        } else {
+                            None
+                        }
+                    });
+                    let comment = if let Some(ref r) = review {
                         self.resolve_review_comment(r, thread, resolved.as_deref())?
                     } else {
                         let issue = issue
@@ -933,7 +1031,14 @@ impl Executor {
                 }
 
                 CommentCommand::List { issue, review } => {
-                    let comments = if let Some(r) = review {
+                    let review = review.clone().or_else(|| {
+                        if issue.is_none() {
+                            self.active_review()
+                        } else {
+                            None
+                        }
+                    });
+                    let comments = if let Some(ref r) = review {
                         self.list_review_comments(r)?
                     } else {
                         let issue = issue
@@ -1099,6 +1204,19 @@ impl Executor {
                         for (path, oid) in &uncovered {
                             println!("  {} {path}", &oid[..oid.len().min(12)]);
                         }
+                    }
+                }
+
+                ReviewCommand::Checkout { reference, path } => {
+                    let (review, wt_path) = self.checkout_review(reference, path.as_deref())?;
+                    if cli.json {
+                        print_review(&review, true);
+                    } else {
+                        let label = review
+                            .display_id
+                            .as_deref()
+                            .unwrap_or(&review.oid[..review.oid.len().min(12)]);
+                        println!("Checked out review {label} to {}", wt_path.display());
                     }
                 }
             },

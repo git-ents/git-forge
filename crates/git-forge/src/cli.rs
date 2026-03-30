@@ -123,7 +123,7 @@ pub enum ContributorCommand {
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
     /// Add a top-level comment to an issue or review.
-    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
     Add {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -162,7 +162,7 @@ pub enum CommentCommand {
     },
 
     /// Reply to an existing comment.
-    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
     Reply {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -205,7 +205,7 @@ pub enum CommentCommand {
     },
 
     /// Resolve a comment thread.
-    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
     Resolve {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -228,7 +228,7 @@ pub enum CommentCommand {
     },
 
     /// List comments on an issue or review.
-    #[command(group(clap::ArgGroup::new("entity").required(true).args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
     List {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -336,6 +336,15 @@ pub enum ReviewCommand {
         /// Git revision to check (defaults to HEAD).
         #[arg(default_value = "HEAD")]
         revision: String,
+    },
+
+    /// Check out a review into a worktree for commenting.
+    Checkout {
+        /// Display ID or OID prefix.
+        reference: String,
+
+        /// Worktree path (default: ../<repo-name>.review/<reference>).
+        path: Option<PathBuf>,
     },
 }
 
