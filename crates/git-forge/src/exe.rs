@@ -467,15 +467,36 @@ impl Executor {
             .join(&safe_label);
         let wt_path = path.unwrap_or(&default_path);
 
-        // Resolve the head to a commit (peel trees/blobs → error).
+        // Resolve the head to a commit. If the target is a tree, create a
+        // synthetic orphan commit so we can attach a worktree without altering
+        // the review itself.
         let head_oid = git2::Oid::from_str(&review.target.head)?;
         let head_obj = self.repo.find_object(head_oid, None)?;
-        let head_commit = head_obj.peel_to_commit().map_err(|_| {
-            Error::Config(format!(
-                "review target {} is not a commit",
-                &review.target.head[..12.min(review.target.head.len())]
-            ))
-        })?;
+        let head_commit = match head_obj.kind() {
+            Some(git2::ObjectType::Commit) => head_obj.peel_to_commit()?,
+            Some(git2::ObjectType::Tree) => {
+                let tree = head_obj.peel_to_tree()?;
+                let sig = self.repo.signature()?;
+                let synthetic_oid = self.repo.commit(
+                    None,
+                    &sig,
+                    &sig,
+                    &format!(
+                        "forge: synthetic commit for review {}",
+                        &review.oid[..12.min(review.oid.len())]
+                    ),
+                    &tree,
+                    &[],
+                )?;
+                self.repo.find_commit(synthetic_oid)?
+            }
+            _ => {
+                return Err(Error::Config(format!(
+                    "review target {} is not a commit or tree",
+                    &review.target.head[..12.min(review.target.head.len())]
+                )));
+            }
+        };
 
         // Create a branch for the worktree so it has a clean ref.
         let branch_name = format!("forge/review/{}", &safe_label);
