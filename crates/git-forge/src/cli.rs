@@ -126,8 +126,8 @@ pub enum ContributorCommand {
 /// Comment subcommands.
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
-    /// Add a top-level comment to an issue or review.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
+    /// Add a top-level comment to an issue, review, or object.
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object"])))]
     Add {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -136,6 +136,10 @@ pub enum CommentCommand {
         /// Review display ID or OID prefix.
         #[arg(long)]
         review: Option<String>,
+
+        /// Git object OID or revspec to comment on.
+        #[arg(long)]
+        object: Option<String>,
 
         /// Anchor the comment to a git object (blob, commit, or tree OID).
         #[arg(long, conflicts_with_all = ["anchor_start", "anchor_end"])]
@@ -170,7 +174,7 @@ pub enum CommentCommand {
     },
 
     /// Reply to an existing comment.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object"])))]
     Reply {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -179,6 +183,10 @@ pub enum CommentCommand {
         /// Review display ID or OID prefix.
         #[arg(long)]
         review: Option<String>,
+
+        /// Git object OID to reply on.
+        #[arg(long)]
+        object: Option<String>,
 
         /// OID of the comment to reply to.
         #[arg(long = "to")]
@@ -217,7 +225,7 @@ pub enum CommentCommand {
     },
 
     /// Resolve a comment thread.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object"])))]
     Resolve {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -226,6 +234,10 @@ pub enum CommentCommand {
         /// Review display ID or OID prefix.
         #[arg(long)]
         review: Option<String>,
+
+        /// Git object OID.
+        #[arg(long)]
+        object: Option<String>,
 
         /// OID of the comment that starts the thread.
         #[arg(long = "thread")]
@@ -243,8 +255,8 @@ pub enum CommentCommand {
         interactive: bool,
     },
 
-    /// List comments on an issue or review.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review"])))]
+    /// List comments on an issue, review, or object.
+    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object"])))]
     List {
         /// Issue display ID or OID prefix.
         #[arg(long)]
@@ -253,6 +265,10 @@ pub enum CommentCommand {
         /// Review display ID or OID prefix.
         #[arg(long)]
         review: Option<String>,
+
+        /// Git object OID.
+        #[arg(long)]
+        object: Option<String>,
     },
 }
 

@@ -7,7 +7,7 @@ use git_chain::{Chain, ChainEntry};
 use git2::{Oid, Repository};
 use serde::Serialize;
 
-use crate::refs::{ISSUE_COMMENTS_PREFIX, REVIEW_COMMENTS_PREFIX};
+use crate::refs::{ISSUE_COMMENTS_PREFIX, OBJECT_COMMENTS_PREFIX, REVIEW_COMMENTS_PREFIX};
 use crate::{Error, Result};
 
 /// The anchor target for a comment.
@@ -67,6 +67,12 @@ pub fn issue_comment_ref(oid: &str) -> String {
 #[must_use]
 pub fn review_comment_ref(oid: &str) -> String {
     format!("{REVIEW_COMMENTS_PREFIX}{oid}")
+}
+
+/// Return the chain ref name for standalone object comments.
+#[must_use]
+pub fn object_comment_ref(oid: &str) -> String {
+    format!("{OBJECT_COMMENTS_PREFIX}{oid}")
 }
 
 /// Build a trailer block from anchor, resolved flag, and replaces OID.

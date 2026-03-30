@@ -14,6 +14,8 @@ pub const REVIEW_PREFIX: &str = "refs/forge/review/";
 pub const ISSUE_COMMENTS_PREFIX: &str = "refs/forge/comments/issue/";
 /// Chain ref prefix for review comments.
 pub const REVIEW_COMMENTS_PREFIX: &str = "refs/forge/comments/review/";
+/// Chain ref prefix for standalone object comments.
+pub const OBJECT_COMMENTS_PREFIX: &str = "refs/forge/comments/object/";
 /// Index ref mapping display IDs ↔ OIDs for issues.
 pub const ISSUE_INDEX: &str = "refs/forge/meta/index/issues";
 /// Index ref mapping display IDs ↔ OIDs for reviews.

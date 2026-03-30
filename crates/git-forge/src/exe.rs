@@ -13,8 +13,8 @@ use git2::{ErrorCode, ObjectType, Repository};
 use serde::Serialize;
 
 use crate::comment::{
-    Anchor, Comment, add_comment, add_reply, issue_comment_ref, list_comments, resolve_comment,
-    review_comment_ref,
+    Anchor, Comment, add_comment, add_reply, issue_comment_ref, list_comments, object_comment_ref,
+    resolve_comment, review_comment_ref,
 };
 use crate::issue::{Issue, IssueState};
 use crate::review::{Review, ReviewState, ReviewTarget};
@@ -324,6 +324,65 @@ impl Executor {
     pub fn list_review_comments(&self, review_ref: &str) -> Result<Vec<Comment>> {
         let review = self.store().get_review(review_ref)?;
         let ref_name = review_comment_ref(&review.oid);
+        list_comments(&self.repo, &ref_name)
+    }
+
+    // -----------------------------------------------------------------------
+    // Standalone object comments
+    // -----------------------------------------------------------------------
+
+    /// Add a comment on a standalone git object.
+    ///
+    /// # Errors
+    /// Returns an error if the object is not found or a git operation fails.
+    pub fn add_object_comment(
+        &self,
+        object_oid: &str,
+        body: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        self.repo
+            .find_object(git2::Oid::from_str(object_oid)?, None)
+            .map_err(|_| Error::NotFound(object_oid.to_string()))?;
+        let ref_name = object_comment_ref(object_oid);
+        add_comment(&self.repo, &ref_name, body, anchor)
+    }
+
+    /// Reply to a comment on a standalone git object.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn reply_object_comment(
+        &self,
+        object_oid: &str,
+        body: &str,
+        reply_to_oid: &str,
+        anchor: Option<&Anchor>,
+    ) -> Result<Comment> {
+        let ref_name = object_comment_ref(object_oid);
+        add_reply(&self.repo, &ref_name, body, reply_to_oid, anchor)
+    }
+
+    /// Resolve a comment thread on a standalone git object.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn resolve_object_comment(
+        &self,
+        object_oid: &str,
+        thread_oid: &str,
+        message: Option<&str>,
+    ) -> Result<Comment> {
+        let ref_name = object_comment_ref(object_oid);
+        resolve_comment(&self.repo, &ref_name, thread_oid, message)
+    }
+
+    /// List comments on a standalone git object.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn list_object_comments(&self, object_oid: &str) -> Result<Vec<Comment>> {
+        let ref_name = object_comment_ref(object_oid);
         list_comments(&self.repo, &ref_name)
     }
 
@@ -887,6 +946,85 @@ fn rebuild_tree_upward(
 
 #[cfg(feature = "cli")]
 impl Executor {
+    /// Resolve a working-tree path to a git object OID.
+    ///
+    /// If the path is clean, resolves via `HEAD:<path>`. If dirty and
+    /// `allow_dirty` is set, hashes the working-tree content into the object
+    /// store and returns the resulting OID.
+    fn resolve_path(&self, path: &std::path::Path, allow_dirty: bool) -> Result<String> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| Error::Config("bare repository has no working tree".into()))?;
+        let abs = workdir.join(path);
+        let clean_oid = self
+            .repo
+            .revparse_single(&format!("HEAD:{}", path.display()))
+            .ok()
+            .map(|o| o.id());
+
+        let dirty = if abs.is_file() {
+            let current = self.repo.blob_path(&abs)?;
+            clean_oid.is_none_or(|oid| oid != current)
+        } else if abs.is_dir() {
+            let mut opts = git2::StatusOptions::new();
+            opts.include_untracked(false)
+                .include_ignored(false)
+                .pathspec(format!("{}/*", path.display()));
+            let statuses = self.repo.statuses(Some(&mut opts))?;
+            !statuses.is_empty()
+        } else {
+            return Err(Error::NotFound(path.display().to_string()));
+        };
+
+        if !dirty {
+            return Ok(clean_oid.unwrap().to_string());
+        }
+
+        if !allow_dirty {
+            return Err(Error::DirtyWorktree);
+        }
+
+        // Hash dirty working-tree content into the object store.
+        if abs.is_file() {
+            Ok(self.repo.blob_path(&abs)?.to_string())
+        } else {
+            Ok(hash_worktree_dir(&self.repo, &abs)?.to_string())
+        }
+    }
+
+    /// Resolve a `--head` revspec to a git object OID.
+    ///
+    /// When `allow_dirty` is set and the revspec references HEAD (either the
+    /// commit itself or a `HEAD:<path>` subtree), the working-tree content is
+    /// hashed into the object store instead.
+    fn resolve_head(&self, spec: &str, allow_dirty: bool) -> Result<String> {
+        // HEAD:<path> — delegate to resolve_path for dirty-aware handling.
+        if let Some(path) = spec.strip_prefix("HEAD:") {
+            return self.resolve_path(std::path::Path::new(path), allow_dirty);
+        }
+
+        let obj = self
+            .repo
+            .revparse_single(spec)
+            .map_err(|_| Error::NotFound(spec.to_string()))?;
+
+        if !allow_dirty {
+            return Ok(obj.id().to_string());
+        }
+
+        // If the resolved object is HEAD's commit, hash the whole working tree.
+        if let Ok(head_ref) = self.repo.head()
+            && let Ok(head_commit) = head_ref.peel_to_commit()
+            && obj.id() == head_commit.id()
+            && let Some(workdir) = self.repo.workdir()
+        {
+            return Ok(hash_worktree_dir(&self.repo, workdir)?.to_string());
+        }
+
+        Ok(obj.id().to_string())
+    }
+
     /// Dispatch a parsed CLI command, writing output to stdout.
     ///
     /// # Errors
@@ -1028,6 +1166,7 @@ impl Executor {
                 CommentCommand::Add {
                     issue,
                     review,
+                    object,
                     anchor,
                     anchor_path,
                     range,
@@ -1052,20 +1191,30 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let review = review.clone().or_else(|| {
-                        if issue.is_none() {
-                            self.active_review()
-                        } else {
-                            None
-                        }
-                    });
-                    let comment = if let Some(ref r) = review {
-                        self.add_review_comment(r, &body, anchor.as_ref())?
+                    let comment = if let Some(o) = object {
+                        let oid = self
+                            .repo
+                            .revparse_single(o)
+                            .map_err(|_| Error::NotFound(o.clone()))?
+                            .id()
+                            .to_string();
+                        self.add_object_comment(&oid, &body, anchor.as_ref())?
                     } else {
-                        let issue = issue
-                            .as_deref()
-                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.add_issue_comment(issue, &body, anchor.as_ref())?
+                        let review = review.clone().or_else(|| {
+                            if issue.is_none() {
+                                self.active_review()
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(ref r) = review {
+                            self.add_review_comment(r, &body, anchor.as_ref())?
+                        } else {
+                            let issue = issue.as_deref().ok_or_else(|| {
+                                Error::Config("--issue, --review, or --object required".into())
+                            })?;
+                            self.add_issue_comment(issue, &body, anchor.as_ref())?
+                        }
                     };
                     print_comment(&comment, cli.json);
                 }
@@ -1073,6 +1222,7 @@ impl Executor {
                 CommentCommand::Reply {
                     issue,
                     review,
+                    object,
                     reply_to,
                     anchor,
                     anchor_path,
@@ -1098,20 +1248,30 @@ impl Executor {
                         anchor_start.as_deref(),
                         anchor_end.as_deref(),
                     );
-                    let review = review.clone().or_else(|| {
-                        if issue.is_none() {
-                            self.active_review()
-                        } else {
-                            None
-                        }
-                    });
-                    let comment = if let Some(ref r) = review {
-                        self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
+                    let comment = if let Some(o) = object {
+                        let oid = self
+                            .repo
+                            .revparse_single(o)
+                            .map_err(|_| Error::NotFound(o.clone()))?
+                            .id()
+                            .to_string();
+                        self.reply_object_comment(&oid, &body, reply_to, anchor.as_ref())?
                     } else {
-                        let issue = issue
-                            .as_deref()
-                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.reply_issue_comment(issue, &body, reply_to, anchor.as_ref())?
+                        let review = review.clone().or_else(|| {
+                            if issue.is_none() {
+                                self.active_review()
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(ref r) = review {
+                            self.reply_review_comment(r, &body, reply_to, anchor.as_ref())?
+                        } else {
+                            let issue = issue.as_deref().ok_or_else(|| {
+                                Error::Config("--issue, --review, or --object required".into())
+                            })?;
+                            self.reply_issue_comment(issue, &body, reply_to, anchor.as_ref())?
+                        }
                     };
                     print_comment(&comment, cli.json);
                 }
@@ -1119,6 +1279,7 @@ impl Executor {
                 CommentCommand::Resolve {
                     issue,
                     review,
+                    object,
                     thread,
                     message,
                     file,
@@ -1132,39 +1293,63 @@ impl Executor {
                     } else {
                         resolved
                     };
-                    let review = review.clone().or_else(|| {
-                        if issue.is_none() {
-                            self.active_review()
-                        } else {
-                            None
-                        }
-                    });
-                    let comment = if let Some(ref r) = review {
-                        self.resolve_review_comment(r, thread, resolved.as_deref())?
+                    let comment = if let Some(o) = object {
+                        let oid = self
+                            .repo
+                            .revparse_single(o)
+                            .map_err(|_| Error::NotFound(o.clone()))?
+                            .id()
+                            .to_string();
+                        self.resolve_object_comment(&oid, thread, resolved.as_deref())?
                     } else {
-                        let issue = issue
-                            .as_deref()
-                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.resolve_issue_comment(issue, thread, resolved.as_deref())?
+                        let review = review.clone().or_else(|| {
+                            if issue.is_none() {
+                                self.active_review()
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(ref r) = review {
+                            self.resolve_review_comment(r, thread, resolved.as_deref())?
+                        } else {
+                            let issue = issue.as_deref().ok_or_else(|| {
+                                Error::Config("--issue, --review, or --object required".into())
+                            })?;
+                            self.resolve_issue_comment(issue, thread, resolved.as_deref())?
+                        }
                     };
                     print_comment(&comment, cli.json);
                 }
 
-                CommentCommand::List { issue, review } => {
-                    let review = review.clone().or_else(|| {
-                        if issue.is_none() {
-                            self.active_review()
-                        } else {
-                            None
-                        }
-                    });
-                    let comments = if let Some(ref r) = review {
-                        self.list_review_comments(r)?
+                CommentCommand::List {
+                    issue,
+                    review,
+                    object,
+                } => {
+                    let comments = if let Some(o) = object {
+                        let oid = self
+                            .repo
+                            .revparse_single(o)
+                            .map_err(|_| Error::NotFound(o.clone()))?
+                            .id()
+                            .to_string();
+                        self.list_object_comments(&oid)?
                     } else {
-                        let issue = issue
-                            .as_deref()
-                            .ok_or_else(|| Error::Config("--issue or --review required".into()))?;
-                        self.list_issue_comments(issue)?
+                        let review = review.clone().or_else(|| {
+                            if issue.is_none() {
+                                self.active_review()
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(ref r) = review {
+                            self.list_review_comments(r)?
+                        } else {
+                            let issue = issue.as_deref().ok_or_else(|| {
+                                Error::Config("--issue, --review, or --object required".into())
+                            })?;
+                            self.list_issue_comments(issue)?
+                        }
                     };
                     if cli.json {
                         println!(
@@ -1205,20 +1390,12 @@ impl Executor {
                     let title = title.as_str();
                     let description = description.as_str();
 
-                    // Resolve --path to a HEAD:<path> revspec.
-                    let head_spec = match (head, path) {
-                        (Some(h), _) => h.clone(),
-                        (None, Some(p)) => format!("HEAD:{}", p.display()),
+                    // Resolve target to a git object OID.
+                    let head_oid = match (head, path) {
+                        (Some(h), _) => self.resolve_head(h, cli.allow_dirty)?,
+                        (None, Some(p)) => self.resolve_path(p, cli.allow_dirty)?,
                         _ => unreachable!("clap group ensures one is present"),
                     };
-
-                    // Validate that head resolves to a git object.
-                    let head_oid = self
-                        .repo
-                        .revparse_single(&head_spec)
-                        .map_err(|_| Error::NotFound(head_spec.clone()))?
-                        .id()
-                        .to_string();
                     let base_oid = base
                         .as_deref()
                         .map(|b| {
@@ -1841,6 +2018,29 @@ fn walk_tree(
             _ => {}
         }
     }
+}
+
+/// Recursively hash a working-tree directory into the object store as a tree.
+fn hash_worktree_dir(repo: &Repository, dir: &std::path::Path) -> Result<git2::Oid> {
+    let mut builder = repo.treebuilder(None)?;
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::result::Result<_, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let ft = entry.file_type()?;
+        if ft.is_file() {
+            let oid = repo.blob_path(&entry.path())?;
+            builder.insert(&*name, oid, 0o100_644)?;
+        } else if ft.is_dir() {
+            if name == ".git" {
+                continue;
+            }
+            let oid = hash_worktree_dir(repo, &entry.path())?;
+            builder.insert(&*name, oid, 0o040_000)?;
+        }
+    }
+    Ok(builder.write()?)
 }
 
 fn build_anchor(
