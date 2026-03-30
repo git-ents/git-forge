@@ -9,6 +9,7 @@ use tempfile::TempDir;
 
 use git_forge::Error;
 use git_forge::exe::Executor;
+use git_forge::review::ReviewTarget;
 
 fn test_repo() -> (TempDir, Repository) {
     let dir = TempDir::new().expect("temp dir");
@@ -371,6 +372,112 @@ fn should_interact_returns_false_when_not_missing_input() {
 fn should_interact_returns_false_without_tty() {
     // Tests run without a TTY, so should_interact(true) is still false.
     assert!(!git_forge::exe::should_interact(true));
+}
+
+// ---------------------------------------------------------------------------
+// checkout_review: creates worktree in a new parent directory
+// (regression: create_dir_all created the leaf, but libgit2 also creates it)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkout_review_creates_parent_dir_only() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = exec
+        .create_review("checkout test", "", &target, None)
+        .unwrap();
+
+    let wt_dir = dir.path().join("review-wt");
+    let (_, wt_path) = exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    assert_eq!(wt_path, wt_dir);
+    assert!(wt_dir.join(".git").exists());
+}
+
+// ---------------------------------------------------------------------------
+// checkout_review: recovers from stale worktree admin directory
+// (regression: orphaned .git/worktrees/<name> blocked re-checkout)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkout_review_recovers_from_stale_admin_dir() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = exec.create_review("stale test", "", &target, None).unwrap();
+
+    let wt_name = format!("forge-review-{}", &review.oid[..12]);
+
+    // Simulate an orphaned admin directory (leftover from a failed checkout).
+    let stale = repo.path().join("worktrees").join(&wt_name);
+    fs::create_dir_all(&stale).unwrap();
+    fs::write(stale.join("gitdir"), "garbage").unwrap();
+
+    let wt_dir = dir.path().join("review-wt");
+    let (_, wt_path) = exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    assert_eq!(wt_path, wt_dir);
+    assert!(wt_dir.join(".git").exists());
+}
+
+// ---------------------------------------------------------------------------
+// checkout_review: idempotent when worktree already valid
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkout_review_idempotent() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = exec
+        .create_review("idempotent test", "", &target, None)
+        .unwrap();
+
+    let wt_dir = dir.path().join("review-wt");
+    let (_, first) = exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    let (_, second) = exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    assert_eq!(
+        first.canonicalize().unwrap(),
+        second.canonicalize().unwrap()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// checkout_review + done_review: round-trip then re-checkout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkout_done_recheckout() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let target = ReviewTarget {
+        head: head_oid(&repo),
+        base: None,
+    };
+    let review = exec
+        .create_review("roundtrip test", "", &target, None)
+        .unwrap();
+
+    let wt_dir = dir.path().join("review-wt");
+    exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    exec.done_review(Some(&review.oid)).unwrap();
+    assert!(!wt_dir.exists());
+
+    let (_, wt_path) = exec.checkout_review(&review.oid, Some(&wt_dir)).unwrap();
+    assert_eq!(wt_path, wt_dir);
+    assert!(wt_dir.join(".git").exists());
 }
 
 // ---------------------------------------------------------------------------
