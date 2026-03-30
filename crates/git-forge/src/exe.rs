@@ -1020,9 +1020,16 @@ impl Executor {
                     anchor_end,
                     body,
                     file,
+                    interactive,
                 } => {
-                    let body =
-                        crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
+                    let resolved = crate::input::resolve_body(body.clone(), file.clone())?;
+                    let interactive =
+                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let body = if interactive {
+                        crate::interactive::prompt_body(resolved.as_deref())?
+                    } else {
+                        resolved.unwrap_or_default()
+                    };
                     let anchor = build_anchor(
                         anchor.as_deref(),
                         anchor_path.as_deref(),
@@ -1059,9 +1066,16 @@ impl Executor {
                     anchor_end,
                     body,
                     file,
+                    interactive,
                 } => {
-                    let body =
-                        crate::input::resolve_body(body.clone(), file.clone())?.unwrap_or_default();
+                    let resolved = crate::input::resolve_body(body.clone(), file.clone())?;
+                    let interactive =
+                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let body = if interactive {
+                        crate::interactive::prompt_body(resolved.as_deref())?
+                    } else {
+                        resolved.unwrap_or_default()
+                    };
                     let anchor = build_anchor(
                         anchor.as_deref(),
                         anchor_path.as_deref(),
@@ -1093,8 +1107,16 @@ impl Executor {
                     thread,
                     message,
                     file,
+                    interactive,
                 } => {
                     let resolved = crate::input::resolve_body(message.clone(), file.clone())?;
+                    let interactive =
+                        *interactive || (resolved.is_none() && std::io::stdin().is_terminal());
+                    let resolved = if interactive {
+                        Some(crate::interactive::prompt_body(resolved.as_deref())?)
+                    } else {
+                        resolved
+                    };
                     let review = review.clone().or_else(|| {
                         if issue.is_none() {
                             self.active_review()
@@ -1148,10 +1170,24 @@ impl Executor {
                     head,
                     base,
                     source_ref,
+                    interactive,
                 } => {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
-                    let title = title.as_deref().unwrap_or("");
-                    let description = resolved_body.as_deref().unwrap_or("");
+                    let interactive = *interactive
+                        || (title.is_none()
+                            && resolved_body.is_none()
+                            && std::io::stdin().is_terminal());
+                    let (title, description) = if interactive {
+                        let input = crate::interactive::prompt_new_review(title.as_deref())?;
+                        (input.title, input.description)
+                    } else {
+                        (
+                            title.clone().unwrap_or_default(),
+                            resolved_body.unwrap_or_default(),
+                        )
+                    };
+                    let title = title.as_str();
+                    let description = description.as_str();
 
                     // Validate that head resolves to a git object.
                     let head_oid = self
@@ -1221,13 +1257,31 @@ impl Executor {
                     body,
                     file,
                     state,
+                    interactive,
                 } => {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
+                    let no_fields = title.is_none() && resolved_body.is_none() && state.is_none();
+                    let interactive = *interactive || (no_fields && std::io::stdin().is_terminal());
+                    let (eff_title, eff_body, eff_state): (
+                        Option<String>,
+                        Option<String>,
+                        Option<ReviewState>,
+                    ) = if interactive {
+                        let current = self.get_review(reference)?;
+                        let input = crate::interactive::prompt_edit_review(&current)?;
+                        (
+                            input.title.or_else(|| title.clone()),
+                            input.description.or_else(|| resolved_body.clone()),
+                            input.state.or_else(|| state.clone()),
+                        )
+                    } else {
+                        (title.clone(), resolved_body, state.clone())
+                    };
                     let review = self.update_review(
                         reference,
-                        title.as_deref(),
-                        resolved_body.as_deref(),
-                        state.as_ref(),
+                        eff_title.as_deref(),
+                        eff_body.as_deref(),
+                        eff_state.as_ref(),
                     )?;
                     print_review(&review, cli.json);
                 }

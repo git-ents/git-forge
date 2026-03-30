@@ -159,6 +159,10 @@ pub enum CommentCommand {
         /// Read body from a file.
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
+
+        /// Prompt for body interactively.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// Reply to an existing comment.
@@ -202,6 +206,10 @@ pub enum CommentCommand {
         /// Read body from a file.
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
+
+        /// Prompt for body interactively.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// Resolve a comment thread.
@@ -225,6 +233,10 @@ pub enum CommentCommand {
         /// Read message from a file.
         #[arg(long, short = 'f')]
         file: Option<PathBuf>,
+
+        /// Prompt for message interactively.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// List comments on an issue or review.
@@ -246,6 +258,7 @@ pub enum ReviewCommand {
     /// Create a new review.
     New {
         /// Review title.
+        #[arg(long)]
         title: Option<String>,
 
         /// Description (Markdown).
@@ -267,6 +280,10 @@ pub enum ReviewCommand {
         /// Source ref name to track for refreshes.
         #[arg(long = "ref")]
         source_ref: Option<String>,
+
+        /// Prompt for title and description interactively.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// Show a review.
@@ -302,6 +319,10 @@ pub enum ReviewCommand {
         /// New state.
         #[arg(long)]
         state: Option<ReviewState>,
+
+        /// Prompt for title, description, and state interactively.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 
     /// Close a review.
@@ -360,6 +381,7 @@ pub enum IssueCommand {
     /// Create a new issue.
     New {
         /// Issue title (prompted interactively if omitted).
+        #[arg(long)]
         title: Option<String>,
 
         /// Issue body (Markdown).
