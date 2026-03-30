@@ -70,6 +70,17 @@ impl Executor {
         Store::new(&self.repo)
     }
 
+    fn check_clean(&self) -> Result<()> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(false).include_ignored(false);
+        let statuses = self.repo.statuses(Some(&mut opts))?;
+        if statuses.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::DirtyWorktree)
+        }
+    }
+
     /// Create a new issue.
     ///
     /// # Errors
@@ -889,6 +900,10 @@ impl Executor {
             Command, CommentCommand, ConfigCommand, ContributorCommand, IssueCommand, ReviewCommand,
         };
 
+        if !cli.allow_dirty && !self.repo.is_bare() {
+            self.check_clean()?;
+        }
+
         match &cli.command {
             Command::Config { command } => match command {
                 ConfigCommand::Init { remote } => {
@@ -1168,6 +1183,7 @@ impl Executor {
                     body,
                     file,
                     head,
+                    path,
                     base,
                     source_ref,
                     interactive,
@@ -1189,11 +1205,18 @@ impl Executor {
                     let title = title.as_str();
                     let description = description.as_str();
 
+                    // Resolve --path to a HEAD:<path> revspec.
+                    let head_spec = match (head, path) {
+                        (Some(h), _) => h.clone(),
+                        (None, Some(p)) => format!("HEAD:{}", p.display()),
+                        _ => unreachable!("clap group ensures one is present"),
+                    };
+
                     // Validate that head resolves to a git object.
                     let head_oid = self
                         .repo
-                        .revparse_single(head)
-                        .map_err(|_| Error::NotFound(head.clone()))?
+                        .revparse_single(&head_spec)
+                        .map_err(|_| Error::NotFound(head_spec.clone()))?
                         .id()
                         .to_string();
                     let base_oid = base

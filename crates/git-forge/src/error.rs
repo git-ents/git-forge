@@ -24,6 +24,9 @@ pub enum Error {
     /// A remote sync operation failed.
     #[error("sync: {0}")]
     Sync(String),
+    /// The working tree or index has uncommitted changes.
+    #[error("working tree is dirty; use --allow-dirty to proceed")]
+    DirtyWorktree,
     /// A configuration error.
     #[error("config: {0}")]
     Config(String),

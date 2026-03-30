@@ -18,6 +18,10 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
+    /// Allow operations on a dirty working tree or index.
+    #[arg(long)]
+    pub allow_dirty: bool,
+
     /// Subcommand to run.
     #[command(subcommand)]
     pub command: Command,
@@ -256,6 +260,7 @@ pub enum CommentCommand {
 #[derive(Subcommand, Debug)]
 pub enum ReviewCommand {
     /// Create a new review.
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["head", "path"])))]
     New {
         /// Review title.
         #[arg(long)]
@@ -271,7 +276,11 @@ pub enum ReviewCommand {
 
         /// Head object OID or ref.
         #[arg(long)]
-        head: String,
+        head: Option<String>,
+
+        /// File or directory path to review (resolved against HEAD).
+        #[arg(long, short = 'p')]
+        path: Option<PathBuf>,
 
         /// Base object OID or ref (for commit ranges).
         #[arg(long)]
