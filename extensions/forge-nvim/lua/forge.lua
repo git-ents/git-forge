@@ -126,11 +126,41 @@ local function submit(buf, win, argv)
   })
 end
 
+local function show_help(win)
+  local lines = {
+    "  S       submit comment",
+    "  q/Esc   cancel",
+    "  ?       toggle this help",
+  }
+  local help_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(help_buf, 0, -1, false, lines)
+  vim.bo[help_buf].modifiable = false
+  vim.bo[help_buf].bufhidden = "wipe"
+
+  local help_win = vim.api.nvim_open_win(help_buf, true, {
+    relative = "win",
+    win = win,
+    width = 28,
+    height = #lines,
+    row = 0,
+    col = 0,
+    style = "minimal",
+    border = "rounded",
+    title = " Help ",
+    title_pos = "center",
+  })
+
+  vim.keymap.set("n", "q", function() close_win(help_win) end, { buffer = help_buf, silent = true })
+  vim.keymap.set("n", "<Esc>", function() close_win(help_win) end, { buffer = help_buf, silent = true })
+  vim.keymap.set("n", "?", function() close_win(help_win) end, { buffer = help_buf, silent = true })
+end
+
 local function bind_float(buf, win, argv)
   local opts = { buffer = buf, silent = true }
-  vim.keymap.set("n", "ZZ", function() submit(buf, win, argv) end, opts)
+  vim.keymap.set("n", "S", function() submit(buf, win, argv) end, opts)
   vim.keymap.set("n", "q", function() close_win(win) end, opts)
   vim.keymap.set("n", "<Esc>", function() close_win(win) end, opts)
+  vim.keymap.set("n", "?", function() show_help(win) end, opts)
 end
 
 -- ---------------------------------------------------------------------------
@@ -253,6 +283,9 @@ function M.setup(opts)
   end
 
   local km = M.config.keymaps
+  if km == false then
+    return
+  end
 
   vim.keymap.set("n", km.comment, function() M.add_comment(false) end, { desc = "Forge: comment" })
   vim.keymap.set("v", km.comment, function()
