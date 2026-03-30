@@ -1,0 +1,21 @@
+[package]
+name = "forge-lsp"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+publish = false
+license.workspace = true
+
+[[bin]]
+name = "forge-lsp"
+path = "src/main.rs"
+
+[dependencies]
+git-forge = { workspace = true }
+git2 = { workspace = true }
+tokio = { workspace = true }
+tower-lsp = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true
