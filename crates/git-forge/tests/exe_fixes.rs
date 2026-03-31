@@ -577,7 +577,8 @@ fn retarget_migrates_carry_forward_comments() {
         path: Some("a.rs".to_string()),
         range: Some("2-3".to_string()),
     };
-    exec.add_review_comment(&review.oid, "needs refactor", Some(&anchor))
+    let original = exec
+        .add_review_comment(&review.oid, "needs refactor", Some(&anchor))
         .unwrap();
 
     // New tree: a.rs has a new first line but lines 2-3 are preserved.
@@ -600,9 +601,10 @@ fn retarget_migrates_carry_forward_comments() {
     // Find the migrated comment (the one with migrated_from set).
     let migrated_comment = comments.iter().find(|c| c.migrated_from.is_some()).unwrap();
     assert_eq!(migrated_comment.body, "needs refactor");
+    // migrated_from records the original comment chain OID, not the blob OID.
     assert_eq!(
         migrated_comment.migrated_from.as_deref(),
-        Some(&*old_a_blob).map(|_| migrated_comment.migrated_from.as_deref().unwrap())
+        Some(original.oid.as_str())
     );
 
     // Check the new anchor has updated range (shifted by 1 line).
@@ -727,4 +729,198 @@ fn retarget_unchanged_blobs_keep_comments() {
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].body, "stays put");
     assert!(comments[0].migrated_from.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// retarget: insertion before anchor shifts range down
+// ---------------------------------------------------------------------------
+
+#[test]
+fn retarget_insertion_before_anchor_shifts_range_down() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    // 5-line file; anchor at lines 3-4.
+    let old_tree = make_tree(&repo, "a.rs", "a\nb\nc\nd\ne\n");
+    let target = ReviewTarget {
+        head: old_tree.clone(),
+        base: None,
+    };
+    let review = exec.create_review("shift down", "", &target, None).unwrap();
+
+    let old_blob = repo
+        .find_tree(git2::Oid::from_str(&old_tree).unwrap())
+        .unwrap()
+        .get_name("a.rs")
+        .unwrap()
+        .id()
+        .to_string();
+
+    exec.add_review_comment(
+        &review.oid,
+        "anchor",
+        Some(&Anchor::Object {
+            oid: old_blob.clone(),
+            path: Some("a.rs".to_string()),
+            range: Some("3-4".to_string()),
+        }),
+    )
+    .unwrap();
+
+    // Prepend 2 lines — anchor should shift to 5-6.
+    let new_tree = make_tree(&repo, "a.rs", "x\ny\na\nb\nc\nd\ne\n");
+    let (_, migrated) = exec.retarget_review(&review.oid, &new_tree).unwrap();
+    assert_eq!(migrated, 1);
+
+    let comments = exec.list_review_comments(&review.oid).unwrap();
+    let m = comments.iter().find(|c| c.migrated_from.is_some()).unwrap();
+    if let Some(Anchor::Object { range, .. }) = &m.anchor {
+        assert_eq!(range.as_deref(), Some("5-6"));
+    } else {
+        panic!("expected object anchor");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// retarget: deletion before anchor shifts range up
+// ---------------------------------------------------------------------------
+
+#[test]
+fn retarget_deletion_before_anchor_shifts_range_up() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let old_tree = make_tree(&repo, "a.rs", "a\nb\nc\nd\ne\n");
+    let target = ReviewTarget {
+        head: old_tree.clone(),
+        base: None,
+    };
+    let review = exec.create_review("shift up", "", &target, None).unwrap();
+
+    let old_blob = repo
+        .find_tree(git2::Oid::from_str(&old_tree).unwrap())
+        .unwrap()
+        .get_name("a.rs")
+        .unwrap()
+        .id()
+        .to_string();
+
+    exec.add_review_comment(
+        &review.oid,
+        "anchor",
+        Some(&Anchor::Object {
+            oid: old_blob.clone(),
+            path: Some("a.rs".to_string()),
+            range: Some("4-5".to_string()),
+        }),
+    )
+    .unwrap();
+
+    // Remove line 2 ("b") — anchor should shift to 3-4.
+    let new_tree = make_tree(&repo, "a.rs", "a\nc\nd\ne\n");
+    let (_, migrated) = exec.retarget_review(&review.oid, &new_tree).unwrap();
+    assert_eq!(migrated, 1);
+
+    let comments = exec.list_review_comments(&review.oid).unwrap();
+    let m = comments.iter().find(|c| c.migrated_from.is_some()).unwrap();
+    if let Some(Anchor::Object { range, .. }) = &m.anchor {
+        assert_eq!(range.as_deref(), Some("3-4"));
+    } else {
+        panic!("expected object anchor");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// retarget: multiple hunks produce cumulative offset
+// ---------------------------------------------------------------------------
+
+#[test]
+fn retarget_multiple_hunks_cumulative_offset() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    // 10-line file; anchor at lines 8-9.
+    let old_tree = make_tree(&repo, "a.rs", "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n");
+    let target = ReviewTarget {
+        head: old_tree.clone(),
+        base: None,
+    };
+    let review = exec.create_review("multi hunk", "", &target, None).unwrap();
+
+    let old_blob = repo
+        .find_tree(git2::Oid::from_str(&old_tree).unwrap())
+        .unwrap()
+        .get_name("a.rs")
+        .unwrap()
+        .id()
+        .to_string();
+
+    exec.add_review_comment(
+        &review.oid,
+        "anchor",
+        Some(&Anchor::Object {
+            oid: old_blob.clone(),
+            path: Some("a.rs".to_string()),
+            range: Some("8-9".to_string()),
+        }),
+    )
+    .unwrap();
+
+    // +2 at line 2 (insert x,y after "1"), -1 at line 6 (remove "5" equivalent).
+    // New: "1\nx\ny\n2\n3\n4\n6\n7\n8\n9\n10\n" → anchor lines 8-9 ("7","8")
+    // shift: +2 from insertion, -1 from deletion = net +1 → new range 9-10.
+    let new_tree = make_tree(&repo, "a.rs", "1\nx\ny\n2\n3\n4\n6\n7\n8\n9\n10\n");
+    let (_, migrated) = exec.retarget_review(&review.oid, &new_tree).unwrap();
+    assert_eq!(migrated, 1);
+
+    let comments = exec.list_review_comments(&review.oid).unwrap();
+    let m = comments.iter().find(|c| c.migrated_from.is_some()).unwrap();
+    if let Some(Anchor::Object { range, .. }) = &m.anchor {
+        assert_eq!(range.as_deref(), Some("9-10"));
+    } else {
+        panic!("expected object anchor");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// retarget: resolved comments are not migrated
+// ---------------------------------------------------------------------------
+
+#[test]
+fn retarget_resolved_comments_not_migrated() {
+    let (dir, repo) = test_repo();
+    let exec = Executor::from_path(dir.path()).unwrap();
+
+    let old_tree = make_tree(&repo, "a.rs", "a\nb\nc\n");
+    let target = ReviewTarget {
+        head: old_tree.clone(),
+        base: None,
+    };
+    let review = exec.create_review("resolved", "", &target, None).unwrap();
+
+    let old_blob = repo
+        .find_tree(git2::Oid::from_str(&old_tree).unwrap())
+        .unwrap()
+        .get_name("a.rs")
+        .unwrap()
+        .id()
+        .to_string();
+
+    let anchor = Anchor::Object {
+        oid: old_blob.clone(),
+        path: Some("a.rs".to_string()),
+        range: Some("2-3".to_string()),
+    };
+    let comment = exec
+        .add_review_comment(&review.oid, "will be resolved", Some(&anchor))
+        .unwrap();
+
+    // Resolve the comment thread.
+    exec.resolve_object_comment(&old_blob, &comment.oid, Some("fixed"))
+        .unwrap();
+
+    // Append a line (shifts anchor if not resolved).
+    let new_tree = make_tree(&repo, "a.rs", "z\na\nb\nc\n");
+    let (_, migrated) = exec.retarget_review(&review.oid, &new_tree).unwrap();
+    assert_eq!(migrated, 0, "resolved comments must not be migrated");
 }

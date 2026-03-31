@@ -2106,90 +2106,83 @@ fn resolve_to_oid(repo: &Repository, spec: &str) -> Result<String> {
 
 /// Collect `(path, blob_oid)` pairs from an object that may be a tree, commit,
 /// or blob.
-fn collect_blob_map(
-    repo: &Repository,
-    head_oid: &str,
-) -> Result<std::collections::HashMap<String, String>> {
-    let mut map = std::collections::HashMap::new();
+/// Parse a line range string like `"42-47"` or `"42"` into `(start, end)`.
+fn parse_line_range(range: &str) -> Option<(usize, usize)> {
+    if let Some((a, b)) = range.split_once('-') {
+        Some((a.parse().ok()?, b.parse().ok()?))
+    } else {
+        let n = range.parse().ok()?;
+        Some((n, n))
+    }
+}
+
+/// Peel a head OID (commit, tree, or blob) to a `Tree`.
+///
+/// Returns `None` for blobs and unrecognized objects.
+fn head_to_tree<'r>(repo: &'r Repository, head_oid: &str) -> Result<Option<git2::Tree<'r>>> {
     let Ok(oid) = git2::Oid::from_str(head_oid) else {
-        return Ok(map);
+        return Ok(None);
     };
     let Ok(obj) = repo.find_object(oid, None) else {
-        return Ok(map);
+        return Ok(None);
     };
     match obj.kind() {
-        Some(ObjectType::Blob) => {
-            map.insert("(blob)".to_string(), head_oid.to_string());
-        }
-        Some(ObjectType::Tree) => {
-            let tree = repo.find_tree(oid)?;
-            let mut files = Vec::new();
-            walk_tree(repo, &tree, "", &mut files);
-            for (path, blob_oid) in files {
-                map.insert(path, blob_oid);
-            }
-        }
-        Some(ObjectType::Commit) => {
-            let commit = repo.find_commit(oid)?;
-            let tree = commit.tree()?;
-            let mut files = Vec::new();
-            walk_tree(repo, &tree, "", &mut files);
-            for (path, blob_oid) in files {
-                map.insert(path, blob_oid);
-            }
-        }
-        _ => {}
+        Some(ObjectType::Tree) => Ok(Some(repo.find_tree(oid)?)),
+        Some(ObjectType::Commit) => Ok(Some(repo.find_commit(oid)?.tree()?)),
+        _ => Ok(None),
     }
-    Ok(map)
 }
 
-/// Find the line range in `new_content` where `context` (lines from the old
-/// blob) appears unchanged.
+/// Map old line range `[start, end]` (1-based, inclusive) through a set of
+/// diff hunks to produce the equivalent range in the new file.
 ///
-/// Returns `Some((new_start, new_end))` (1-based, inclusive) if the exact
-/// sequence of lines is found, `None` otherwise.
-fn find_context_in_blob(old_content: &str, range: &str, new_content: &str) -> Option<String> {
-    let (start, end) = parse_line_range(range)?;
-    let old_lines: Vec<&str> = old_content.lines().collect();
-    if start == 0 || end == 0 || start > old_lines.len() || end > old_lines.len() || start > end {
-        return None;
-    }
-    let context: Vec<&str> = old_lines[start - 1..end].to_vec();
-    if context.is_empty() {
-        return None;
-    }
-
-    let new_lines: Vec<&str> = new_content.lines().collect();
-    let ctx_len = context.len();
-    for i in 0..=new_lines.len().saturating_sub(ctx_len) {
-        if new_lines[i..i + ctx_len] == context[..] {
-            let new_start = i + 1;
-            let new_end = i + ctx_len;
-            return Some(format!("{new_start}-{new_end}"));
+/// Uses a zero-context diff, so each hunk covers exactly the changed lines.
+/// Returns `None` if the anchor overlaps with any changed hunk (the lines
+/// were modified and the comment no longer has a clear home).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+fn map_range_through_hunks(
+    start: usize,
+    end: usize,
+    hunks: &[(u32, u32, u32, u32)], // (old_start, old_lines, new_start, new_lines)
+) -> Option<(usize, usize)> {
+    let mut offset: i64 = 0;
+    for &(h_old_start, h_old_lines, _, h_new_lines) in hunks {
+        let h_old_start = h_old_start as usize;
+        if h_old_lines > 0 {
+            let h_old_end = h_old_start + h_old_lines as usize - 1;
+            if start <= h_old_end && end >= h_old_start {
+                return None; // anchor overlaps a changed hunk — drop it
+            }
+            if h_old_end < start {
+                offset += i64::from(h_new_lines) - i64::from(h_old_lines);
+            }
+        } else {
+            // Pure insertion: no old lines consumed, but new lines added.
+            if h_old_start < start {
+                offset += i64::from(h_new_lines);
+            }
         }
     }
-    None
-}
-
-/// Parse a line range string like `"42-47"` into `(start, end)`.
-fn parse_line_range(range: &str) -> Option<(usize, usize)> {
-    let (a, b) = range.split_once('-')?;
-    Some((a.parse().ok()?, b.parse().ok()?))
-}
-
-/// Read a blob's content as a UTF-8 string.
-fn read_blob_content(repo: &Repository, oid_str: &str) -> Option<String> {
-    let oid = git2::Oid::from_str(oid_str).ok()?;
-    let blob = repo.find_blob(oid).ok()?;
-    String::from_utf8(blob.content().to_vec()).ok()
+    // offset is bounded by file line counts (< 2^31), so max(1) is always ≥ 0.
+    let new_start = (start as i64 + offset).max(1) as usize;
+    let new_end = (end as i64 + offset).max(1) as usize;
+    Some((new_start, new_end))
 }
 
 /// Migrate carry-forward comments from an old target head to a new one.
 ///
-/// For each file that changed (different blob OID), checks whether comments
-/// anchored to the old blob can be found at the same context in the new blob.
-/// If so, a new comment is written to the new blob's object chain with
-/// `Migrated-From` linking back to the original.
+/// Diffs the two trees with zero context lines so each hunk covers exactly the
+/// changed lines. For each modified file, comments anchored to the old blob are
+/// mapped to the new blob:
+///
+/// - If the anchor range overlaps any changed hunk, the comment is dropped
+///   (the lines it referred to no longer exist unchanged).
+/// - Otherwise the range is shifted by the cumulative line-count delta of all
+///   preceding hunks, exactly as `git blame` tracks line provenance.
 ///
 /// Returns the total number of migrated comments.
 fn migrate_carry_forward_comments(
@@ -2197,103 +2190,128 @@ fn migrate_carry_forward_comments(
     old_head: &str,
     new_head: &str,
 ) -> Result<usize> {
+    let old_tree = head_to_tree(repo, old_head)?;
+    let new_tree = head_to_tree(repo, new_head)?;
+    let (Some(old_tree), Some(new_tree)) = (old_tree, new_tree) else {
+        return Ok(0);
+    };
+
+    let mut diff_opts = git2::DiffOptions::new();
+    diff_opts.context_lines(0);
+    let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut diff_opts))?;
+
+    let mut migrated_count = 0;
+    for delta_idx in 0..diff.deltas().len() {
+        migrated_count += migrate_delta(repo, &diff, delta_idx)?;
+    }
+    Ok(migrated_count)
+}
+
+/// Migrate carry-forward comments for a single diff delta.
+fn migrate_delta(repo: &Repository, diff: &git2::Diff<'_>, delta_idx: usize) -> Result<usize> {
     use crate::comment::{Anchor, list_comments, migrate_comment, object_comment_ref};
 
-    let old_map = collect_blob_map(repo, old_head)?;
-    let new_map = collect_blob_map(repo, new_head)?;
-
-    // Invert old_map: blob_oid → [paths]
-    let mut old_oid_to_paths: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for (path, oid) in &old_map {
-        old_oid_to_paths
-            .entry(oid.clone())
-            .or_default()
-            .push(path.clone());
+    let delta = diff.get_delta(delta_idx).unwrap();
+    if !matches!(
+        delta.status(),
+        git2::Delta::Modified | git2::Delta::Renamed | git2::Delta::Copied
+    ) {
+        return Ok(0);
     }
 
-    // Build path → new_blob_oid for quick lookup.
+    let old_oid = delta.old_file().id().to_string();
+    let new_oid = delta.new_file().id().to_string();
+    if old_oid == new_oid {
+        return Ok(0);
+    }
+
+    let old_ref = object_comment_ref(&old_oid);
+    let comments = match list_comments(repo, &old_ref) {
+        Ok(cs) => cs,
+        Err(Error::Git(e)) if e.code() == ErrorCode::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    if comments.is_empty() {
+        return Ok(0);
+    }
+
+    // Collect hunks (None for binary files).
+    let Some(patch) = git2::Patch::from_diff(diff, delta_idx)? else {
+        return Ok(0);
+    };
+    let mut hunks: Vec<(u32, u32, u32, u32)> = Vec::new();
+    for hunk_idx in 0..patch.num_hunks() {
+        let (hunk, _) = patch.hunk(hunk_idx)?;
+        hunks.push((
+            hunk.old_start(),
+            hunk.old_lines(),
+            hunk.new_start(),
+            hunk.new_lines(),
+        ));
+    }
+
+    let new_ref = object_comment_ref(&new_oid);
+
+    // Resolved thread roots: a resolution marker has `resolved: true` and
+    // `reply_to` pointing at the root.
+    let resolved_roots: std::collections::HashSet<&str> = comments
+        .iter()
+        .filter(|c| c.resolved)
+        .filter_map(|c| c.reply_to.as_deref())
+        .collect();
+
     let mut migrated_count = 0;
-
-    for (path, old_oid) in &old_map {
-        let Some(new_oid) = new_map.get(path) else {
-            continue; // File deleted — comments stay on old blob.
-        };
-        if old_oid == new_oid {
-            continue; // Unchanged — nothing to migrate.
-        }
-
-        // Check for comments on the old blob.
-        let old_ref = object_comment_ref(old_oid);
-        let comments = match list_comments(repo, &old_ref) {
-            Ok(cs) => cs,
-            Err(Error::Git(e)) if e.code() == ErrorCode::NotFound => continue,
-            Err(e) => return Err(e),
-        };
-
-        if comments.is_empty() {
+    for comment in &comments {
+        if comment.resolved
+            || comment.replaces.is_some()
+            || comment.migrated_from.is_some()
+            || resolved_roots.contains(comment.oid.as_str())
+        {
             continue;
         }
 
-        let old_content = read_blob_content(repo, old_oid);
-        let new_content = read_blob_content(repo, new_oid);
-
-        let new_ref = object_comment_ref(new_oid);
-
-        for comment in &comments {
-            // Skip resolved comments and edits/migrations.
-            if comment.resolved || comment.replaces.is_some() || comment.migrated_from.is_some() {
-                continue;
-            }
-
-            let new_anchor = match &comment.anchor {
-                Some(Anchor::Object {
-                    range: Some(range),
-                    path: anchor_path,
-                    ..
-                }) => {
-                    // Try content-matching for ranged anchors.
-                    match (&old_content, &new_content) {
-                        (Some(old_c), Some(new_c)) => {
-                            if let Some(new_range) = find_context_in_blob(old_c, range, new_c) {
-                                Some(Anchor::Object {
-                                    oid: new_oid.clone(),
-                                    path: anchor_path.clone(),
-                                    range: Some(new_range),
-                                })
-                            } else {
-                                continue; // Context changed — comment does not carry forward.
-                            }
-                        }
-                        _ => continue, // Binary blobs — skip.
-                    }
+        let new_anchor = match &comment.anchor {
+            Some(Anchor::Object {
+                range: Some(range),
+                path: anchor_path,
+                ..
+            }) => {
+                let Some((start, end)) = parse_line_range(range) else {
+                    continue;
+                };
+                if start == 0 || end < start {
+                    continue;
                 }
-                Some(Anchor::Object {
-                    range: None,
-                    path: anchor_path,
-                    ..
-                }) => {
-                    // No line range — file-level comment, carry forward unconditionally.
-                    Some(Anchor::Object {
+                match map_range_through_hunks(start, end, &hunks) {
+                    Some((new_start, new_end)) => Some(Anchor::Object {
                         oid: new_oid.clone(),
                         path: anchor_path.clone(),
-                        range: None,
-                    })
+                        range: Some(format!("{new_start}-{new_end}")),
+                    }),
+                    None => continue, // lines modified — drop
                 }
-                _ => None, // Non-object anchor — carry forward as unanchored.
-            };
+            }
+            Some(Anchor::Object {
+                range: None,
+                path: anchor_path,
+                ..
+            }) => Some(Anchor::Object {
+                oid: new_oid.clone(),
+                path: anchor_path.clone(),
+                range: None,
+            }),
+            _ => None,
+        };
 
-            migrate_comment(
-                repo,
-                &new_ref,
-                &comment.body,
-                new_anchor.as_ref(),
-                &comment.oid,
-            )?;
-            migrated_count += 1;
-        }
+        migrate_comment(
+            repo,
+            &new_ref,
+            &comment.body,
+            new_anchor.as_ref(),
+            &comment.oid,
+        )?;
+        migrated_count += 1;
     }
-
     Ok(migrated_count)
 }
 
@@ -2485,5 +2503,140 @@ fn print_review_list(reviews: &[Review]) {
             .as_deref()
             .unwrap_or(&review.oid[..review.oid.len().min(12)]);
         println!("{id}  {}  {}", review.state.as_str(), review.title);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::map_range_through_hunks;
+
+    // (old_start, old_lines, new_start, new_lines)
+    type H = (u32, u32, u32, u32);
+
+    #[test]
+    fn no_hunks_returns_unchanged() {
+        assert_eq!(map_range_through_hunks(5, 10, &[]), Some((5, 10)));
+    }
+
+    #[test]
+    fn hunk_before_anchor_shifts_down() {
+        // @@ -2,1 +2,3 @@ — net +2 before anchor at 6-8
+        let h: H = (2, 1, 2, 3);
+        assert_eq!(map_range_through_hunks(6, 8, &[h]), Some((8, 10)));
+    }
+
+    #[test]
+    fn hunk_before_anchor_shifts_up() {
+        // @@ -2,3 +2,1 @@ — net -2 before anchor at 6-8
+        let h: H = (2, 3, 2, 1);
+        assert_eq!(map_range_through_hunks(6, 8, &[h]), Some((4, 6)));
+    }
+
+    #[test]
+    fn hunk_after_anchor_no_shift() {
+        let h: H = (20, 3, 20, 5);
+        assert_eq!(map_range_through_hunks(5, 10, &[h]), Some((5, 10)));
+    }
+
+    #[test]
+    fn hunk_overlapping_anchor_start_dropped() {
+        // hunk covers 8-12, anchor 10-15
+        let h: H = (8, 5, 8, 5);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
+    }
+
+    #[test]
+    fn hunk_overlapping_anchor_end_dropped() {
+        // hunk covers 13-18, anchor 10-15
+        let h: H = (13, 6, 13, 6);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
+    }
+
+    #[test]
+    fn hunk_containing_anchor_dropped() {
+        // hunk covers 5-20, anchor 10-15
+        let h: H = (5, 16, 5, 10);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
+    }
+
+    #[test]
+    fn anchor_containing_hunk_dropped() {
+        // hunk covers 12-13 (inside anchor 10-15)
+        let h: H = (12, 2, 12, 2);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
+    }
+
+    #[test]
+    fn hunk_adjacent_before_anchor_not_overlap() {
+        // hunk ends exactly at line 9, anchor starts at 10
+        let h: H = (7, 3, 7, 5); // covers 7-9, net +2
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((12, 17)));
+    }
+
+    #[test]
+    fn hunk_adjacent_after_anchor_not_overlap() {
+        // hunk starts exactly at line 16, anchor ends at 15
+        let h: H = (16, 3, 16, 1);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
+    }
+
+    #[test]
+    fn multiple_hunks_cumulative_shift() {
+        // Two hunks before anchor at 15-20: first +2, second -1 → net +1
+        let hunks: &[H] = &[(2, 1, 2, 3), (8, 2, 10, 1)];
+        assert_eq!(map_range_through_hunks(15, 20, hunks), Some((16, 21)));
+    }
+
+    #[test]
+    fn multiple_hunks_one_before_one_after() {
+        let hunks: &[H] = &[(2, 1, 2, 3), (20, 1, 22, 3)];
+        assert_eq!(map_range_through_hunks(10, 15, hunks), Some((12, 17)));
+    }
+
+    #[test]
+    fn multiple_hunks_second_overlaps_dropped() {
+        // First hunk shifts anchor, second hunk overlaps it — still dropped.
+        let hunks: &[H] = &[(2, 1, 2, 3), (11, 3, 13, 3)];
+        assert_eq!(map_range_through_hunks(10, 15, hunks), None);
+    }
+
+    #[test]
+    fn pure_insertion_before_anchor_shifts_down() {
+        // @@ -5,0 +6,3 @@ — insert 3 lines after old line 5, anchor at 8-10
+        let h: H = (5, 0, 6, 3);
+        assert_eq!(map_range_through_hunks(8, 10, &[h]), Some((11, 13)));
+    }
+
+    #[test]
+    fn pure_insertion_at_anchor_start_no_shift() {
+        // insertion point == anchor start: old line 10 is unaffected
+        let h: H = (10, 0, 11, 3);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
+    }
+
+    #[test]
+    fn pure_insertion_after_anchor_no_shift() {
+        let h: H = (20, 0, 21, 5);
+        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
+    }
+
+    #[test]
+    fn single_line_anchor_shifts() {
+        // net +2 before line 10
+        let h: H = (5, 1, 5, 3);
+        assert_eq!(map_range_through_hunks(10, 10, &[h]), Some((12, 12)));
+    }
+
+    #[test]
+    fn single_line_anchor_in_hunk_dropped() {
+        let h: H = (8, 5, 8, 5); // covers 8-12
+        assert_eq!(map_range_through_hunks(10, 10, &[h]), None);
+    }
+
+    #[test]
+    fn one_to_one_substitution_no_shift() {
+        // line 1 changed to something else: net 0 before anchor at 2-3
+        let h: H = (1, 1, 1, 1);
+        assert_eq!(map_range_through_hunks(2, 3, &[h]), Some((2, 3)));
     }
 }
