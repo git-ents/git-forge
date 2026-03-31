@@ -15,8 +15,9 @@ use git2::{ErrorCode, ObjectType, Repository};
 use serde::Serialize;
 
 use crate::comment::{
-    Comment, LegacyAnchor as Anchor, add_comment, add_reply, issue_comment_ref, list_comments,
-    object_comment_ref, resolve_comment, review_comment_ref,
+    Anchor as V2Anchor, Comment, LegacyAnchor as Anchor, add_comment, add_reply, create_thread,
+    find_threads_by_object, issue_comment_ref, list_comments, list_thread_comments,
+    object_comment_ref, reply_to_thread, resolve_comment, resolve_thread, review_comment_ref,
 };
 use crate::issue::{Issue, IssueState};
 use crate::refs::walk_tree;
@@ -137,6 +138,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the issue is not found or a git operation fails.
+    #[deprecated(note = "use `create_comment` instead")]
     pub fn add_issue_comment(
         &self,
         issue_ref: &str,
@@ -152,6 +154,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the issue is not found or a git operation fails.
+    #[deprecated(note = "use `reply_comment` instead")]
     pub fn reply_issue_comment(
         &self,
         issue_ref: &str,
@@ -168,6 +171,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the issue is not found or a git operation fails.
+    #[deprecated(note = "use `resolve_comment_thread` instead")]
     pub fn resolve_issue_comment(
         &self,
         issue_ref: &str,
@@ -183,6 +187,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the issue is not found or a git operation fails.
+    #[deprecated(note = "use `list_comments_on` instead")]
     pub fn list_issue_comments(&self, issue_ref: &str) -> Result<Vec<Comment>> {
         let issue = self.store().get_issue(issue_ref)?;
         let ref_name = issue_comment_ref(&issue.oid);
@@ -261,15 +266,14 @@ impl Executor {
 
     /// Retarget a review to a new head, migrating carry-forward comments.
     ///
-    /// Returns the updated review and the number of migrated comments.
+    /// Returns the updated review.
     ///
     /// # Errors
     /// Returns an error if the review does not exist or a git operation fails.
-    pub fn retarget_review(&self, reference: &str, new_head: &str) -> Result<(Review, usize)> {
+    pub fn retarget_review(&self, reference: &str, new_head: &str) -> Result<Review> {
         let resolved_head = resolve_to_oid(&self.repo, new_head)?;
-        let (old_head, review) = self.store().retarget_review(reference, &resolved_head)?;
-        let migrated = migrate_carry_forward_comments(&self.repo, &old_head, &resolved_head)?;
-        Ok((review, migrated))
+        let (_, review) = self.store().retarget_review(reference, &resolved_head)?;
+        Ok(review)
     }
 
     // -----------------------------------------------------------------------
@@ -278,11 +282,9 @@ impl Executor {
 
     /// Add a comment to a review.
     ///
-    /// Blob-anchored comments are written to `object/<blob_oid>` chains so
-    /// they survive retargeting. Unanchored comments stay on the review chain.
-    ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
+    #[deprecated(note = "use `create_comment` instead")]
     pub fn add_review_comment(
         &self,
         review_ref: &str,
@@ -290,7 +292,16 @@ impl Executor {
         anchor: Option<&Anchor>,
     ) -> Result<Comment> {
         let review = self.store().get_review(review_ref)?;
-        let ref_name = self.review_comment_chain_ref(&review.oid, anchor);
+        let ref_name = if let Some(Anchor::Object { oid, .. }) = anchor
+            && let Ok(obj) = self
+                .repo
+                .find_object(git2::Oid::from_str(oid).unwrap_or(git2::Oid::zero()), None)
+            && obj.kind() == Some(ObjectType::Blob)
+        {
+            object_comment_ref(oid)
+        } else {
+            review_comment_ref(&review.oid)
+        };
         add_comment(&self.repo, &ref_name, body, anchor)
     }
 
@@ -298,6 +309,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
+    #[deprecated(note = "use `reply_comment` instead")]
     pub fn reply_review_comment(
         &self,
         review_ref: &str,
@@ -306,7 +318,16 @@ impl Executor {
         anchor: Option<&Anchor>,
     ) -> Result<Comment> {
         let review = self.store().get_review(review_ref)?;
-        let ref_name = self.review_comment_chain_ref(&review.oid, anchor);
+        let ref_name = if let Some(Anchor::Object { oid, .. }) = anchor
+            && let Ok(obj) = self
+                .repo
+                .find_object(git2::Oid::from_str(oid).unwrap_or(git2::Oid::zero()), None)
+            && obj.kind() == Some(ObjectType::Blob)
+        {
+            object_comment_ref(oid)
+        } else {
+            review_comment_ref(&review.oid)
+        };
         add_reply(&self.repo, &ref_name, body, reply_to_oid, anchor)
     }
 
@@ -314,6 +335,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
+    #[deprecated(note = "use `resolve_comment_thread` instead")]
     pub fn resolve_review_comment(
         &self,
         review_ref: &str,
@@ -332,6 +354,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the review is not found or a git operation fails.
+    #[deprecated(note = "use `list_comments_on` instead")]
     pub fn list_review_comments(&self, review_ref: &str) -> Result<Vec<Comment>> {
         let review = self.store().get_review(review_ref)?;
         let mut comments = Vec::new();
@@ -363,22 +386,6 @@ impl Executor {
         Ok(comments)
     }
 
-    /// Determine the comment chain ref for a review comment.
-    ///
-    /// Blob-anchored comments go to `object/<blob_oid>`, everything else
-    /// goes to `review/<review_oid>`.
-    fn review_comment_chain_ref(&self, review_oid: &str, anchor: Option<&Anchor>) -> String {
-        if let Some(Anchor::Object { oid, .. }) = anchor
-            && let Ok(obj) = self
-                .repo
-                .find_object(git2::Oid::from_str(oid).unwrap_or(git2::Oid::zero()), None)
-            && obj.kind() == Some(ObjectType::Blob)
-        {
-            return object_comment_ref(oid);
-        }
-        review_comment_ref(review_oid)
-    }
-
     // -----------------------------------------------------------------------
     // Standalone object comments
     // -----------------------------------------------------------------------
@@ -387,6 +394,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if the object is not found or a git operation fails.
+    #[deprecated(note = "use `create_comment` instead")]
     pub fn add_object_comment(
         &self,
         object_oid: &str,
@@ -410,6 +418,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
+    #[deprecated(note = "use `reply_comment` instead")]
     pub fn reply_object_comment(
         &self,
         object_oid: &str,
@@ -425,6 +434,7 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
+    #[deprecated(note = "use `resolve_comment_thread` instead")]
     pub fn resolve_object_comment(
         &self,
         object_oid: &str,
@@ -439,9 +449,132 @@ impl Executor {
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
+    #[deprecated(note = "use `list_comments_on` instead")]
     pub fn list_object_comments(&self, object_oid: &str) -> Result<Vec<Comment>> {
         let ref_name = object_comment_ref(object_oid);
         list_comments(&self.repo, &ref_name)
+    }
+
+    // -----------------------------------------------------------------------
+    // v2 comment API
+    // -----------------------------------------------------------------------
+
+    /// Create a new comment thread, optionally anchored to a git object.
+    ///
+    /// When `anchor` targets a blob with a line range, context lines are
+    /// extracted automatically.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn create_comment(
+        &self,
+        body: &str,
+        anchor: Option<&V2Anchor>,
+        context_lines: Option<&str>,
+    ) -> Result<(String, Comment)> {
+        let ctx = match anchor {
+            Some(a) if a.start_line.is_some() && context_lines.is_none() => {
+                extract_context(&self.repo, &a.oid, a.start_line.unwrap_or(1), a.end_line).ok()
+            }
+            _ => context_lines.map(str::to_string),
+        };
+        create_thread(&self.repo, body, anchor, ctx.as_deref())
+    }
+
+    /// Append a reply to an existing comment thread.
+    ///
+    /// # Errors
+    /// Returns an error if the thread or reply-to OID cannot be found.
+    pub fn reply_comment(
+        &self,
+        thread_id: &str,
+        body: &str,
+        reply_to_oid: &str,
+        anchor: Option<&V2Anchor>,
+        context_lines: Option<&str>,
+    ) -> Result<Comment> {
+        let ctx = match anchor {
+            Some(a) if a.start_line.is_some() && context_lines.is_none() => {
+                extract_context(&self.repo, &a.oid, a.start_line.unwrap_or(1), a.end_line).ok()
+            }
+            _ => context_lines.map(str::to_string),
+        };
+        reply_to_thread(
+            &self.repo,
+            thread_id,
+            body,
+            reply_to_oid,
+            anchor,
+            ctx.as_deref(),
+        )
+    }
+
+    /// Resolve a comment thread.
+    ///
+    /// # Errors
+    /// Returns an error if the thread or reply-to OID cannot be found.
+    pub fn resolve_comment_thread(
+        &self,
+        thread_id: &str,
+        reply_to_oid: &str,
+        message: Option<&str>,
+    ) -> Result<Comment> {
+        resolve_thread(&self.repo, thread_id, reply_to_oid, message)
+    }
+
+    /// List all comments anchored to a git object (blob, commit, tree, or tag).
+    ///
+    /// Finds all v2 threads anchored to `oid`, flattens their comments,
+    /// and returns them sorted by timestamp.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn list_comments_on(&self, oid: &str) -> Result<Vec<Comment>> {
+        let thread_ids = find_threads_by_object(&self.repo, oid)?;
+        let mut comments = Vec::new();
+        for thread_id in &thread_ids {
+            let cs = list_thread_comments(&self.repo, thread_id)?;
+            comments.extend(cs);
+        }
+        comments.sort_by_key(|c| c.timestamp);
+        Ok(comments)
+    }
+
+    /// Resolve an anchor spec string to a git object OID.
+    ///
+    /// Accepts:
+    /// - A 40-character hex OID → returned as-is
+    /// - A `HEAD:<path>` spec → resolved to blob OID at HEAD
+    /// - `issue:<display-id>` → resolved to the issue's root commit OID
+    /// - `review:<display-id>` → resolved to the review's root commit OID
+    ///
+    /// # Errors
+    /// Returns an error if the spec cannot be resolved.
+    pub fn resolve_anchor_spec(&self, spec: &str) -> Result<String> {
+        if spec.len() == 40
+            && let Ok(oid) = git2::Oid::from_str(spec)
+        {
+            return Ok(oid.to_string());
+        }
+        if let Some(path) = spec.strip_prefix("HEAD:") {
+            let head_commit = self.repo.head()?.peel_to_commit()?;
+            let tree = head_commit.tree()?;
+            let entry = tree
+                .get_path(std::path::Path::new(path))
+                .map_err(|_| Error::NotFound(spec.to_string()))?;
+            return Ok(entry.id().to_string());
+        }
+        if let Some(display_id) = spec.strip_prefix("issue:") {
+            let issue = self.store().get_issue(display_id)?;
+            return Ok(issue.oid);
+        }
+        if let Some(display_id) = spec.strip_prefix("review:") {
+            let review = self.store().get_review(display_id)?;
+            return Ok(review.oid);
+        }
+        // Fall back to git rev-parse.
+        let obj = self.repo.revparse_single(spec)?;
+        Ok(obj.id().to_string())
     }
 
     // -----------------------------------------------------------------------
@@ -1687,7 +1820,7 @@ impl Executor {
                 }
 
                 ReviewCommand::Retarget { reference, head } => {
-                    let (review, migrated) = self.retarget_review(reference, head)?;
+                    let review = self.retarget_review(reference, head)?;
                     if cli.json {
                         print_review(&review, true);
                     } else {
@@ -1696,9 +1829,6 @@ impl Executor {
                             .as_deref()
                             .unwrap_or(&review.oid[..review.oid.len().min(12)]);
                         println!("Retargeted review {label} to {}", &head);
-                        if migrated > 0 {
-                            println!("Migrated {migrated} carry-forward comment(s).");
-                        }
                     }
                 }
             },
@@ -2106,217 +2236,27 @@ fn resolve_to_oid(repo: &Repository, spec: &str) -> Result<String> {
     Ok(obj.id().to_string())
 }
 
-/// Collect `(path, blob_oid)` pairs from an object that may be a tree, commit,
-/// or blob.
-/// Parse a line range string like `"42-47"` or `"42"` into `(start, end)`.
-fn parse_line_range(range: &str) -> Option<(usize, usize)> {
-    if let Some((a, b)) = range.split_once('-') {
-        Some((a.parse().ok()?, b.parse().ok()?))
-    } else {
-        let n = range.parse().ok()?;
-        Some((n, n))
-    }
-}
-
-/// Peel a head OID (commit, tree, or blob) to a `Tree`.
+/// Extract ±3 surrounding lines from a blob for a given 1-based line range.
 ///
-/// Returns `None` for blobs and unrecognized objects.
-fn head_to_tree<'r>(repo: &'r Repository, head_oid: &str) -> Result<Option<git2::Tree<'r>>> {
-    let Ok(oid) = git2::Oid::from_str(head_oid) else {
-        return Ok(None);
-    };
-    let Ok(obj) = repo.find_object(oid, None) else {
-        return Ok(None);
-    };
-    match obj.kind() {
-        Some(ObjectType::Tree) => Ok(Some(repo.find_tree(oid)?)),
-        Some(ObjectType::Commit) => Ok(Some(repo.find_commit(oid)?.tree()?)),
-        _ => Ok(None),
-    }
-}
-
-/// Map old line range `[start, end]` (1-based, inclusive) through a set of
-/// diff hunks to produce the equivalent range in the new file.
-///
-/// Uses a zero-context diff, so each hunk covers exactly the changed lines.
-/// Returns `None` if the anchor overlaps with any changed hunk (the lines
-/// were modified and the comment no longer has a clear home).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-fn map_range_through_hunks(
-    start: usize,
-    end: usize,
-    hunks: &[(u32, u32, u32, u32)], // (old_start, old_lines, new_start, new_lines)
-) -> Option<(usize, usize)> {
-    let mut offset: i64 = 0;
-    for &(h_old_start, h_old_lines, _, h_new_lines) in hunks {
-        let h_old_start = h_old_start as usize;
-        if h_old_lines > 0 {
-            let h_old_end = h_old_start + h_old_lines as usize - 1;
-            if start <= h_old_end && end >= h_old_start {
-                return None; // anchor overlaps a changed hunk — drop it
-            }
-            if h_old_end < start {
-                offset += i64::from(h_new_lines) - i64::from(h_old_lines);
-            }
-        } else {
-            // Pure insertion: no old lines consumed, but new lines added.
-            if h_old_start < start {
-                offset += i64::from(h_new_lines);
-            }
-        }
-    }
-    // offset is bounded by file line counts (< 2^31), so max(1) is always ≥ 0.
-    let new_start = (start as i64 + offset).max(1) as usize;
-    let new_end = (end as i64 + offset).max(1) as usize;
-    Some((new_start, new_end))
-}
-
-/// Migrate carry-forward comments from an old target head to a new one.
-///
-/// Diffs the two trees with zero context lines so each hunk covers exactly the
-/// changed lines. For each modified file, comments anchored to the old blob are
-/// mapped to the new blob:
-///
-/// - If the anchor range overlaps any changed hunk, the comment is dropped
-///   (the lines it referred to no longer exist unchanged).
-/// - Otherwise the range is shifted by the cumulative line-count delta of all
-///   preceding hunks, exactly as `git blame` tracks line provenance.
-///
-/// Returns the total number of migrated comments.
-fn migrate_carry_forward_comments(
+/// Returns an empty string for binary blobs or OIDs that don't exist.
+fn extract_context(
     repo: &Repository,
-    old_head: &str,
-    new_head: &str,
-) -> Result<usize> {
-    let old_tree = head_to_tree(repo, old_head)?;
-    let new_tree = head_to_tree(repo, new_head)?;
-    let (Some(old_tree), Some(new_tree)) = (old_tree, new_tree) else {
-        return Ok(0);
-    };
+    blob_oid: &str,
+    start_line: u32,
+    end_line: Option<u32>,
+) -> Result<String> {
+    let oid = git2::Oid::from_str(blob_oid)?;
+    let blob = repo.find_blob(oid)?;
+    let content = std::str::from_utf8(blob.content()).unwrap_or("");
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
 
-    let mut diff_opts = git2::DiffOptions::new();
-    diff_opts.context_lines(0);
-    let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut diff_opts))?;
+    let start = start_line.saturating_sub(1) as usize; // 0-based
+    let end = end_line.unwrap_or(start_line).saturating_sub(1) as usize;
+    let ctx_start = start.saturating_sub(3);
+    let ctx_end = (end + 4).min(total);
 
-    let mut migrated_count = 0;
-    for delta_idx in 0..diff.deltas().len() {
-        migrated_count += migrate_delta(repo, &diff, delta_idx)?;
-    }
-    Ok(migrated_count)
-}
-
-/// Migrate carry-forward comments for a single diff delta.
-fn migrate_delta(repo: &Repository, diff: &git2::Diff<'_>, delta_idx: usize) -> Result<usize> {
-    use crate::comment::{
-        LegacyAnchor as Anchor, list_comments, migrate_comment, object_comment_ref,
-    };
-
-    let delta = diff.get_delta(delta_idx).unwrap();
-    if !matches!(
-        delta.status(),
-        git2::Delta::Modified | git2::Delta::Renamed | git2::Delta::Copied
-    ) {
-        return Ok(0);
-    }
-
-    let old_oid = delta.old_file().id().to_string();
-    let new_oid = delta.new_file().id().to_string();
-    if old_oid == new_oid {
-        return Ok(0);
-    }
-
-    let old_ref = object_comment_ref(&old_oid);
-    let comments = match list_comments(repo, &old_ref) {
-        Ok(cs) => cs,
-        Err(Error::Git(e)) if e.code() == ErrorCode::NotFound => return Ok(0),
-        Err(e) => return Err(e),
-    };
-    if comments.is_empty() {
-        return Ok(0);
-    }
-
-    // Collect hunks (None for binary files).
-    let Some(patch) = git2::Patch::from_diff(diff, delta_idx)? else {
-        return Ok(0);
-    };
-    let mut hunks: Vec<(u32, u32, u32, u32)> = Vec::new();
-    for hunk_idx in 0..patch.num_hunks() {
-        let (hunk, _) = patch.hunk(hunk_idx)?;
-        hunks.push((
-            hunk.old_start(),
-            hunk.old_lines(),
-            hunk.new_start(),
-            hunk.new_lines(),
-        ));
-    }
-
-    let new_ref = object_comment_ref(&new_oid);
-
-    // Resolved thread roots: a resolution marker has `resolved: true` and
-    // `reply_to` pointing at the root.
-    let resolved_roots: std::collections::HashSet<&str> = comments
-        .iter()
-        .filter(|c| c.resolved)
-        .filter_map(|c| c.reply_to.as_deref())
-        .collect();
-
-    let mut migrated_count = 0;
-    for comment in &comments {
-        if comment.resolved
-            || comment.replaces.is_some()
-            || comment.migrated_from.is_some()
-            || resolved_roots.contains(comment.oid.as_str())
-        {
-            continue;
-        }
-
-        let new_anchor = match &comment.anchor {
-            Some(Anchor::Object {
-                range: Some(range),
-                path: anchor_path,
-                ..
-            }) => {
-                let Some((start, end)) = parse_line_range(range) else {
-                    continue;
-                };
-                if start == 0 || end < start {
-                    continue;
-                }
-                match map_range_through_hunks(start, end, &hunks) {
-                    Some((new_start, new_end)) => Some(Anchor::Object {
-                        oid: new_oid.clone(),
-                        path: anchor_path.clone(),
-                        range: Some(format!("{new_start}-{new_end}")),
-                    }),
-                    None => continue, // lines modified — drop
-                }
-            }
-            Some(Anchor::Object {
-                range: None,
-                path: anchor_path,
-                ..
-            }) => Some(Anchor::Object {
-                oid: new_oid.clone(),
-                path: anchor_path.clone(),
-                range: None,
-            }),
-            _ => None,
-        };
-
-        migrate_comment(
-            repo,
-            &new_ref,
-            &comment.body,
-            new_anchor.as_ref(),
-            &comment.oid,
-        )?;
-        migrated_count += 1;
-    }
-    Ok(migrated_count)
+    Ok(lines[ctx_start..ctx_end].join("\n"))
 }
 
 fn review_target_files(repo: &git2::Repository, review: &Review) -> Result<Vec<(String, String)>> {
@@ -2507,140 +2447,5 @@ fn print_review_list(reviews: &[Review]) {
             .as_deref()
             .unwrap_or(&review.oid[..review.oid.len().min(12)]);
         println!("{id}  {}  {}", review.state.as_str(), review.title);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::map_range_through_hunks;
-
-    // (old_start, old_lines, new_start, new_lines)
-    type H = (u32, u32, u32, u32);
-
-    #[test]
-    fn no_hunks_returns_unchanged() {
-        assert_eq!(map_range_through_hunks(5, 10, &[]), Some((5, 10)));
-    }
-
-    #[test]
-    fn hunk_before_anchor_shifts_down() {
-        // @@ -2,1 +2,3 @@ — net +2 before anchor at 6-8
-        let h: H = (2, 1, 2, 3);
-        assert_eq!(map_range_through_hunks(6, 8, &[h]), Some((8, 10)));
-    }
-
-    #[test]
-    fn hunk_before_anchor_shifts_up() {
-        // @@ -2,3 +2,1 @@ — net -2 before anchor at 6-8
-        let h: H = (2, 3, 2, 1);
-        assert_eq!(map_range_through_hunks(6, 8, &[h]), Some((4, 6)));
-    }
-
-    #[test]
-    fn hunk_after_anchor_no_shift() {
-        let h: H = (20, 3, 20, 5);
-        assert_eq!(map_range_through_hunks(5, 10, &[h]), Some((5, 10)));
-    }
-
-    #[test]
-    fn hunk_overlapping_anchor_start_dropped() {
-        // hunk covers 8-12, anchor 10-15
-        let h: H = (8, 5, 8, 5);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
-    }
-
-    #[test]
-    fn hunk_overlapping_anchor_end_dropped() {
-        // hunk covers 13-18, anchor 10-15
-        let h: H = (13, 6, 13, 6);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
-    }
-
-    #[test]
-    fn hunk_containing_anchor_dropped() {
-        // hunk covers 5-20, anchor 10-15
-        let h: H = (5, 16, 5, 10);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
-    }
-
-    #[test]
-    fn anchor_containing_hunk_dropped() {
-        // hunk covers 12-13 (inside anchor 10-15)
-        let h: H = (12, 2, 12, 2);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), None);
-    }
-
-    #[test]
-    fn hunk_adjacent_before_anchor_not_overlap() {
-        // hunk ends exactly at line 9, anchor starts at 10
-        let h: H = (7, 3, 7, 5); // covers 7-9, net +2
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((12, 17)));
-    }
-
-    #[test]
-    fn hunk_adjacent_after_anchor_not_overlap() {
-        // hunk starts exactly at line 16, anchor ends at 15
-        let h: H = (16, 3, 16, 1);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
-    }
-
-    #[test]
-    fn multiple_hunks_cumulative_shift() {
-        // Two hunks before anchor at 15-20: first +2, second -1 → net +1
-        let hunks: &[H] = &[(2, 1, 2, 3), (8, 2, 10, 1)];
-        assert_eq!(map_range_through_hunks(15, 20, hunks), Some((16, 21)));
-    }
-
-    #[test]
-    fn multiple_hunks_one_before_one_after() {
-        let hunks: &[H] = &[(2, 1, 2, 3), (20, 1, 22, 3)];
-        assert_eq!(map_range_through_hunks(10, 15, hunks), Some((12, 17)));
-    }
-
-    #[test]
-    fn multiple_hunks_second_overlaps_dropped() {
-        // First hunk shifts anchor, second hunk overlaps it — still dropped.
-        let hunks: &[H] = &[(2, 1, 2, 3), (11, 3, 13, 3)];
-        assert_eq!(map_range_through_hunks(10, 15, hunks), None);
-    }
-
-    #[test]
-    fn pure_insertion_before_anchor_shifts_down() {
-        // @@ -5,0 +6,3 @@ — insert 3 lines after old line 5, anchor at 8-10
-        let h: H = (5, 0, 6, 3);
-        assert_eq!(map_range_through_hunks(8, 10, &[h]), Some((11, 13)));
-    }
-
-    #[test]
-    fn pure_insertion_at_anchor_start_no_shift() {
-        // insertion point == anchor start: old line 10 is unaffected
-        let h: H = (10, 0, 11, 3);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
-    }
-
-    #[test]
-    fn pure_insertion_after_anchor_no_shift() {
-        let h: H = (20, 0, 21, 5);
-        assert_eq!(map_range_through_hunks(10, 15, &[h]), Some((10, 15)));
-    }
-
-    #[test]
-    fn single_line_anchor_shifts() {
-        // net +2 before line 10
-        let h: H = (5, 1, 5, 3);
-        assert_eq!(map_range_through_hunks(10, 10, &[h]), Some((12, 12)));
-    }
-
-    #[test]
-    fn single_line_anchor_in_hunk_dropped() {
-        let h: H = (8, 5, 8, 5); // covers 8-12
-        assert_eq!(map_range_through_hunks(10, 10, &[h]), None);
-    }
-
-    #[test]
-    fn one_to_one_substitution_no_shift() {
-        // line 1 changed to something else: net 0 before anchor at 2-3
-        let h: H = (1, 1, 1, 1);
-        assert_eq!(map_range_through_hunks(2, 3, &[h]), Some((2, 3)));
     }
 }
