@@ -155,7 +155,7 @@ pub fn comment_from_chain_entry(repo: &Repository, entry: &ChainEntry) -> Result
     let author_name = author.name().unwrap_or("").to_string();
     let author_email = author.email().unwrap_or("").to_string();
     let timestamp = author.when().seconds();
-    let reply_to = commit.parent_id(1).ok().map(|oid| oid.to_string());
+    let second_parent = commit.parent_id(1).ok().map(|oid| oid.to_string());
 
     let (body, trailers) = parse_trailers(&entry.message);
 
@@ -173,6 +173,14 @@ pub fn comment_from_chain_entry(repo: &Repository, entry: &ChainEntry) -> Result
 
     let resolved = trailers.get("Resolved").is_some_and(|v| v == "true");
     let replaces = trailers.get("Replaces").cloned();
+    // Edits use the second parent to point at the replaced commit, not as
+    // a reply.  Only treat the second parent as `reply_to` when there is
+    // no `Replaces` trailer.
+    let reply_to = if replaces.is_some() {
+        None
+    } else {
+        second_parent
+    };
     let thread_id = trailers.get(TRAILER_COMMENT_ID).cloned();
 
     let context_lines = read_tree_blob(repo, entry.tree, "context");
