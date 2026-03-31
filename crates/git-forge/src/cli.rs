@@ -54,6 +54,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Manage the forge object index.
+    Index {
+        /// Index subcommand.
+        #[command(subcommand)]
+        command: IndexCommand,
+    },
 }
 
 /// Config subcommands.
@@ -126,44 +132,15 @@ pub enum ContributorCommand {
 /// Comment subcommands.
 #[derive(Subcommand, Debug)]
 pub enum CommentCommand {
-    /// Add a top-level comment to an issue, review, or object.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object", "path"])))]
-    Add {
-        /// Issue display ID or OID prefix.
+    /// Create a new comment thread anchored to any git object.
+    Create {
+        /// Anchor spec: raw OID, `HEAD:<path>`, `issue:<id>`, or `review:<id>`.
         #[arg(long)]
-        issue: Option<String>,
+        on: String,
 
-        /// Review display ID or OID prefix.
+        /// Line range within the anchored blob (e.g. `"42-47"` or `"42"`).
         #[arg(long)]
-        review: Option<String>,
-
-        /// Git object OID or revspec to comment on.
-        #[arg(long)]
-        object: Option<String>,
-
-        /// File path to comment on (resolves to blob OID, auto-sets anchor).
-        #[arg(long, short = 'p', conflicts_with_all = ["anchor", "anchor_path", "anchor_start", "anchor_end"])]
-        path: Option<PathBuf>,
-
-        /// Anchor the comment to a git object (blob, commit, or tree OID).
-        #[arg(long, conflicts_with_all = ["anchor_start", "anchor_end"])]
-        anchor: Option<String>,
-
-        /// File path within the anchored object.
-        #[arg(long, requires = "anchor")]
-        anchor_path: Option<String>,
-
-        /// Line range within the anchored object (e.g. "10-20").
-        #[arg(long)]
-        range: Option<String>,
-
-        /// Start OID for a commit-range anchor.
-        #[arg(long, requires = "anchor_end", conflicts_with = "anchor")]
-        anchor_start: Option<String>,
-
-        /// End OID for a commit-range anchor.
-        #[arg(long, requires = "anchor_start", conflicts_with = "anchor")]
-        anchor_end: Option<String>,
+        lines: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
@@ -177,48 +154,14 @@ pub enum CommentCommand {
         interactive: bool,
     },
 
-    /// Reply to an existing comment.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object", "path"])))]
+    /// Reply to an existing comment thread.
     Reply {
-        /// Issue display ID or OID prefix.
-        #[arg(long)]
-        issue: Option<String>,
-
-        /// Review display ID or OID prefix.
-        #[arg(long)]
-        review: Option<String>,
-
-        /// Git object OID to reply on.
-        #[arg(long)]
-        object: Option<String>,
-
-        /// File path to reply on (resolves to blob OID, auto-sets anchor).
-        #[arg(long, short = 'p', conflicts_with_all = ["anchor", "anchor_path", "anchor_start", "anchor_end"])]
-        path: Option<PathBuf>,
+        /// Thread UUID.
+        thread_id: String,
 
         /// OID of the comment to reply to.
         #[arg(long = "to")]
         reply_to: String,
-
-        /// Anchor the reply to a git object (blob, commit, or tree OID).
-        #[arg(long, conflicts_with_all = ["anchor_start", "anchor_end"])]
-        anchor: Option<String>,
-
-        /// File path within the anchored object.
-        #[arg(long, requires = "anchor")]
-        anchor_path: Option<String>,
-
-        /// Line range within the anchored object (e.g. "10-20").
-        #[arg(long)]
-        range: Option<String>,
-
-        /// Start OID for a commit-range anchor.
-        #[arg(long, requires = "anchor_end", conflicts_with = "anchor")]
-        anchor_start: Option<String>,
-
-        /// End OID for a commit-range anchor.
-        #[arg(long, requires = "anchor_start", conflicts_with = "anchor")]
-        anchor_end: Option<String>,
 
         /// Comment body (Markdown).
         body: Option<String>,
@@ -233,27 +176,13 @@ pub enum CommentCommand {
     },
 
     /// Resolve a comment thread.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object", "path"])))]
     Resolve {
-        /// Issue display ID or OID prefix.
+        /// Thread UUID.
+        thread_id: String,
+
+        /// OID of the comment that roots the thread.
         #[arg(long)]
-        issue: Option<String>,
-
-        /// Review display ID or OID prefix.
-        #[arg(long)]
-        review: Option<String>,
-
-        /// Git object OID.
-        #[arg(long)]
-        object: Option<String>,
-
-        /// File path (resolves to blob OID for the object chain).
-        #[arg(long, short = 'p')]
-        path: Option<PathBuf>,
-
-        /// OID of the comment that starts the thread.
-        #[arg(long = "thread")]
-        thread: String,
+        comment: String,
 
         /// Optional resolution message.
         message: Option<String>,
@@ -267,25 +196,39 @@ pub enum CommentCommand {
         interactive: bool,
     },
 
-    /// List comments on an issue, review, or object.
-    #[command(group(clap::ArgGroup::new("entity").args(["issue", "review", "object"])))]
-    List {
-        /// Issue display ID or OID prefix.
-        #[arg(long)]
-        issue: Option<String>,
+    /// Edit a comment in a thread.
+    Edit {
+        /// Thread UUID.
+        thread_id: String,
 
-        /// Review display ID or OID prefix.
+        /// OID of the comment to edit.
         #[arg(long)]
-        review: Option<String>,
+        comment: String,
 
-        /// Git object OID.
+        /// New body (Markdown).
         #[arg(long)]
-        object: Option<String>,
-
-        /// Filter comments by anchor path.
-        #[arg(long)]
-        path: Option<String>,
+        body: String,
     },
+
+    /// List all comment threads anchored to a git object.
+    List {
+        /// Anchor spec: raw OID, `HEAD:<path>`, `issue:<id>`, or `review:<id>`.
+        #[arg(long)]
+        on: String,
+    },
+
+    /// Show all comments in a thread.
+    Show {
+        /// Thread UUID.
+        thread_id: String,
+    },
+}
+
+/// Index subcommands.
+#[derive(Subcommand, Debug)]
+pub enum IndexCommand {
+    /// Rebuild the comments-by-object index from all thread refs.
+    Rebuild,
 }
 
 /// Review subcommands.

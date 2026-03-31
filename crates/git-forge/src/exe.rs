@@ -1306,8 +1306,10 @@ impl Executor {
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, cli: &crate::cli::Cli) -> Result<()> {
         use crate::cli::{
-            Command, CommentCommand, ConfigCommand, ContributorCommand, IssueCommand, ReviewCommand,
+            Command, CommentCommand, ConfigCommand, ContributorCommand, IndexCommand, IssueCommand,
+            ReviewCommand,
         };
+        use crate::comment::{edit_in_thread, list_thread_comments, rebuild_comments_index};
 
         match &cli.command {
             Command::Config { command } => match command {
@@ -1430,16 +1432,9 @@ impl Executor {
             },
 
             Command::Comment { command } => match command {
-                CommentCommand::Add {
-                    issue,
-                    review,
-                    object,
-                    path,
-                    anchor,
-                    anchor_path,
-                    range,
-                    anchor_start,
-                    anchor_end,
+                CommentCommand::Create {
+                    on,
+                    lines,
                     body,
                     file,
                     interactive,
@@ -1451,44 +1446,23 @@ impl Executor {
                     } else {
                         resolved.unwrap_or_default()
                     };
-                    let (ref_name, anchor) = if let Some(p) = path {
-                        let blob_oid = self.resolve_path(p, cli.allow_dirty)?;
-                        let anchor = Some(Anchor::Object {
-                            oid: blob_oid.clone(),
-                            path: Some(p.display().to_string()),
-                            range: range.clone(),
-                        });
-                        (object_comment_ref(&blob_oid), anchor)
-                    } else {
-                        let anchor = build_anchor(
-                            anchor.as_deref(),
-                            anchor_path.as_deref(),
-                            range.as_deref(),
-                            anchor_start.as_deref(),
-                            anchor_end.as_deref(),
+                    let oid = self.resolve_anchor_spec(on)?;
+                    let anchor = build_v2_anchor(&oid, lines.as_deref());
+                    let (thread_id, comment) = self.create_comment(&body, Some(&anchor), None)?;
+                    if cli.json {
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&comment).expect("serialize")
                         );
-                        let ref_name = self.resolve_comment_entity(
-                            issue.as_deref(),
-                            review.as_deref(),
-                            object.as_deref(),
-                        )?;
-                        (ref_name, anchor)
-                    };
-                    let comment = add_comment(&self.repo, &ref_name, &body, anchor.as_ref())?;
-                    print_comment(&comment, cli.json);
+                    } else {
+                        println!("thread: {thread_id}");
+                        print_comment(&comment, false);
+                    }
                 }
 
                 CommentCommand::Reply {
-                    issue,
-                    review,
-                    object,
-                    path,
+                    thread_id,
                     reply_to,
-                    anchor,
-                    anchor_path,
-                    range,
-                    anchor_start,
-                    anchor_end,
                     body,
                     file,
                     interactive,
@@ -1500,40 +1474,13 @@ impl Executor {
                     } else {
                         resolved.unwrap_or_default()
                     };
-                    let (ref_name, anchor) = if let Some(p) = path {
-                        let blob_oid = self.resolve_path(p, cli.allow_dirty)?;
-                        let anchor = Some(Anchor::Object {
-                            oid: blob_oid.clone(),
-                            path: Some(p.display().to_string()),
-                            range: range.clone(),
-                        });
-                        (object_comment_ref(&blob_oid), anchor)
-                    } else {
-                        let anchor = build_anchor(
-                            anchor.as_deref(),
-                            anchor_path.as_deref(),
-                            range.as_deref(),
-                            anchor_start.as_deref(),
-                            anchor_end.as_deref(),
-                        );
-                        let ref_name = self.resolve_comment_entity(
-                            issue.as_deref(),
-                            review.as_deref(),
-                            object.as_deref(),
-                        )?;
-                        (ref_name, anchor)
-                    };
-                    let comment =
-                        add_reply(&self.repo, &ref_name, &body, reply_to, anchor.as_ref())?;
+                    let comment = self.reply_comment(thread_id, &body, reply_to, None, None)?;
                     print_comment(&comment, cli.json);
                 }
 
                 CommentCommand::Resolve {
-                    issue,
-                    review,
-                    object,
-                    path,
-                    thread,
+                    thread_id,
+                    comment,
                     message,
                     file,
                     interactive,
@@ -1545,52 +1492,23 @@ impl Executor {
                     } else {
                         resolved
                     };
-                    let ref_name = if let Some(p) = path {
-                        let blob_oid = self.resolve_path(p, cli.allow_dirty)?;
-                        object_comment_ref(&blob_oid)
-                    } else {
-                        self.resolve_comment_entity(
-                            issue.as_deref(),
-                            review.as_deref(),
-                            object.as_deref(),
-                        )?
-                    };
-                    let comment =
-                        resolve_comment(&self.repo, &ref_name, thread, resolved.as_deref())?;
-                    print_comment(&comment, cli.json);
+                    let result =
+                        self.resolve_comment_thread(thread_id, comment, resolved.as_deref())?;
+                    print_comment(&result, cli.json);
                 }
 
-                CommentCommand::List {
-                    issue,
-                    review,
-                    object,
-                    path,
+                CommentCommand::Edit {
+                    thread_id,
+                    comment,
+                    body,
                 } => {
-                    let effective_review = review.as_deref().map(String::from).or_else(|| {
-                        if issue.is_none() && object.is_none() {
-                            self.active_review()
-                        } else {
-                            None
-                        }
-                    });
+                    let result = edit_in_thread(&self.repo, thread_id, comment, body, None, None)?;
+                    print_comment(&result, cli.json);
+                }
 
-                    let mut comments = if let Some(ref r) = effective_review {
-                        self.list_review_comments(r)?
-                    } else {
-                        let ref_name =
-                            self.resolve_comment_entity(issue.as_deref(), None, object.as_deref())?;
-                        list_comments(&self.repo, &ref_name)?
-                    };
-                    if let Some(filter_path) = path {
-                        comments.retain(|c| {
-                            c.anchor.as_ref().is_some_and(|a| match a {
-                                Anchor::Object { path, .. } => {
-                                    path.as_deref() == Some(filter_path.as_str())
-                                }
-                                Anchor::CommitRange { .. } => false,
-                            })
-                        });
-                    }
+                CommentCommand::List { on } => {
+                    let oid = self.resolve_anchor_spec(on)?;
+                    let comments = self.list_comments_on(&oid)?;
                     if cli.json {
                         println!(
                             "{}",
@@ -1599,6 +1517,25 @@ impl Executor {
                     } else {
                         print_comment_list(&comments);
                     }
+                }
+
+                CommentCommand::Show { thread_id } => {
+                    let comments = list_thread_comments(&self.repo, thread_id)?;
+                    if cli.json {
+                        println!(
+                            "{}",
+                            facet_json::to_string_pretty(&comments).expect("serialize")
+                        );
+                    } else {
+                        print_comment_list(&comments);
+                    }
+                }
+            },
+
+            Command::Index { command } => match command {
+                IndexCommand::Rebuild => {
+                    rebuild_comments_index(&self.repo)?;
+                    println!("Index rebuilt.");
                 }
             },
 
@@ -2350,26 +2287,22 @@ pub fn should_interact(missing_input: bool) -> bool {
         && std::env::var_os("FORGE_NO_INTERACTIVE").is_none()
 }
 
-fn build_anchor(
-    anchor: Option<&str>,
-    anchor_path: Option<&str>,
-    range: Option<&str>,
-    anchor_start: Option<&str>,
-    anchor_end: Option<&str>,
-) -> Option<Anchor> {
-    if let Some(oid) = anchor {
-        Some(Anchor::Object {
-            oid: oid.to_string(),
-            path: anchor_path.map(String::from),
-            range: range.map(String::from),
-        })
-    } else if let (Some(start), Some(end)) = (anchor_start, anchor_end) {
-        Some(Anchor::CommitRange {
-            start: start.to_string(),
-            end: end.to_string(),
-        })
+/// Build a v2 `Anchor` from a resolved OID and optional `"start[-end]"` lines string.
+fn build_v2_anchor(oid: &str, lines: Option<&str>) -> V2Anchor {
+    let (start_line, end_line) = if let Some(r) = lines {
+        if let Some((a, b)) = r.split_once('-') {
+            (a.parse().ok(), b.parse().ok())
+        } else {
+            let n: Option<u32> = r.parse().ok();
+            (n, n)
+        }
     } else {
-        None
+        (None, None)
+    };
+    V2Anchor {
+        oid: oid.to_string(),
+        start_line,
+        end_line,
     }
 }
 
