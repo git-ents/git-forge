@@ -1028,10 +1028,9 @@ impl Executor {
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, cli: &crate::cli::Cli) -> Result<()> {
         use crate::cli::{
-            Command, CommentCommand, ConfigCommand, ContributorCommand, IndexCommand, IssueCommand,
-            ReviewCommand,
+            Command, CommentCommand, ConfigCommand, ContributorCommand, IssueCommand, ReviewCommand,
         };
-        use crate::comment::{edit_in_thread, list_thread_comments, rebuild_comments_index};
+        use crate::comment::{edit_in_thread, find_thread_by_comment, list_thread_comments};
 
         match &cli.command {
             Command::Config { command } => match command {
@@ -1183,12 +1182,13 @@ impl Executor {
                 }
 
                 CommentCommand::Reply {
-                    thread_id,
                     reply_to,
                     body,
                     file,
                     interactive,
                 } => {
+                    let thread_id = find_thread_by_comment(&self.repo, reply_to)?
+                        .ok_or_else(|| Error::NotFound(reply_to.clone()))?;
                     let resolved = crate::input::resolve_body(body.clone(), file.clone())?;
                     let interactive = *interactive || should_interact(resolved.is_none());
                     let body = if interactive {
@@ -1196,17 +1196,18 @@ impl Executor {
                     } else {
                         resolved.unwrap_or_default()
                     };
-                    let comment = self.reply_comment(thread_id, &body, reply_to, None, None)?;
+                    let comment = self.reply_comment(&thread_id, &body, reply_to, None, None)?;
                     print_comment(&comment, cli.json);
                 }
 
                 CommentCommand::Resolve {
-                    thread_id,
                     comment,
                     message,
                     file,
                     interactive,
                 } => {
+                    let thread_id = find_thread_by_comment(&self.repo, comment)?
+                        .ok_or_else(|| Error::NotFound(comment.clone()))?;
                     let resolved = crate::input::resolve_body(message.clone(), file.clone())?;
                     let interactive = *interactive || should_interact(resolved.is_none());
                     let resolved = if interactive {
@@ -1215,16 +1216,14 @@ impl Executor {
                         resolved
                     };
                     let result =
-                        self.resolve_comment_thread(thread_id, comment, resolved.as_deref())?;
+                        self.resolve_comment_thread(&thread_id, comment, resolved.as_deref())?;
                     print_comment(&result, cli.json);
                 }
 
-                CommentCommand::Edit {
-                    thread_id,
-                    comment,
-                    body,
-                } => {
-                    let result = edit_in_thread(&self.repo, thread_id, comment, body, None, None)?;
+                CommentCommand::Edit { comment, body } => {
+                    let thread_id = find_thread_by_comment(&self.repo, comment)?
+                        .ok_or_else(|| Error::NotFound(comment.clone()))?;
+                    let result = edit_in_thread(&self.repo, &thread_id, comment, body, None, None)?;
                     print_comment(&result, cli.json);
                 }
 
@@ -1261,8 +1260,10 @@ impl Executor {
                     }
                 }
 
-                CommentCommand::Show { thread_id } => {
-                    let comments = list_thread_comments(&self.repo, thread_id)?;
+                CommentCommand::Show { comment } => {
+                    let thread_id = find_thread_by_comment(&self.repo, comment)?
+                        .ok_or_else(|| Error::NotFound(comment.clone()))?;
+                    let comments = list_thread_comments(&self.repo, &thread_id)?;
                     if cli.json {
                         println!(
                             "{}",
@@ -1271,13 +1272,6 @@ impl Executor {
                     } else {
                         print_comment_list(&comments);
                     }
-                }
-            },
-
-            Command::Index { command } => match command {
-                IndexCommand::Rebuild => {
-                    rebuild_comments_index(&self.repo)?;
-                    println!("Index rebuilt.");
                 }
             },
 

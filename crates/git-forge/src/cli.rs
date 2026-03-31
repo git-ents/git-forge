@@ -54,12 +54,6 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Manage the forge object index.
-    Index {
-        /// Index subcommand.
-        #[command(subcommand)]
-        command: IndexCommand,
-    },
 }
 
 /// Config subcommands.
@@ -167,9 +161,6 @@ pub enum CommentCommand {
 
     /// Reply to an existing comment thread.
     Reply {
-        /// Thread UUID.
-        thread_id: String,
-
         /// OID of the comment to reply to.
         #[arg(long = "to")]
         reply_to: String,
@@ -188,10 +179,7 @@ pub enum CommentCommand {
 
     /// Resolve a comment thread.
     Resolve {
-        /// Thread UUID.
-        thread_id: String,
-
-        /// OID of the comment that roots the thread.
+        /// OID of any comment in the thread.
         #[arg(long)]
         comment: String,
 
@@ -209,9 +197,6 @@ pub enum CommentCommand {
 
     /// Edit a comment in a thread.
     Edit {
-        /// Thread UUID.
-        thread_id: String,
-
         /// OID of the comment to edit.
         #[arg(long)]
         comment: String,
@@ -243,16 +228,9 @@ pub enum CommentCommand {
 
     /// Show all comments in a thread.
     Show {
-        /// Thread UUID.
-        thread_id: String,
+        /// OID of any comment in the thread.
+        comment: String,
     },
-}
-
-/// Index subcommands.
-#[derive(Subcommand, Debug)]
-pub enum IndexCommand {
-    /// Rebuild the comments-by-object index from all thread refs.
-    Rebuild,
 }
 
 /// Review subcommands.

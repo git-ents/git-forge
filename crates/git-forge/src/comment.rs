@@ -8,7 +8,7 @@ use git2::{ObjectType, Oid, Repository};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::refs::{COMMENTS_INDEX, COMMENTS_PREFIX};
+use crate::refs::{COMMENTS_BY_COMMENT_INDEX, COMMENTS_INDEX, COMMENTS_PREFIX};
 use crate::{Error, Result};
 
 /// The anchor target for a comment.
@@ -348,6 +348,8 @@ pub fn create_thread(
     let tree = build_comment_tree(repo, body, anchor, context_lines)?;
     let entry = repo.append(&ref_name, &message, tree, None)?;
     let comment = comment_from_chain_entry(repo, &entry)?;
+    let _ = index_add_comment_oid(repo, &comment.oid, &thread_id);
+    let _ = index_add_anchor(repo, anchor_oid_str, &thread_id);
     Ok((thread_id, comment))
 }
 
@@ -387,7 +389,9 @@ pub fn reply_to_thread(
     let tree = build_comment_tree(repo, body, anchor, context_lines)?;
     let parent = resolve_thread_oid(repo, &ref_name, reply_to_oid)?;
     let entry = repo.append(&ref_name, &message, tree, Some(parent))?;
-    comment_from_chain_entry(repo, &entry)
+    let comment = comment_from_chain_entry(repo, &entry)?;
+    let _ = index_add_comment_oid(repo, &comment.oid, thread_id);
+    Ok(comment)
 }
 
 /// Append a resolution to a thread.
@@ -420,7 +424,9 @@ pub fn resolve_thread(
     let tree = build_comment_tree(repo, body, inherited_anchor.as_ref(), None)?;
     let parent = resolve_thread_oid(repo, &ref_name, reply_to_oid)?;
     let entry = repo.append(&ref_name, &msg, tree, Some(parent))?;
-    comment_from_chain_entry(repo, &entry)
+    let comment = comment_from_chain_entry(repo, &entry)?;
+    let _ = index_add_comment_oid(repo, &comment.oid, thread_id);
+    Ok(comment)
 }
 
 /// Append an edit to a thread.
@@ -460,7 +466,9 @@ pub fn edit_in_thread(
     let message = build_message(new_body, &trailers);
     let tree = build_comment_tree(repo, new_body, anchor, context_lines)?;
     let entry = repo.append(&ref_name, &message, tree, Some(parent))?;
-    comment_from_chain_entry(repo, &entry)
+    let comment = comment_from_chain_entry(repo, &entry)?;
+    let _ = index_add_comment_oid(repo, &comment.oid, thread_id);
+    Ok(comment)
 }
 
 /// List all comments in a thread (first-parent walk, tip-first).
@@ -555,6 +563,122 @@ pub fn find_threads_by_object(repo: &Repository, oid: &str) -> Result<Vec<String
 // Index
 // ---------------------------------------------------------------------------
 
+/// Update or insert a single leaf in a fanout index tree and commit.
+///
+/// `make_content` receives the existing blob content (empty string if absent)
+/// and returns the new blob content to write.
+fn index_update_leaf(
+    repo: &Repository,
+    index_ref: &str,
+    oid_key: &str,
+    make_content: impl FnOnce(&str) -> String,
+    commit_msg: &str,
+) -> Result<()> {
+    if oid_key.len() < 3 {
+        return Ok(());
+    }
+    let (prefix, rest) = oid_key.split_at(2);
+    let sig = repo.signature()?;
+
+    let existing_root = repo
+        .find_reference(index_ref)
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok())
+        .and_then(|c| c.tree().ok());
+
+    // Read existing leaf content.
+    let existing_content = existing_root.as_ref().and_then(|root| {
+        let dir_entry = root.get_name(prefix)?;
+        if dir_entry.kind() != Some(ObjectType::Tree) {
+            return None;
+        }
+        let dir_tree = repo.find_tree(dir_entry.id()).ok()?;
+        let leaf_entry = dir_tree.get_name(rest)?;
+        if leaf_entry.kind() != Some(ObjectType::Blob) {
+            return None;
+        }
+        let blob = repo.find_blob(leaf_entry.id()).ok()?;
+        String::from_utf8(blob.content().to_vec()).ok()
+    });
+
+    let new_content = make_content(existing_content.as_deref().unwrap_or(""));
+    let blob_oid = repo.blob(new_content.as_bytes())?;
+
+    // Build updated prefix subtree.
+    let existing_dir = existing_root.as_ref().and_then(|root| {
+        let e = root.get_name(prefix)?;
+        if e.kind() != Some(ObjectType::Tree) {
+            return None;
+        }
+        repo.find_tree(e.id()).ok()
+    });
+    let mut dir_builder = if let Some(ref dir) = existing_dir {
+        repo.treebuilder(Some(dir))?
+    } else {
+        repo.treebuilder(None)?
+    };
+    dir_builder.insert(rest, blob_oid, 0o100_644)?;
+    let dir_oid = dir_builder.write()?;
+
+    // Build updated root tree.
+    let mut root_builder = if let Some(ref root) = existing_root {
+        repo.treebuilder(Some(root))?
+    } else {
+        repo.treebuilder(None)?
+    };
+    root_builder.insert(prefix, dir_oid, 0o040_000)?;
+    let root_oid = root_builder.write()?;
+    let root_tree = repo.find_tree(root_oid)?;
+
+    let parent = repo
+        .find_reference(index_ref)
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
+    repo.commit(
+        Some(index_ref),
+        &sig,
+        &sig,
+        commit_msg,
+        &root_tree,
+        &parents,
+    )?;
+    Ok(())
+}
+
+/// Add a comment OID → thread UUID mapping to the comments-by-comment index.
+fn index_add_comment_oid(repo: &Repository, comment_oid: &str, thread_id: &str) -> Result<()> {
+    let tid = thread_id.to_string();
+    index_update_leaf(
+        repo,
+        COMMENTS_BY_COMMENT_INDEX,
+        comment_oid,
+        |_| format!("{tid}\n"),
+        "forge: index comment",
+    )
+}
+
+/// Add an anchor OID → thread UUID mapping to the comments-by-object index.
+fn index_add_anchor(repo: &Repository, anchor_oid: &str, thread_id: &str) -> Result<()> {
+    if anchor_oid.is_empty() {
+        return Ok(());
+    }
+    let tid = thread_id.to_string();
+    index_update_leaf(
+        repo,
+        COMMENTS_INDEX,
+        anchor_oid,
+        |existing| {
+            if existing.lines().any(|l| l == tid) {
+                existing.to_string()
+            } else {
+                format!("{existing}{tid}\n")
+            }
+        },
+        "forge: index comment thread",
+    )
+}
+
 /// Rebuild the `refs/forge/index/comments-by-object` index from scratch.
 ///
 /// # Errors
@@ -564,6 +688,8 @@ pub fn rebuild_comments_index(repo: &Repository) -> Result<()> {
 
     // Collect object_oid → set of thread_ids mappings.
     let mut index: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // Collect comment_oid → thread_id mappings.
+    let mut comment_index: BTreeMap<String, String> = BTreeMap::new();
 
     let thread_ids = list_all_thread_ids(repo)?;
     for tid in &thread_ids {
@@ -577,6 +703,7 @@ pub fn rebuild_comments_index(repo: &Repository) -> Result<()> {
                         .or_default()
                         .insert(tid.clone());
                 }
+                comment_index.insert(entry.commit.to_string(), tid.clone());
             }
         }
     }
@@ -623,30 +750,53 @@ pub fn rebuild_comments_index(repo: &Repository) -> Result<()> {
         .and_then(|r| r.peel_to_commit().ok());
     let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
 
-    // Sign if a signing key is configured.
-    let cfg = repo.config()?;
-    let signing_key = cfg.get_string("user.signingkey").ok();
-    if let Some(_key) = signing_key {
-        // GPG signing via git2 is not straightforward; commit unsigned for now
-        // and let the server or post-receive hook sign if needed.
-        repo.commit(
-            Some(COMMENTS_INDEX),
-            &sig,
-            &sig,
-            "forge: rebuild comments-by-object index",
-            &root_tree,
-            &parents,
-        )?;
-    } else {
-        repo.commit(
-            Some(COMMENTS_INDEX),
-            &sig,
-            &sig,
-            "forge: rebuild comments-by-object index",
-            &root_tree,
-            &parents,
-        )?;
+    repo.commit(
+        Some(COMMENTS_INDEX),
+        &sig,
+        &sig,
+        "forge: rebuild comments-by-object index",
+        &root_tree,
+        &parents,
+    )?;
+
+    // Build comments-by-comment index: comment OID → thread UUID.
+    let mut by_comment_prefix: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for (comment_oid, tid) in &comment_index {
+        if comment_oid.len() < 3 {
+            continue;
+        }
+        let (prefix, rest) = comment_oid.split_at(2);
+        by_comment_prefix
+            .entry(prefix.to_string())
+            .or_default()
+            .insert(rest.to_string(), tid.clone());
     }
+
+    let mut by_comment_root = repo.treebuilder(None)?;
+    for (prefix, entries) in &by_comment_prefix {
+        let mut dir_builder = repo.treebuilder(None)?;
+        for (rest, tid) in entries {
+            let blob_oid = repo.blob(format!("{tid}\n").as_bytes())?;
+            dir_builder.insert(rest, blob_oid, 0o100_644)?;
+        }
+        let dir_oid = dir_builder.write()?;
+        by_comment_root.insert(prefix, dir_oid, 0o040_000)?;
+    }
+    let by_comment_tree_oid = by_comment_root.write()?;
+    let by_comment_tree = repo.find_tree(by_comment_tree_oid)?;
+    let by_comment_parent = repo
+        .find_reference(COMMENTS_BY_COMMENT_INDEX)
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok());
+    let by_comment_parents: Vec<&git2::Commit<'_>> = by_comment_parent.iter().collect();
+    repo.commit(
+        Some(COMMENTS_BY_COMMENT_INDEX),
+        &sig,
+        &sig,
+        "forge: rebuild comments-by-comment index",
+        &by_comment_tree,
+        &by_comment_parents,
+    )?;
 
     Ok(())
 }
@@ -695,4 +845,72 @@ pub fn index_lookup(repo: &Repository, oid: &str) -> Result<Option<Vec<String>>>
         .map(str::to_string)
         .collect();
     Ok(Some(ids))
+}
+
+/// Look up the thread UUID for a comment commit OID using the index.
+///
+/// Returns `None` if the index ref doesn't exist or the OID isn't found.
+///
+/// # Errors
+/// Returns an error if a git operation fails.
+pub fn comment_index_lookup(repo: &Repository, comment_oid: &str) -> Result<Option<String>> {
+    use git2::ErrorCode;
+
+    if comment_oid.len() < 3 {
+        return Ok(None);
+    }
+
+    let reference = match repo.find_reference(COMMENTS_BY_COMMENT_INDEX) {
+        Ok(r) => r,
+        Err(e) if e.code() == ErrorCode::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    let tree = reference.peel_to_commit()?.tree()?;
+    let (prefix, rest) = comment_oid.split_at(2);
+
+    let Some(dir_entry) = tree.get_name(prefix) else {
+        return Ok(None);
+    };
+    if dir_entry.kind() != Some(ObjectType::Tree) {
+        return Ok(None);
+    }
+    let dir_tree = repo.find_tree(dir_entry.id())?;
+
+    let Some(leaf_entry) = dir_tree.get_name(rest) else {
+        return Ok(None);
+    };
+    if leaf_entry.kind() != Some(ObjectType::Blob) {
+        return Ok(None);
+    }
+    let blob = repo.find_blob(leaf_entry.id())?;
+    let content = String::from_utf8_lossy(blob.content());
+    Ok(content.lines().next().map(str::to_string))
+}
+
+/// Find the thread UUID that contains the given comment commit OID.
+///
+/// Tries the index first; falls back to scanning all thread chains.
+///
+/// # Errors
+/// Returns an error if a git operation fails.
+pub fn find_thread_by_comment(repo: &Repository, comment_oid: &str) -> Result<Option<String>> {
+    if let Some(tid) = comment_index_lookup(repo, comment_oid)? {
+        return Ok(Some(tid));
+    }
+
+    // Fallback: linear scan.
+    let thread_ids = list_all_thread_ids(repo)?;
+    for tid in &thread_ids {
+        let ref_name = comment_thread_ref(tid);
+        if let Ok(entries) = repo.walk(&ref_name, None) {
+            for entry in &entries {
+                let oid_str = entry.commit.to_string();
+                if oid_str.starts_with(comment_oid) {
+                    return Ok(Some(tid.clone()));
+                }
+            }
+        }
+    }
+    Ok(None)
 }

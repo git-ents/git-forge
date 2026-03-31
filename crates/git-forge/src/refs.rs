@@ -14,6 +14,8 @@ pub const REVIEW_PREFIX: &str = "refs/forge/review/";
 pub const COMMENTS_PREFIX: &str = "refs/forge/comments/";
 /// Index ref mapping object OIDs to comment thread UUIDs.
 pub const COMMENTS_INDEX: &str = "refs/forge/index/comments-by-object";
+/// Index ref mapping comment commit OIDs to their thread UUID.
+pub const COMMENTS_BY_COMMENT_INDEX: &str = "refs/forge/index/comments-by-comment";
 /// Index ref mapping display IDs ↔ OIDs for issues.
 pub const ISSUE_INDEX: &str = "refs/forge/meta/index/issues";
 /// Index ref mapping display IDs ↔ OIDs for reviews.
