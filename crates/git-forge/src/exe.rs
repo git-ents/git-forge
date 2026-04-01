@@ -132,12 +132,11 @@ impl Executor {
     pub fn create_review(
         &self,
         title: &str,
-        description: &str,
+        body: &str,
         target: &ReviewTarget,
         source_ref: Option<&str>,
     ) -> Result<Review> {
-        self.store()
-            .create_review(title, description, target, source_ref)
+        self.store().create_review(title, body, target, source_ref)
     }
 
     /// Fetch a review by display ID or OID prefix.
@@ -167,27 +166,26 @@ impl Executor {
         &self,
         reference: &str,
         title: Option<&str>,
-        description: Option<&str>,
+        body: Option<&str>,
         state: Option<&ReviewState>,
     ) -> Result<Review> {
-        self.store()
-            .update_review(reference, title, description, state)
+        self.store().update_review(reference, title, body, state)
     }
 
     /// Approve a review as the current git user.
     ///
     /// # Errors
     /// Returns an error if the review does not exist or a git operation fails.
-    pub fn approve_review(&self, reference: &str, message: Option<&str>) -> Result<Review> {
-        self.store().approve_review(reference, message)
+    pub fn approve_review(&self, reference: &str, contributor_uuid: &str) -> Result<Review> {
+        self.store().approve_review(reference, contributor_uuid)
     }
 
     /// Revoke the current user's approval on a review.
     ///
     /// # Errors
     /// Returns an error if the review does not exist or a git operation fails.
-    pub fn revoke_approval(&self, reference: &str) -> Result<Review> {
-        self.store().revoke_approval(reference)
+    pub fn revoke_approval(&self, reference: &str, contributor_uuid: &str) -> Result<Review> {
+        self.store().revoke_approval(reference, contributor_uuid)
     }
 
     /// Retarget a review to a new head, migrating carry-forward comments.
@@ -764,6 +762,26 @@ fn default_sigils(provider: &str) -> BTreeMap<String, String> {
 
 /// Rebuild a tree chain from the leaf upward, replacing the entry at the
 /// given path segments with `new_oid`.
+/// Resolve the current git user's email to their contributor UUID.
+///
+/// # Errors
+/// Returns an error if `user.email` is not configured or no matching
+/// contributor is found.
+fn current_contributor_uuid(repo: &git2::Repository, store: &crate::Store<'_>) -> Result<String> {
+    let cfg = repo.config()?;
+    let email = cfg
+        .get_string("user.email")
+        .map_err(|_| Error::Config("user.email not set".into()))?;
+    let map = store.email_to_contributor_map()?;
+    map.get(&email)
+        .map(|id| id.as_str().to_string())
+        .ok_or_else(|| {
+            Error::Config(format!(
+                "no contributor found for email {email}; run `forge contributor bootstrap` first"
+            ))
+        })
+}
+
 fn rebuild_tree_upward(
     repo: &Repository,
     root: &git2::Tree<'_>,
@@ -1168,9 +1186,9 @@ impl Executor {
                     let resolved_body = crate::input::resolve_body(body.clone(), file.clone())?;
                     let interactive =
                         *interactive || should_interact(title.is_none() && resolved_body.is_none());
-                    let (title, description) = if interactive {
+                    let (title, body) = if interactive {
                         let input = crate::interactive::prompt_new_review(title.as_deref())?;
-                        (input.title, input.description)
+                        (input.title, input.body)
                     } else {
                         (
                             title.clone().unwrap_or_default(),
@@ -1178,7 +1196,7 @@ impl Executor {
                         )
                     };
                     let title = title.as_str();
-                    let description = description.as_str();
+                    let body = body.as_str();
 
                     // Resolve target to a git object OID.
                     let head_oid = match (head, path) {
@@ -1201,8 +1219,7 @@ impl Executor {
                         head: head_oid,
                         base: base_oid,
                     };
-                    let review =
-                        self.create_review(title, description, &target, source_ref.as_deref())?;
+                    let review = self.create_review(title, body, &target, source_ref.as_deref())?;
                     print_review(&review, cli.json);
                 }
 
@@ -1263,7 +1280,7 @@ impl Executor {
                         let input = crate::interactive::prompt_edit_review(&current)?;
                         (
                             input.title.or_else(|| title.clone()),
-                            input.description.or_else(|| resolved_body.clone()),
+                            input.body.or_else(|| resolved_body.clone()),
                             input.state.or_else(|| state.clone()),
                         )
                     } else {
@@ -1284,13 +1301,18 @@ impl Executor {
                     print_review(&review, cli.json);
                 }
 
-                ReviewCommand::Approve { reference, message } => {
-                    let review = self.approve_review(reference, message.as_deref())?;
+                ReviewCommand::Approve {
+                    reference,
+                    message: _,
+                } => {
+                    let uuid = current_contributor_uuid(&self.repo, &self.store())?;
+                    let review = self.approve_review(reference, &uuid)?;
                     print_review(&review, cli.json);
                 }
 
                 ReviewCommand::Unapprove { reference } => {
-                    let review = self.revoke_approval(reference)?;
+                    let uuid = current_contributor_uuid(&self.repo, &self.store())?;
+                    let review = self.revoke_approval(reference, &uuid)?;
                     print_review(&review, cli.json);
                 }
 
@@ -1768,12 +1790,17 @@ fn print_review(review: &Review, json: bool) {
         println!("ref:         {sref}");
     }
     if !review.approvals.is_empty() {
-        let names: Vec<&str> = review.approvals.iter().map(|(n, _)| n.as_str()).collect();
-        println!("approved-by: {}", names.join(", "));
+        for entry in &review.approvals {
+            println!(
+                "approved[{}]: {}",
+                &entry.oid[..entry.oid.len().min(12)],
+                entry.approvers.join(", ")
+            );
+        }
     }
-    if !review.description.is_empty() {
+    if !review.body.is_empty() {
         println!();
-        println!("{}", review.description);
+        println!("{}", review.body);
     }
 }
 
