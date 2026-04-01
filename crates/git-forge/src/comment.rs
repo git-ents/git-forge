@@ -317,11 +317,24 @@ fn resolve_thread_oid(repo: &Repository, ref_name: &str, prefix: &str) -> Result
 ///
 /// Returns `None` if the ref doesn't exist or has no `Anchor` trailer.
 fn tip_anchor_oid(repo: &Repository, ref_name: &str) -> Option<String> {
+    tip_anchor(repo, ref_name).map(|a| a.oid)
+}
+
+fn tip_anchor(repo: &Repository, ref_name: &str) -> Option<Anchor> {
     let reference = repo.find_reference(ref_name).ok()?;
     let commit = reference.peel_to_commit().ok()?;
     let message = commit.message()?;
     let (_, trailers) = parse_trailers(message);
-    trailers.get("Anchor").cloned()
+    let oid = trailers.get("Anchor").cloned()?;
+    let range = trailers.get("Anchor-Range").and_then(|r| {
+        let (s, e) = r.split_once('-')?;
+        Some((s.parse::<u32>().ok()?, e.parse::<u32>().ok()?))
+    });
+    Some(Anchor {
+        oid,
+        start_line: range.map(|(s, _)| s),
+        end_line: range.map(|(_, e)| e),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -445,26 +458,30 @@ pub fn edit_in_thread(
     let parent = resolve_thread_oid(repo, &ref_name, original_oid)?;
     let parent_str = parent.to_string();
 
-    // Use provided anchor or inherit root's anchor.
-    let effective_anchor_oid: String;
-    let effective_range: Option<(u32, u32)>;
+    // Use provided anchor or inherit root's anchor (including line range).
+    let inherited_anchor;
+    let effective_anchor: &Anchor;
     if let Some(a) = anchor {
-        effective_anchor_oid = a.oid.clone();
-        effective_range = a.start_line.zip(a.end_line);
+        effective_anchor = a;
     } else {
-        effective_anchor_oid = tip_anchor_oid(repo, &ref_name).unwrap_or_default();
-        effective_range = None;
+        inherited_anchor = tip_anchor(repo, &ref_name).unwrap_or_else(|| Anchor {
+            oid: String::new(),
+            start_line: None,
+            end_line: None,
+        });
+        effective_anchor = &inherited_anchor;
     }
+    let effective_range = effective_anchor.start_line.zip(effective_anchor.end_line);
 
     let trailers = format_trailers(
-        &effective_anchor_oid,
+        &effective_anchor.oid,
         effective_range,
         thread_id,
         false,
         Some(&parent_str),
     );
     let message = build_message(new_body, &trailers);
-    let tree = build_comment_tree(repo, new_body, anchor, context_lines)?;
+    let tree = build_comment_tree(repo, new_body, Some(effective_anchor), context_lines)?;
     let entry = repo.append(&ref_name, &message, tree, Some(parent))?;
     let comment = comment_from_chain_entry(repo, &entry)?;
     let _ = index_add_comment_oid(repo, &comment.oid, thread_id);
@@ -478,10 +495,12 @@ pub fn edit_in_thread(
 pub fn list_thread_comments(repo: &Repository, thread_id: &str) -> Result<Vec<Comment>> {
     let ref_name = comment_thread_ref(thread_id);
     let entries = repo.walk(&ref_name, None)?;
-    entries
+    let mut comments: Vec<Comment> = entries
         .iter()
         .map(|e| comment_from_chain_entry(repo, e))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    comments.reverse();
+    Ok(comments)
 }
 
 /// Return `true` if any commit in the thread carries `Resolved: true`.
