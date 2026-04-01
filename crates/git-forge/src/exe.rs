@@ -925,9 +925,31 @@ impl Executor {
                     }
                 }
 
-                ContributorCommand::Add { handle, roles } => {
+                ContributorCommand::Add {
+                    handle,
+                    names,
+                    emails,
+                    roles,
+                } => {
+                    let sig = self.repo.signature()?;
+                    let default_name;
+                    let names: Vec<&str> = if names.is_empty() {
+                        default_name = sig.name().unwrap_or("unknown").to_string();
+                        vec![default_name.as_str()]
+                    } else {
+                        names.iter().map(String::as_str).collect()
+                    };
+                    let default_email;
+                    let emails: Vec<&str> = if emails.is_empty() {
+                        default_email = sig.email().unwrap_or("unknown").to_string();
+                        vec![default_email.as_str()]
+                    } else {
+                        emails.iter().map(String::as_str).collect()
+                    };
                     let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
-                    let c = self.store().create_contributor(handle, &roles)?;
+                    let c = self
+                        .store()
+                        .create_contributor(handle, &names, &emails, &roles)?;
                     if cli.json {
                         println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
                     } else {
@@ -966,6 +988,12 @@ impl Executor {
                     } else {
                         println!("id:     {}", c.id);
                         println!("handle: {}", c.handle);
+                        if !c.names.is_empty() {
+                            println!("names:  {}", c.names.join(", "));
+                        }
+                        if !c.emails.is_empty() {
+                            println!("emails: {}", c.emails.join(", "));
+                        }
                         if !c.roles.is_empty() {
                             println!("roles:  {}", c.roles.join(", "));
                         }

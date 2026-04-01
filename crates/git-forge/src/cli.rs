@@ -107,6 +107,14 @@ pub enum ContributorCommand {
         /// Handle (unique short name, no spaces or slashes).
         handle: String,
 
+        /// Display names (defaults to git user.name).
+        #[arg(long = "name", short = 'n')]
+        names: Vec<String>,
+
+        /// Email addresses (defaults to git user.email).
+        #[arg(long = "email", short = 'e')]
+        emails: Vec<String>,
+
         /// Roles to grant (e.g. `admin`, `maintainer`).
         #[arg(long = "role", short = 'r')]
         roles: Vec<String>,

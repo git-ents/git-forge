@@ -4,13 +4,17 @@
 //!
 //! ```text
 //! ├── handle          # blob: mutable display name, must be unique
+//! ├── names/
+//! │   └── <display name>  # empty blob — presence means name is active
+//! ├── emails/
+//! │   └── <address>       # empty blob — presence means address is active
 //! ├── keys/
-//! │   └── <fingerprint>  # blob: public key material
+//! │   └── <fingerprint>   # blob: public key material
 //! └── roles/
-//!     └── <role>     # empty blob — presence means role is granted
+//!     └── <role>          # empty blob — presence means role is granted
 //! ```
 //!
-//! Authorship and timestamps live in the commit metadata.
+//! Timestamps live in the commit metadata.
 
 use std::collections::HashMap;
 
@@ -103,6 +107,10 @@ pub struct Contributor {
     pub id: ContributorId,
     /// Mutable display handle.
     pub handle: Handle,
+    /// Active display names (e.g. `"Alice Smith"`, `"A. Smith"`).
+    pub names: Vec<String>,
+    /// Active email addresses for identity matching.
+    pub emails: Vec<String>,
     /// Public key fingerprints present in `keys/`.
     pub keys: Vec<String>,
     /// Roles present in `roles/` (e.g. `"admin"`, `"maintainer"`).
@@ -133,12 +141,16 @@ fn read_contributor(repo: &Repository, id: &ContributorId) -> Result<Option<Cont
 
     let handle = Handle::new(&handle_blob)?;
 
+    let names = read_subtree_keys(repo, &tree, "names");
+    let emails = read_subtree_keys(repo, &tree, "emails");
     let keys = read_subtree_keys(repo, &tree, "keys");
     let roles = read_subtree_keys(repo, &tree, "roles");
 
     Ok(Some(Contributor {
         id: id.clone(),
         handle,
+        names,
+        emails,
         keys,
         roles,
     }))
@@ -161,38 +173,59 @@ fn read_subtree_keys(repo: &Repository, tree: &git2::Tree<'_>, subtree_name: &st
         .collect()
 }
 
+/// Fields for creating a new contributor.
+struct NewContributor<'a> {
+    handle: &'a Handle,
+    names: &'a [&'a str],
+    emails: &'a [&'a str],
+    keys: &'a [(&'a str, &'a [u8])],
+    roles: &'a [&'a str],
+}
+
 /// Write a new contributor tree to the repo as the initial commit on its ref.
 fn write_contributor(
     repo: &Repository,
     id: &ContributorId,
-    handle: &Handle,
-    keys: &[(&str, &[u8])],
-    roles: &[&str],
+    fields: &NewContributor<'_>,
     message: &str,
 ) -> Result<()> {
+    let empty = repo.blob(b"")?;
     let mut builder = repo.treebuilder(None)?;
 
-    let handle_oid = repo.blob(handle.as_str().as_bytes())?;
+    let handle_oid = repo.blob(fields.handle.as_str().as_bytes())?;
     builder.insert("handle", handle_oid, 0o100_644)?;
 
-    if !keys.is_empty() {
+    if !fields.names.is_empty() {
+        let mut nb = repo.treebuilder(None)?;
+        for name in fields.names {
+            nb.insert(name, empty, 0o100_644)?;
+        }
+        builder.insert("names", nb.write()?, 0o040_000)?;
+    }
+
+    if !fields.emails.is_empty() {
+        let mut eb = repo.treebuilder(None)?;
+        for email in fields.emails {
+            eb.insert(email, empty, 0o100_644)?;
+        }
+        builder.insert("emails", eb.write()?, 0o040_000)?;
+    }
+
+    if !fields.keys.is_empty() {
         let mut kb = repo.treebuilder(None)?;
-        for (fp, material) in keys {
+        for (fp, material) in fields.keys {
             let blob_oid = repo.blob(material)?;
             kb.insert(fp, blob_oid, 0o100_644)?;
         }
-        let keys_oid = kb.write()?;
-        builder.insert("keys", keys_oid, 0o040_000)?;
+        builder.insert("keys", kb.write()?, 0o040_000)?;
     }
 
-    if !roles.is_empty() {
-        let empty = repo.blob(b"")?;
+    if !fields.roles.is_empty() {
         let mut rb = repo.treebuilder(None)?;
-        for role in roles {
+        for role in fields.roles {
             rb.insert(role, empty, 0o100_644)?;
         }
-        let roles_oid = rb.write()?;
-        builder.insert("roles", roles_oid, 0o040_000)?;
+        builder.insert("roles", rb.write()?, 0o040_000)?;
     }
 
     let tree_oid = builder.write()?;
@@ -213,16 +246,35 @@ impl Store<'_> {
     /// # Errors
     /// Returns an error if the handle is invalid, already taken, or a git
     /// operation fails.
-    pub fn create_contributor(&self, handle: &str, roles: &[&str]) -> Result<Contributor> {
+    pub fn create_contributor(
+        &self,
+        handle: &str,
+        names: &[&str],
+        emails: &[&str],
+        roles: &[&str],
+    ) -> Result<Contributor> {
         let handle = Handle::new(handle)?;
         if self.find_contributor_by_handle(&handle)?.is_some() {
             return Err(Error::Config(format!("handle already taken: {handle}")));
         }
         let id = ContributorId::new();
-        write_contributor(self.repo, &id, &handle, &[], roles, "create contributor")?;
+        write_contributor(
+            self.repo,
+            &id,
+            &NewContributor {
+                handle: &handle,
+                names,
+                emails,
+                keys: &[],
+                roles,
+            },
+            "create contributor",
+        )?;
         Ok(Contributor {
             id,
             handle,
+            names: names.iter().map(ToString::to_string).collect(),
+            emails: emails.iter().map(ToString::to_string).collect(),
             keys: Vec::new(),
             roles: roles.iter().map(ToString::to_string).collect(),
         })
@@ -279,22 +331,15 @@ impl Store<'_> {
     }
 
     /// Build a map from email address → contributor UUID by scanning all
-    /// contributors' commit author emails.
-    ///
-    /// This walks every contributor ref and reads the commit author's email.
+    /// contributors' `emails/` subtrees.
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
     pub fn email_to_contributor_map(&self) -> Result<HashMap<String, ContributorId>> {
         let mut map = HashMap::new();
-        let ids = self.list_contributor_ids();
-        for id in ids {
-            let ref_name = contributor_ref(&id);
-            if let Ok(reference) = self.repo.find_reference(&ref_name)
-                && let Ok(commit) = reference.peel_to_commit()
-                && let Some(email) = commit.author().email()
-            {
-                map.insert(email.to_string(), id);
+        for c in self.list_contributors()? {
+            for email in &c.emails {
+                map.insert(email.clone(), c.id.clone());
             }
         }
         Ok(map)
@@ -376,6 +421,8 @@ impl Store<'_> {
         Ok(Contributor {
             id: contributor.id,
             handle: new,
+            names: contributor.names,
+            emails: contributor.emails,
             keys: contributor.keys,
             roles: contributor.roles,
         })
@@ -419,6 +466,8 @@ impl Store<'_> {
         Ok(Contributor {
             id: contributor.id,
             handle: h,
+            names: contributor.names,
+            emails: contributor.emails,
             keys: contributor.keys,
             roles,
         })
@@ -442,6 +491,9 @@ impl Store<'_> {
         let name = cfg
             .get_string("user.name")
             .map_err(|_| Error::Config("user.name not set".into()))?;
+        let email = cfg
+            .get_string("user.email")
+            .map_err(|_| Error::Config("user.email not set".into()))?;
         let handle = name
             .split_whitespace()
             .next()
@@ -453,6 +505,6 @@ impl Store<'_> {
         } else {
             handle
         };
-        self.create_contributor(&handle, &["admin"])
+        self.create_contributor(&handle, &[name.as_str()], &[email.as_str()], &["admin"])
     }
 }
