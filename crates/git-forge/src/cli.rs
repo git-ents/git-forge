@@ -30,6 +30,12 @@ pub struct Cli {
 /// Top-level subcommands.
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Manage contributors.
+    Contributor {
+        /// Contributor subcommand.
+        #[command(subcommand)]
+        command: ContributorCommand,
+    },
     /// Manage issues.
     Issue {
         /// Issue subcommand.
@@ -89,37 +95,35 @@ pub enum ConfigCommand {
         /// Repository name.
         repo: String,
     },
-    /// Manage contributors.
-    Contributor {
-        /// Contributor subcommand.
-        #[command(subcommand)]
-        command: ContributorCommand,
-    },
 }
 
 /// Contributor subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ContributorCommand {
-    /// Register a contributor.
+    /// Bootstrap the first contributor from the current git identity (admin role).
+    Bootstrap,
+    /// Add a new contributor.
     Add {
-        /// Contributor ID (defaults to git user name).
-        #[arg(long)]
-        id: Option<String>,
+        /// Handle (unique short name, no spaces or slashes).
+        handle: String,
 
-        /// Email addresses (defaults to git user email).
-        #[arg(long = "email", short = 'e')]
-        emails: Vec<String>,
-
-        /// Display names (defaults to git user name).
-        #[arg(long = "name", short = 'n')]
-        names: Vec<String>,
+        /// Roles to grant (e.g. `admin`, `maintainer`).
+        #[arg(long = "role", short = 'r')]
+        roles: Vec<String>,
     },
     /// List all contributors.
     List,
-    /// Remove a contributor.
-    Remove {
-        /// Contributor ID.
-        id: String,
+    /// Show a contributor by handle or UUID.
+    Show {
+        /// Handle or UUID of the contributor.
+        reference: String,
+    },
+    /// Rename a contributor's handle.
+    Rename {
+        /// Current handle.
+        old: String,
+        /// New handle.
+        new: String,
     },
 }
 
