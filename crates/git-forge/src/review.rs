@@ -23,8 +23,8 @@
 //! Authorship and timestamps live in the commit metadata.
 
 use facet::Facet;
-use git_ledger::{IdStrategy, Ledger, LedgerEntry, Mutation};
-use git2::{FileMode, ObjectType, Repository};
+use git_ledger::{FileMode, IdStrategy, Ledger, LedgerEntry, Mutation};
+use git2::{ObjectType, Repository};
 use serde::Serialize;
 
 use crate::index::{display_id_for_oid, index_upsert, read_index, resolve_oid};
@@ -221,103 +221,54 @@ fn read_objects_subtree(repo: &Repository, ref_name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Enumerate the objects that `target` implies for the `objects/` manifest.
+/// Enumerate the `Mutation::Pin` entries for a review's `objects/` subtree.
 ///
-/// For a commit range (`base..head`), returns every commit reachable from
-/// `head` that is not reachable from `base`.  For a single object, returns
-/// just the head OID.  Silently omits objects not present locally.
-fn enumerate_objects(repo: &Repository, target: &ReviewTarget) -> Vec<String> {
+/// For a commit range (`base..head`), yields every commit reachable from
+/// `head` that is not reachable from `base`.  For a single object, yields
+/// just that object.  Silently omits objects not present locally.
+fn enumerate_pins(repo: &Repository, target: &ReviewTarget) -> Vec<(String, git2::Oid, FileMode)> {
     let Some(head_oid) = git2::Oid::from_str(&target.head).ok() else {
         return Vec::new();
     };
 
-    match &target.base {
-        Some(base_str) => {
-            // Commit range: enumerate commits in base..head.
-            let Some(base_oid) = git2::Oid::from_str(base_str).ok() else {
-                return vec![target.head.clone()];
-            };
-            let Ok(mut walk) = repo.revwalk() else {
-                return vec![target.head.clone()];
-            };
-            if walk.push(head_oid).is_err() || walk.hide(base_oid).is_err() {
-                return vec![target.head.clone()];
-            }
-            walk.filter_map(|r| r.ok().map(|id| id.to_string()))
-                .collect()
+    if let Some(base_str) = &target.base {
+        let Some(base_oid) = git2::Oid::from_str(base_str).ok() else {
+            return vec![(target.head.clone(), head_oid, FileMode::Commit)];
+        };
+        let Ok(mut walk) = repo.revwalk() else {
+            return vec![(target.head.clone(), head_oid, FileMode::Commit)];
+        };
+        if walk.push(head_oid).is_err() || walk.hide(base_oid).is_err() {
+            return vec![(target.head.clone(), head_oid, FileMode::Commit)];
         }
-        None => {
-            if repo.find_object(head_oid, None).is_ok() {
-                vec![target.head.clone()]
-            } else {
-                Vec::new()
-            }
-        }
+        walk.flatten()
+            .map(|oid| {
+                let mode = object_mode(repo, oid);
+                (oid.to_string(), oid, mode)
+            })
+            .collect()
+    } else {
+        let Ok(obj) = repo.find_object(head_oid, None) else {
+            return Vec::new();
+        };
+        vec![(
+            target.head.clone(),
+            head_oid,
+            object_mode_from_type(obj.kind()),
+        )]
     }
 }
 
-/// Map a git object type to the tree entry file mode for the `objects/` tree.
-fn object_file_mode(kind: Option<ObjectType>) -> FileMode {
+fn object_mode(repo: &Repository, oid: git2::Oid) -> FileMode {
+    object_mode_from_type(repo.find_object(oid, None).ok().and_then(|o| o.kind()))
+}
+
+fn object_mode_from_type(kind: Option<ObjectType>) -> FileMode {
     match kind {
         Some(ObjectType::Tree) => FileMode::Tree,
         Some(ObjectType::Commit) => FileMode::Commit,
         _ => FileMode::Blob,
     }
-}
-
-/// Rewrite the `objects/` subtree so each entry's OID points to the actual
-/// git object rather than the placeholder blob created by `Ledger::create`.
-fn fixup_pin_entries(repo: &Repository, review_oid: &str, objects: &[String]) -> Result<()> {
-    if objects.is_empty() {
-        return Ok(());
-    }
-
-    let ref_name = format!("{REVIEW_PREFIX}{review_oid}");
-    let reference = repo.find_reference(&ref_name)?;
-    let commit = reference.peel_to_commit()?;
-    let root_tree = commit.tree()?;
-
-    let existing_objects = root_tree.get_name("objects").and_then(|e| {
-        if e.kind() == Some(ObjectType::Tree) {
-            repo.find_tree(e.id()).ok()
-        } else {
-            None
-        }
-    });
-    let mut obj_builder = repo.treebuilder(existing_objects.as_ref())?;
-
-    for oid_str in objects {
-        let Ok(oid) = git2::Oid::from_str(oid_str) else {
-            continue;
-        };
-        let Ok(obj) = repo.find_object(oid, None) else {
-            continue;
-        };
-        obj_builder.insert(oid_str, oid, i32::from(object_file_mode(obj.kind())))?;
-    }
-
-    let obj_tree_oid = obj_builder.write()?;
-    let mut root_builder = repo.treebuilder(Some(&root_tree))?;
-    root_builder.insert("objects", obj_tree_oid, 0o040_000)?;
-    let new_tree_oid = root_builder.write()?;
-    let new_tree = repo.find_tree(new_tree_oid)?;
-
-    let sig = commit.author();
-    let parents: Vec<git2::Commit<'_>> = commit
-        .parent_ids()
-        .filter_map(|id| repo.find_commit(id).ok())
-        .collect();
-    let parent_refs: Vec<&git2::Commit<'_>> = parents.iter().collect();
-    let new_commit = repo.commit(
-        None,
-        &sig,
-        &sig,
-        commit.message().unwrap_or(""),
-        &new_tree,
-        &parent_refs,
-    )?;
-    repo.reference(&ref_name, new_commit, true, "fixup pin entries")?;
-    Ok(())
 }
 
 // ── Store impl ────────────────────────────────────────────────────────────────
@@ -334,37 +285,36 @@ impl Store<'_> {
         target: &ReviewTarget,
         source_ref: Option<&str>,
     ) -> Result<Review> {
-        let objects = enumerate_objects(self.repo, target);
+        let pins = enumerate_pins(self.repo, target);
+        let pin_paths: Vec<String> = pins
+            .iter()
+            .map(|(s, _, _)| format!("objects/{s}"))
+            .collect();
+        let objects: Vec<String> = pins.iter().map(|(s, _, _)| s.clone()).collect();
 
-        let mut fields: Vec<(&str, &[u8])> = vec![
-            ("title", title.as_bytes()),
-            ("body", body.as_bytes()),
-            ("state", b"open"),
-            ("target/head", target.head.as_bytes()),
+        let mut mutations: Vec<Mutation<'_>> = vec![
+            Mutation::Set("title", title.as_bytes()),
+            Mutation::Set("body", body.as_bytes()),
+            Mutation::Set("state", b"open"),
+            Mutation::Set("target/head", target.head.as_bytes()),
         ];
         if let Some(ref base) = target.base {
-            fields.push(("target/base", base.as_bytes()));
+            mutations.push(Mutation::Set("target/base", base.as_bytes()));
         }
         if let Some(sref) = source_ref {
-            fields.push(("source_ref", sref.as_bytes()));
+            mutations.push(Mutation::Set("source_ref", sref.as_bytes()));
         }
-
-        let obj_paths: Vec<String> = objects.iter().map(|o| format!("objects/{o}")).collect();
-        let obj_fields: Vec<(&str, &[u8])> = obj_paths
-            .iter()
-            .map(|p| (p.as_str(), b"" as &[u8]))
-            .collect();
-        fields.extend(obj_fields);
+        for ((_, oid, mode), path) in pins.iter().zip(pin_paths.iter()) {
+            mutations.push(Mutation::Pin(path.as_str(), *oid, *mode));
+        }
 
         let entry = self.repo.create(
             REVIEW_PREFIX,
             &IdStrategy::CommitOid,
-            &fields,
+            &mutations,
             "create review",
             None,
         )?;
-
-        fixup_pin_entries(self.repo, &entry.id, &objects)?;
 
         Ok(Review {
             oid: entry.id,
@@ -402,40 +352,40 @@ impl Store<'_> {
     ) -> Result<Review> {
         let state = state.cloned().unwrap_or(ReviewState::Open);
         let state_str = state.as_str().to_string();
-        let objects = enumerate_objects(self.repo, target);
+        let pins = enumerate_pins(self.repo, target);
+        let pin_paths: Vec<String> = pins
+            .iter()
+            .map(|(s, _, _)| format!("objects/{s}"))
+            .collect();
+        let objects: Vec<String> = pins.iter().map(|(s, _, _)| s.clone()).collect();
 
-        let mut fields: Vec<(&str, &[u8])> = vec![
-            ("title", title.as_bytes()),
-            ("body", body.as_bytes()),
-            ("state", state_str.as_bytes()),
-            ("target/head", target.head.as_bytes()),
-            ("source/url", source.as_bytes()),
+        let mut mutations: Vec<Mutation<'_>> = vec![
+            Mutation::Set("title", title.as_bytes()),
+            Mutation::Set("body", body.as_bytes()),
+            Mutation::Set("state", state_str.as_bytes()),
+            Mutation::Set("target/head", target.head.as_bytes()),
+            Mutation::Set("source/url", source.as_bytes()),
         ];
         if let Some(ref base) = target.base {
-            fields.push(("target/base", base.as_bytes()));
+            mutations.push(Mutation::Set("target/base", base.as_bytes()));
         }
         if let Some(sref) = source_ref {
-            fields.push(("source_ref", sref.as_bytes()));
+            mutations.push(Mutation::Set("source_ref", sref.as_bytes()));
         }
-
-        let obj_paths: Vec<String> = objects.iter().map(|o| format!("objects/{o}")).collect();
-        let obj_fields: Vec<(&str, &[u8])> = obj_paths
-            .iter()
-            .map(|p| (p.as_str(), b"" as &[u8]))
-            .collect();
-        fields.extend(obj_fields);
+        for ((_, oid, mode), path) in pins.iter().zip(pin_paths.iter()) {
+            mutations.push(Mutation::Pin(path.as_str(), *oid, *mode));
+        }
 
         let entry = self.repo.create(
             REVIEW_PREFIX,
             &IdStrategy::CommitOid,
-            &fields,
+            &mutations,
             "forge: create review",
             Some(author),
         )?;
 
         let oid = entry.id.clone();
         index_upsert(self.repo, REVIEW_INDEX, &[(display_id, &oid)])?;
-        fixup_pin_entries(self.repo, &oid, &objects)?;
 
         Ok(Review {
             oid,
@@ -557,19 +507,21 @@ impl Store<'_> {
             head: new_head.clone(),
             base: review.target.base.clone(),
         };
-        let objects = enumerate_objects(self.repo, &new_target);
-        let obj_paths: Vec<String> = objects.iter().map(|o| format!("objects/{o}")).collect();
+        let pins = enumerate_pins(self.repo, &new_target);
+        let pin_paths: Vec<String> = pins
+            .iter()
+            .map(|(s, _, _)| format!("objects/{s}"))
+            .collect();
 
         let mut mutations: Vec<Mutation<'_>> =
             vec![Mutation::Set("target/head", new_head.as_bytes())];
-        for p in &obj_paths {
-            mutations.push(Mutation::Set(p.as_str(), b""));
+        for ((_, oid, mode), path) in pins.iter().zip(pin_paths.iter()) {
+            mutations.push(Mutation::Pin(path.as_str(), *oid, *mode));
         }
 
         let entry = self
             .repo
             .update(&ref_name, &mutations, "refresh review target")?;
-        fixup_pin_entries(self.repo, &oid, &objects)?;
         review_from_entry(self.repo, &entry, &ref_name, display_id)
     }
 
@@ -593,17 +545,19 @@ impl Store<'_> {
             head: new_head.to_string(),
             base: old_review.target.base.clone(),
         };
-        let objects = enumerate_objects(self.repo, &new_target);
-        let obj_paths: Vec<String> = objects.iter().map(|o| format!("objects/{o}")).collect();
+        let pins = enumerate_pins(self.repo, &new_target);
+        let pin_paths: Vec<String> = pins
+            .iter()
+            .map(|(s, _, _)| format!("objects/{s}"))
+            .collect();
 
         let mut mutations: Vec<Mutation<'_>> =
             vec![Mutation::Set("target/head", new_head.as_bytes())];
-        for p in &obj_paths {
-            mutations.push(Mutation::Set(p.as_str(), b""));
+        for ((_, oid, mode), path) in pins.iter().zip(pin_paths.iter()) {
+            mutations.push(Mutation::Pin(path.as_str(), *oid, *mode));
         }
 
         let entry = self.repo.update(&ref_name, &mutations, "retarget review")?;
-        fixup_pin_entries(self.repo, &oid, &objects)?;
         let review = review_from_entry(self.repo, &entry, &ref_name, display_id)?;
         Ok((old_head, review))
     }
