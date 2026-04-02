@@ -1,0 +1,1 @@
+missing handle blob yields misleading validation error instead of NotFound
