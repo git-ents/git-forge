@@ -1,0 +1,1 @@
+`update_review` in forge-mcp only exposes title, body, and state. There is no way to retarget a review (update its head OID or remove a base) through MCP. The CLI `forge review retarget` has no MCP equivalent, so agents that manage the review lifecycle must shell out or are blocked entirely.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)
