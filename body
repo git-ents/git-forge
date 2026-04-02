@@ -1,0 +1,24 @@
+## Summary
+
+Adds `crates/forge-benchmarks` — a Criterion benchmark suite measuring Git's object store and ref model against Forge's data access patterns at realistic scale.
+
+### Benchmarks (28 cases total)
+
+| # | Group | Scale inputs |
+|---|-------|-------------|
+| 1 | `issue_creation` | N = 100, 1 000, 10 000 |
+| 2 | `issue_listing` | N = 100, 1 000, 10 000 |
+| 3 | `comment_lookup` | total = 100, 500, 1 000 |
+| 4 | `link_traversal` | N = 10, 100, 500 |
+| 5 | `approval_lookup` | P = 10, 100, 1 000 (hit + miss) |
+| 6 | `auto_merge` | N = 10, 100, 500 (clean + conflict) |
+| 7 | `reanchoring` | N = 1, 10, 50 |
+
+All repos are bare with no remotes. Results tables in `README.md` are left blank for you to populate after a real run.
+
+### Changes
+
+- `crates/forge-benchmarks/` — new crate (`publish = false`)
+- `Cargo.toml` — workspace member added
+- `.config/release-please-config.json` / `manifest.json` — crate registered
+- `.github/workflows/CD.yml` — `forge-benchmarks` excluded from `cargo publish`; benchmark smoke-test job added
