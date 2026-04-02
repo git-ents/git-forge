@@ -1,0 +1,1 @@
+In `crates/git-forge/src/review.rs` L295–309 and L362–376, both functions build nearly identical `Vec<Mutation>` blocks (title, body, state, target/head, optional base, optional source_ref, pin loop). Extract a private `build_review_mutations` helper to eliminate the duplication and reduce drift risk.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)
