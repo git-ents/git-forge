@@ -22,10 +22,42 @@ use facet::Facet;
 use git2::{ErrorCode, ObjectType, Repository};
 use uuid::Uuid;
 
-use crate::refs::{CONTRIBUTORS_PREFIX, build_tree};
+use crate::refs::CONTRIBUTORS_PREFIX;
 use crate::{Error, Result, Store};
 
-// ── subtree removal helper ──────────────────────────────────────────────────
+// ── subtree helpers ─────────────────────────────────────────────────────────
+
+/// Validate that `key` is safe to use as a single git tree entry name.
+fn validate_entry_name(key: &str) -> Result<()> {
+    if key.is_empty() || key.contains('/') || key.contains('\0') {
+        return Err(Error::Config(format!(
+            "invalid entry name {key:?}: must be non-empty with no slashes or NUL bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// Insert `blob_oid` as `subtree_name/key` into `root_tree`, returning the
+/// new root tree OID.  Creates the subtree if it doesn't exist yet.
+fn insert_into_subtree(
+    repo: &Repository,
+    root_tree: &git2::Tree<'_>,
+    subtree_name: &str,
+    key: &str,
+    blob_oid: git2::Oid,
+) -> Result<git2::Oid> {
+    validate_entry_name(key)?;
+    let existing = root_tree
+        .get_name(subtree_name)
+        .filter(|e| e.kind() == Some(ObjectType::Tree))
+        .and_then(|e| repo.find_tree(e.id()).ok());
+    let mut sub_builder = repo.treebuilder(existing.as_ref())?;
+    sub_builder.insert(key, blob_oid, 0o100_644)?;
+    let new_sub_oid = sub_builder.write()?;
+    let mut root_builder = repo.treebuilder(Some(root_tree))?;
+    root_builder.insert(subtree_name, new_sub_oid, 0o040_000)?;
+    Ok(root_builder.write()?)
+}
 
 /// Remove a single entry from a subtree within `root_tree`, returning the new
 /// root tree OID.
@@ -470,9 +502,7 @@ impl Store<'_> {
         let old_tree = parent_commit.tree()?;
 
         let empty_oid = self.repo.blob(b"")?;
-        let role_path = format!("roles/{role}");
-        let parts: Vec<&str> = role_path.split('/').collect();
-        let new_tree_oid = build_tree(self.repo, Some(&old_tree), &parts, empty_oid)?;
+        let new_tree_oid = insert_into_subtree(self.repo, &old_tree, "roles", role, empty_oid)?;
         let new_tree = self.repo.find_tree(new_tree_oid)?;
 
         let sig = self.repo.signature()?;
@@ -555,9 +585,7 @@ impl Store<'_> {
         let old_tree = parent_commit.tree()?;
 
         let empty_oid = self.repo.blob(b"")?;
-        let path = format!("names/{name}");
-        let parts: Vec<&str> = path.split('/').collect();
-        let new_tree_oid = build_tree(self.repo, Some(&old_tree), &parts, empty_oid)?;
+        let new_tree_oid = insert_into_subtree(self.repo, &old_tree, "names", name, empty_oid)?;
         let new_tree = self.repo.find_tree(new_tree_oid)?;
 
         let sig = self.repo.signature()?;
@@ -640,9 +668,7 @@ impl Store<'_> {
         let old_tree = parent_commit.tree()?;
 
         let empty_oid = self.repo.blob(b"")?;
-        let path = format!("emails/{email}");
-        let parts: Vec<&str> = path.split('/').collect();
-        let new_tree_oid = build_tree(self.repo, Some(&old_tree), &parts, empty_oid)?;
+        let new_tree_oid = insert_into_subtree(self.repo, &old_tree, "emails", email, empty_oid)?;
         let new_tree = self.repo.find_tree(new_tree_oid)?;
 
         let sig = self.repo.signature()?;
@@ -730,9 +756,8 @@ impl Store<'_> {
         let old_tree = parent_commit.tree()?;
 
         let blob_oid = self.repo.blob(material)?;
-        let path = format!("keys/{fingerprint}");
-        let parts: Vec<&str> = path.split('/').collect();
-        let new_tree_oid = build_tree(self.repo, Some(&old_tree), &parts, blob_oid)?;
+        let new_tree_oid =
+            insert_into_subtree(self.repo, &old_tree, "keys", fingerprint, blob_oid)?;
         let new_tree = self.repo.find_tree(new_tree_oid)?;
 
         let sig = self.repo.signature()?;

@@ -760,8 +760,6 @@ fn default_sigils(provider: &str) -> BTreeMap<String, String> {
     ])
 }
 
-/// Rebuild a tree chain from the leaf upward, replacing the entry at the
-/// given path segments with `new_oid`.
 /// Resolve the current git user's email to their contributor UUID.
 ///
 /// # Errors
@@ -782,6 +780,8 @@ fn current_contributor_uuid(repo: &git2::Repository, store: &crate::Store<'_>) -
         })
 }
 
+/// Rebuild a tree chain from the leaf upward, replacing the entry at the
+/// given path segments with `new_oid`.
 fn rebuild_tree_upward(
     repo: &Repository,
     root: &git2::Tree<'_>,

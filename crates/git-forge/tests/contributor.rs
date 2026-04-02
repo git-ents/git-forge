@@ -273,3 +273,61 @@ fn bootstrap_seeds_name_and_email_from_git_config() {
     assert!(c.names.contains(&"alice".to_string()));
     assert!(c.emails.contains(&"alice@example.com".to_string()));
 }
+
+// ---------------------------------------------------------------------------
+// slash rejection in subtree entry names
+// ---------------------------------------------------------------------------
+
+#[test]
+fn add_name_rejects_slash() {
+    let (dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let _ = dir;
+
+    store.create_contributor("alice", &[], &[], &[]).unwrap();
+    assert!(store.add_contributor_name("alice", "foo/bar").is_err());
+}
+
+#[test]
+fn add_email_rejects_slash() {
+    let (dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let _ = dir;
+
+    store.create_contributor("alice", &[], &[], &[]).unwrap();
+    assert!(store.add_contributor_email("alice", "a/b@x.com").is_err());
+}
+
+#[test]
+fn add_role_rejects_slash() {
+    let (dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let _ = dir;
+
+    store.create_contributor("alice", &[], &[], &[]).unwrap();
+    assert!(store.add_contributor_role("alice", "admin/super").is_err());
+}
+
+#[test]
+fn add_key_rejects_slash() {
+    let (dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let _ = dir;
+
+    store.create_contributor("alice", &[], &[], &[]).unwrap();
+    assert!(
+        store
+            .add_contributor_key("alice", "fp/nested", b"key material")
+            .is_err()
+    );
+}
+
+#[test]
+fn add_name_rejects_empty() {
+    let (dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let _ = dir;
+
+    store.create_contributor("alice", &[], &[], &[]).unwrap();
+    assert!(store.add_contributor_name("alice", "").is_err());
+}
