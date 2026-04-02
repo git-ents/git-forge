@@ -1,0 +1,1 @@
+In `crates/git-forge/src/contributor.rs` L356–362, `find_contributor_by_handle` iterates all contributor refs on every call. Handle resolution is on the hot path for login, role operations, and sync. Add a `refs/forge/index/contributors-by-handle` index ref (analogous to `REVIEW_INDEX`) so lookups are O(1).\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)

@@ -1,0 +1,1 @@
+find_contributor_by_handle does a full O(n) scan with no index
