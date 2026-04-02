@@ -1,0 +1,1 @@
+In `crates/forge-mcp/src/review.rs` (and `comment.rs`, `issue.rs`), every handler opens the repo and returns a formatted error string on failure using the same 3-line pattern. A small private macro or a helper returning `Result<String, String>` would eliminate the repetition without changing behaviour.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)
