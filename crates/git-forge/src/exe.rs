@@ -916,44 +916,115 @@ impl Executor {
 
         match &cli.command {
             Command::Contributor { command } => match command {
-                ContributorCommand::Bootstrap => {
-                    let c = self.store().bootstrap_contributor()?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("bootstrapped contributor {} ({})", c.handle, c.id);
-                    }
-                }
-
-                ContributorCommand::Add {
+                ContributorCommand::Init {
                     handle,
                     names,
                     emails,
                     roles,
+                    no_interactive,
                 } => {
+                    let store = self.store();
+                    let existing = store.list_contributors()?;
                     let sig = self.repo.signature()?;
-                    let default_name;
-                    let names: Vec<&str> = if names.is_empty() {
-                        default_name = sig.name().unwrap_or("unknown").to_string();
-                        vec![default_name.as_str()]
+                    let default_name = sig.name().unwrap_or("unknown").to_string();
+                    let default_email = sig.email().unwrap_or("unknown").to_string();
+
+                    if existing.is_empty() {
+                        // Bootstrap: first contributor gets admin role.
+                        let interactive = !no_interactive && should_interact(handle.is_none());
+                        let (eff_handle, eff_names, eff_emails) = if interactive {
+                            let default_handle = default_handle_from_name(&default_name);
+                            let input = crate::interactive::prompt_init_contributor(
+                                &default_handle,
+                                &default_name,
+                                &default_email,
+                            )?;
+                            (input.handle, input.names, input.emails)
+                        } else {
+                            let h = handle
+                                .clone()
+                                .unwrap_or_else(|| default_handle_from_name(&default_name));
+                            let n = if names.is_empty() {
+                                vec![default_name.clone()]
+                            } else {
+                                names.clone()
+                            };
+                            let e = if emails.is_empty() {
+                                vec![default_email.clone()]
+                            } else {
+                                emails.clone()
+                            };
+                            (h, n, e)
+                        };
+                        let eff_roles = if roles.is_empty() {
+                            vec!["admin".to_string()]
+                        } else {
+                            roles.clone()
+                        };
+                        let names_ref: Vec<&str> = eff_names.iter().map(String::as_str).collect();
+                        let emails_ref: Vec<&str> = eff_emails.iter().map(String::as_str).collect();
+                        let roles_ref: Vec<&str> = eff_roles.iter().map(String::as_str).collect();
+                        let c = store.create_contributor(
+                            &eff_handle,
+                            &names_ref,
+                            &emails_ref,
+                            &roles_ref,
+                        )?;
+                        if cli.json {
+                            println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
+                        } else {
+                            println!("bootstrapped contributor {} ({})", c.handle, c.id);
+                        }
                     } else {
-                        names.iter().map(String::as_str).collect()
-                    };
-                    let default_email;
-                    let emails: Vec<&str> = if emails.is_empty() {
-                        default_email = sig.email().unwrap_or("unknown").to_string();
-                        vec![default_email.as_str()]
-                    } else {
-                        emails.iter().map(String::as_str).collect()
-                    };
-                    let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
-                    let c = self
-                        .store()
-                        .create_contributor(handle, &names, &emails, &roles)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("added contributor {} ({})", c.handle, c.id);
+                        // Check if caller is already a contributor.
+                        let email_map = store.email_to_contributor_map()?;
+                        if email_map.contains_key(&default_email) {
+                            return Err(Error::Config(
+                                "you are already a contributor; use `contributor edit` instead"
+                                    .into(),
+                            ));
+                        }
+
+                        // Add new contributor (no admin role by default).
+                        let interactive = !no_interactive && should_interact(handle.is_none());
+                        let (eff_handle, eff_names, eff_emails) = if interactive {
+                            let default_handle = default_handle_from_name(&default_name);
+                            let input = crate::interactive::prompt_init_contributor(
+                                &default_handle,
+                                &default_name,
+                                &default_email,
+                            )?;
+                            (input.handle, input.names, input.emails)
+                        } else {
+                            let h = handle
+                                .clone()
+                                .unwrap_or_else(|| default_handle_from_name(&default_name));
+                            let n = if names.is_empty() {
+                                vec![default_name.clone()]
+                            } else {
+                                names.clone()
+                            };
+                            let e = if emails.is_empty() {
+                                vec![default_email.clone()]
+                            } else {
+                                emails.clone()
+                            };
+                            (h, n, e)
+                        };
+                        let roles_ref: Vec<&str> = roles.iter().map(String::as_str).collect();
+                        let names_ref: Vec<&str> = eff_names.iter().map(String::as_str).collect();
+                        let emails_ref: Vec<&str> = eff_emails.iter().map(String::as_str).collect();
+                        let c = store.create_contributor(
+                            &eff_handle,
+                            &names_ref,
+                            &emails_ref,
+                            &roles_ref,
+                        )?;
+                        if cli.json {
+                            println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
+                        } else {
+                            println!("added contributor {} ({})", c.handle, c.id);
+                        }
                     }
                 }
 
@@ -1012,92 +1083,102 @@ impl Executor {
                     }
                 }
 
-                ContributorCommand::AddName { handle, name } => {
-                    let c = self.store().add_contributor_name(handle, name)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("added name {name:?} to {handle}");
-                    }
-                }
-
-                ContributorCommand::RemoveName { handle, name } => {
-                    let c = self.store().remove_contributor_name(handle, name)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("removed name {name:?} from {handle}");
-                    }
-                }
-
-                ContributorCommand::AddEmail { handle, email } => {
-                    let c = self.store().add_contributor_email(handle, email)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("added email {email} to {handle}");
-                    }
-                }
-
-                ContributorCommand::RemoveEmail { handle, email } => {
-                    let c = self.store().remove_contributor_email(handle, email)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("removed email {email} from {handle}");
-                    }
-                }
-
-                ContributorCommand::AddKey {
+                ContributorCommand::Edit {
                     handle,
-                    fingerprint,
-                    file,
+                    add_names,
+                    remove_names,
+                    add_emails,
+                    remove_emails,
+                    add_keys,
+                    key_file,
+                    remove_keys,
+                    add_roles,
+                    remove_roles,
+                    interactive,
                 } => {
-                    let material = if let Some(path) = file {
-                        std::fs::read(path)?
+                    let no_flags = add_names.is_empty()
+                        && remove_names.is_empty()
+                        && add_emails.is_empty()
+                        && remove_emails.is_empty()
+                        && add_keys.is_empty()
+                        && remove_keys.is_empty()
+                        && add_roles.is_empty()
+                        && remove_roles.is_empty();
+                    let interactive = *interactive || should_interact(no_flags);
+
+                    let (
+                        eff_add_names,
+                        eff_remove_names,
+                        eff_add_emails,
+                        eff_remove_emails,
+                        eff_add_roles,
+                        eff_remove_roles,
+                    ) = if interactive {
+                        let current_id = self.store().resolve_handle(handle)?;
+                        let current = self.store().get_contributor(current_id.as_str())?;
+                        let input = crate::interactive::prompt_edit_contributor(&current)?;
+                        (
+                            input.add_names,
+                            input.remove_names,
+                            input.add_emails,
+                            input.remove_emails,
+                            input.add_roles,
+                            input.remove_roles,
+                        )
                     } else {
-                        use std::io::Read;
-                        let mut buf = Vec::new();
-                        std::io::stdin().read_to_end(&mut buf)?;
-                        buf
+                        (
+                            add_names.clone(),
+                            remove_names.clone(),
+                            add_emails.clone(),
+                            remove_emails.clone(),
+                            add_roles.clone(),
+                            remove_roles.clone(),
+                        )
                     };
-                    let c = self
-                        .store()
-                        .add_contributor_key(handle, fingerprint, &material)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("added key {fingerprint} to {handle}");
-                    }
-                }
 
-                ContributorCommand::RemoveKey {
-                    handle,
-                    fingerprint,
-                } => {
-                    let c = self.store().remove_contributor_key(handle, fingerprint)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("removed key {fingerprint} from {handle}");
+                    let store = self.store();
+                    let mut c: Option<Contributor> = None;
+                    for name in &eff_remove_names {
+                        c = Some(store.remove_contributor_name(handle, name)?);
                     }
-                }
-
-                ContributorCommand::AddRole { handle, role } => {
-                    let c = self.store().add_contributor_role(handle, role)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
-                    } else {
-                        println!("added role {role} to {handle}");
+                    for name in &eff_add_names {
+                        c = Some(store.add_contributor_name(handle, name)?);
                     }
-                }
+                    for email in &eff_remove_emails {
+                        c = Some(store.remove_contributor_email(handle, email)?);
+                    }
+                    for email in &eff_add_emails {
+                        c = Some(store.add_contributor_email(handle, email)?);
+                    }
+                    for fp in remove_keys {
+                        c = Some(store.remove_contributor_key(handle, fp)?);
+                    }
+                    for fp in add_keys {
+                        let material = if let Some(path) = key_file {
+                            std::fs::read(path)?
+                        } else {
+                            use std::io::Read;
+                            let mut buf = Vec::new();
+                            std::io::stdin().read_to_end(&mut buf)?;
+                            buf
+                        };
+                        c = Some(store.add_contributor_key(handle, fp, &material)?);
+                    }
+                    for role in &eff_remove_roles {
+                        c = Some(store.remove_contributor_role(handle, role)?);
+                    }
+                    for role in &eff_add_roles {
+                        c = Some(store.add_contributor_role(handle, role)?);
+                    }
 
-                ContributorCommand::RemoveRole { handle, role } => {
-                    let c = self.store().remove_contributor_role(handle, role)?;
-                    if cli.json {
-                        println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
+                    if let Some(c) = c {
+                        if cli.json {
+                            println!("{}", facet_json::to_string_pretty(&c).expect("serialize"));
+                        } else {
+                            println!("updated contributor {}", c.handle);
+                        }
                     } else {
-                        println!("removed role {role} from {handle}");
+                        println!("no changes");
                     }
                 }
             },
@@ -2037,6 +2118,22 @@ pub fn hash_worktree_dir(repo: &Repository, dir: &std::path::Path) -> Result<git
         }
     }
     Ok(builder.write()?)
+}
+
+/// Derive a default handle from a git `user.name` (lowercase first token,
+/// stripped of non-alphanumeric chars).
+fn default_handle_from_name(name: &str) -> String {
+    let handle = name
+        .split_whitespace()
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    let handle = handle.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "");
+    if handle.is_empty() {
+        "contributor".to_string()
+    } else {
+        handle
+    }
 }
 
 /// Return `true` when interactive prompts should be shown.

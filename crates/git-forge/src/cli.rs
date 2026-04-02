@@ -100,12 +100,15 @@ pub enum ConfigCommand {
 /// Contributor subcommands.
 #[derive(Subcommand, Debug)]
 pub enum ContributorCommand {
-    /// Bootstrap the first contributor from the current git identity (admin role).
-    Bootstrap,
-    /// Add a new contributor.
-    Add {
-        /// Handle (unique short name, no spaces or slashes).
-        handle: String,
+    /// Initialize yourself as a contributor.
+    ///
+    /// If no contributors exist yet, bootstraps you as the first contributor
+    /// with the `admin` role.  Otherwise, registers a new contributor from
+    /// your git identity.  Errors if you are already a contributor.
+    Init {
+        /// Handle (defaults to first word of git user.name).
+        #[arg(long)]
+        handle: Option<String>,
 
         /// Display names (defaults to git user.name).
         #[arg(long = "name", short = 'n')]
@@ -115,9 +118,13 @@ pub enum ContributorCommand {
         #[arg(long = "email", short = 'e')]
         emails: Vec<String>,
 
-        /// Roles to grant (e.g. `admin`, `maintainer`).
+        /// Roles to grant (only used during bootstrap; ignored otherwise).
         #[arg(long = "role", short = 'r')]
         roles: Vec<String>,
+
+        /// Skip interactive prompts.
+        #[arg(long)]
+        no_interactive: bool,
     },
     /// List all contributors.
     List,
@@ -133,64 +140,53 @@ pub enum ContributorCommand {
         /// New handle.
         new: String,
     },
-    /// Add a display name.
-    AddName {
+    /// Edit a contributor's fields.
+    ///
+    /// When no flags are given and a TTY is available, opens an interactive
+    /// picker to select which fields to modify.
+    Edit {
         /// Contributor handle.
         handle: String,
-        /// Display name to add.
-        name: String,
-    },
-    /// Remove a display name.
-    RemoveName {
-        /// Contributor handle.
-        handle: String,
-        /// Display name to remove.
-        name: String,
-    },
-    /// Add an email address.
-    AddEmail {
-        /// Contributor handle.
-        handle: String,
-        /// Email address to add.
-        email: String,
-    },
-    /// Remove an email address.
-    RemoveEmail {
-        /// Contributor handle.
-        handle: String,
-        /// Email address to remove.
-        email: String,
-    },
-    /// Add a public key.
-    AddKey {
-        /// Contributor handle.
-        handle: String,
-        /// Key fingerprint (entry name under keys/).
-        fingerprint: String,
-        /// File containing public key material (reads stdin if omitted).
-        #[arg(long, short = 'f')]
-        file: Option<PathBuf>,
-    },
-    /// Remove a public key.
-    RemoveKey {
-        /// Contributor handle.
-        handle: String,
-        /// Key fingerprint to remove.
-        fingerprint: String,
-    },
-    /// Add a role.
-    AddRole {
-        /// Contributor handle.
-        handle: String,
-        /// Role to grant (e.g. `admin`, `maintainer`).
-        role: String,
-    },
-    /// Remove a role.
-    RemoveRole {
-        /// Contributor handle.
-        handle: String,
-        /// Role to revoke.
-        role: String,
+
+        /// Display names to add.
+        #[arg(long = "add-name")]
+        add_names: Vec<String>,
+
+        /// Display names to remove.
+        #[arg(long = "remove-name")]
+        remove_names: Vec<String>,
+
+        /// Email addresses to add.
+        #[arg(long = "add-email")]
+        add_emails: Vec<String>,
+
+        /// Email addresses to remove.
+        #[arg(long = "remove-email")]
+        remove_emails: Vec<String>,
+
+        /// Key fingerprint to add (reads material from --key-file or stdin).
+        #[arg(long = "add-key")]
+        add_keys: Vec<String>,
+
+        /// File containing public key material for --add-key.
+        #[arg(long = "key-file", short = 'f')]
+        key_file: Option<PathBuf>,
+
+        /// Key fingerprints to remove.
+        #[arg(long = "remove-key")]
+        remove_keys: Vec<String>,
+
+        /// Roles to add.
+        #[arg(long = "add-role")]
+        add_roles: Vec<String>,
+
+        /// Roles to remove.
+        #[arg(long = "remove-role")]
+        remove_roles: Vec<String>,
+
+        /// Prompt interactively for fields to edit.
+        #[arg(long, short = 'i')]
+        interactive: bool,
     },
 }
 

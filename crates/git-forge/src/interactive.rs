@@ -1,8 +1,9 @@
 //! Interactive prompts for forge commands.
 
-use inquire::{Editor, Select, Text};
+use inquire::{Editor, MultiSelect, Select, Text};
 
 use crate::Result;
+use crate::contributor::Contributor;
 use crate::error::Error;
 use crate::issue::{Issue, IssueState};
 use crate::review::{Review, ReviewState};
@@ -181,6 +182,137 @@ pub fn prompt_body(hint: Option<&str>) -> Result<String> {
         editor = editor.with_predefined_text(text);
     }
     editor.prompt().map_err(|_| Error::Interrupted)
+}
+
+/// Collected input from the interactive `contributor init` prompts.
+pub struct InitContributorInput {
+    /// Chosen handle.
+    pub handle: String,
+    /// Display names.
+    pub names: Vec<String>,
+    /// Email addresses.
+    pub emails: Vec<String>,
+}
+
+/// Prompt for contributor init fields, pre-filled from git identity.
+///
+/// # Errors
+/// Returns [`Error::Interrupted`] if the user cancels any prompt.
+pub fn prompt_init_contributor(
+    default_handle: &str,
+    default_name: &str,
+    default_email: &str,
+) -> Result<InitContributorInput> {
+    let handle = Text::new("Handle")
+        .with_initial_value(default_handle)
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+
+    let name = Text::new("Display name")
+        .with_initial_value(default_name)
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+
+    let email = Text::new("Email")
+        .with_initial_value(default_email)
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+
+    Ok(InitContributorInput {
+        handle,
+        names: vec![name],
+        emails: vec![email],
+    })
+}
+
+/// Edits collected from the interactive contributor edit picker.
+pub struct EditContributorInput {
+    /// Names to add.
+    pub add_names: Vec<String>,
+    /// Names to remove.
+    pub remove_names: Vec<String>,
+    /// Emails to add.
+    pub add_emails: Vec<String>,
+    /// Emails to remove.
+    pub remove_emails: Vec<String>,
+    /// Roles to add.
+    pub add_roles: Vec<String>,
+    /// Roles to remove.
+    pub remove_roles: Vec<String>,
+}
+
+/// Prompt the user to pick which contributor fields to edit, then prompt for
+/// values to add/remove per field.
+///
+/// # Errors
+/// Returns [`Error::Interrupted`] if the user cancels any prompt.
+pub fn prompt_edit_contributor(current: &Contributor) -> Result<EditContributorInput> {
+    let field_options = vec!["names", "emails", "roles"];
+    let fields = MultiSelect::new("Fields to edit", field_options)
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+
+    let mut input = EditContributorInput {
+        add_names: Vec::new(),
+        remove_names: Vec::new(),
+        add_emails: Vec::new(),
+        remove_emails: Vec::new(),
+        add_roles: Vec::new(),
+        remove_roles: Vec::new(),
+    };
+
+    for field in &fields {
+        match *field {
+            "names" => {
+                let (add, remove) = prompt_add_remove_list("name", &current.names)?;
+                input.add_names = add;
+                input.remove_names = remove;
+            }
+            "emails" => {
+                let (add, remove) = prompt_add_remove_list("email", &current.emails)?;
+                input.add_emails = add;
+                input.remove_emails = remove;
+            }
+            "roles" => {
+                let (add, remove) = prompt_add_remove_list("role", &current.roles)?;
+                input.add_roles = add;
+                input.remove_roles = remove;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(input)
+}
+
+/// For a given field, show current values as a multi-select (checked = keep,
+/// unchecked = remove), then prompt for new values to add.
+fn prompt_add_remove_list(label: &str, current: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+    let mut remove = Vec::new();
+    if !current.is_empty() {
+        let defaults: Vec<usize> = (0..current.len()).collect();
+        let kept = MultiSelect::new(
+            &format!("Current {label}s (deselect to remove)"),
+            current.to_vec(),
+        )
+        .with_default(&defaults)
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+
+        for item in current {
+            if !kept.contains(item) {
+                remove.push(item.clone());
+            }
+        }
+    }
+
+    let add_raw = Text::new(&format!("New {label}s to add (comma-separated)"))
+        .with_default("")
+        .prompt()
+        .map_err(|_| Error::Interrupted)?;
+    let add = parse_csv(&add_raw);
+
+    Ok((add, remove))
 }
 
 fn parse_csv(s: &str) -> Vec<String> {
