@@ -1,0 +1,1 @@
+In `crates/git-forge/src/review.rs` L341–352, `create_review_imported` has 8 positional parameters and requires `#[allow(clippy::too_many_arguments)]` to suppress the lint. Introduce a dedicated `ImportedReviewParams` struct to make call-sites self-documenting and remove the lint suppression.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)
