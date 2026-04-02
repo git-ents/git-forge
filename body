@@ -1,0 +1,1 @@
+In `crates/git-forge/src/review.rs` L244–249, `enumerate_pins` calls `.flatten()` on the revwalk iterator. This silently discards any `git2::Error` mid-walk — a bad object in the range produces a truncated pin list with no indication of failure. The collect should use explicit error handling instead.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)

@@ -1,0 +1,1 @@
+enumerate_pins silently swallows revwalk errors
