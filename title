@@ -1,0 +1,1 @@
+forge-lsp silently discards comment draft when draft file cannot be read
