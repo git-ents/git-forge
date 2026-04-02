@@ -1,0 +1,1 @@
+In `crates/git-forge/src/review.rs` L544–562, `retarget_review` writes new `objects/` pin entries but never removes the old ones. After repeated retargets, stale OIDs pile up in `objects/`, keeping unreachable commits alive for GC indefinitely. Old pins should be deleted before the new ones are written.\n\nGenerated-by: Claude Code (Claude Sonnet 4.6)
