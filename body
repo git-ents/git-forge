@@ -1,0 +1,9 @@
+**Dev-only `target/debug` path checked before `$PATH` in production code**
+
+Both `language_server_command` and `context_server_command` check `{worktree_root}/target/debug/{binary}` before consulting `$PATH`. This means:
+
+1. A stale debug binary from a previous build will silently shadow a correctly installed release binary in `$PATH`. Users who `cargo install` the tools will still get the debug build if they happen to have a checkout.
+2. The `target/debug` check uses `std::fs::metadata`, which only confirms the path *exists* — not that it's executable or the right version.
+3. For any user who isn't a forge developer, this is dead code that adds a confusing failure mode if a random `target/debug/forge-lsp` exists in their project tree.
+
+If this is intentional dev convenience, it should be gated behind an env var or `cfg(debug_assertions)`, or removed entirely in favor of the standard `which` + bare-name fallback.
