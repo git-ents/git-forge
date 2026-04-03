@@ -1,0 +1,3 @@
+**`approved_oids` is O(n*m) and reads every review fully.** This method deserializes every review in the repository (including all objects, approvals, labels, etc.) just to collect OIDs with approvals. For a repository with hundreds of reviews each containing dozens of objects, this is a full table scan with no caching.
+
+The doc comment acknowledges this is a fallback pending an index, but since `approved_oids` is called from `review coverage` (which runs on every `HEAD` tree blob), this is a performance cliff that will become unusable as the repo grows.
