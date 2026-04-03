@@ -1,0 +1,3 @@
+**`write_config_blob` creates one commit per blob.** Each call to `write_config_blob` reads the config ref, inserts a single blob, and commits. In `config_init`, this is called once per sigil plus once for sync scope — typically 3 commits for a single `forge config init` command. Each commit is a separate ref update with full tree rebuild. This is both wasteful (O(n) commits for n fields) and creates a race window between each commit.
+
+`config_edit` has the same issue: each `write_config_blob` and `remove_config_blob` call is an independent commit. A batch API that accepts multiple mutations and commits once would be both more efficient and more correct.
