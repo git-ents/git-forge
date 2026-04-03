@@ -64,46 +64,26 @@ struct UpdateIssueParams {
 impl ForgeMcpServer {
     /// List issues in the forge repository.
     #[tool(description = "List issues in the forge repository.")]
-    fn list_issues(&self, Parameters(params): Parameters<ListIssuesParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
-        let store = Store::new(&repo);
-        let issues = match params.state.as_deref() {
-            None => store.list_issues(),
-            Some(s) => s.parse::<IssueState>().map_or_else(
-                |_| Err(git_forge::Error::InvalidState(s.to_string())),
-                |state| store.list_issues_by_state(&state),
-            ),
-        };
-        match issues {
-            Ok(list) => facet_json::to_string_pretty(&list).expect("serialize"),
-            Err(e) => format!("error: {e}"),
-        }
+    fn list_issues(
+        &self,
+        Parameters(params): Parameters<ListIssuesParams>,
+    ) -> Result<String, String> {
+        self.fetch_issues(params.state.as_deref())
     }
 
     /// Get a single issue by display ID or OID prefix.
     #[tool(description = "Get a single issue by display ID (e.g. \"3\", \"GH1\") or OID prefix.")]
-    fn get_issue(&self, Parameters(params): Parameters<GetIssueParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
-        let store = Store::new(&repo);
-        match store.get_issue(&params.reference) {
-            Ok(issue) => facet_json::to_string_pretty(&issue).expect("serialize"),
-            Err(e) => format!("error: {e}"),
-        }
+    fn get_issue(&self, Parameters(params): Parameters<GetIssueParams>) -> Result<String, String> {
+        self.fetch_issue(&params.reference)
     }
 
     /// Create a new issue.
     #[tool(description = "Create a new forge issue.")]
-    fn create_issue(&self, Parameters(params): Parameters<CreateIssueParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn create_issue(
+        &self,
+        Parameters(params): Parameters<CreateIssueParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         let labels: Vec<&str> = params
             .labels
@@ -125,8 +105,8 @@ impl ForgeMcpServer {
             &labels,
             &assignees,
         ) {
-            Ok(issue) => facet_json::to_string_pretty(&issue).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(issue) => facet_json::to_string_pretty(&issue).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -134,18 +114,18 @@ impl ForgeMcpServer {
     #[tool(
         description = "Update an existing forge issue by display ID or OID prefix. All fields are optional."
     )]
-    fn update_issue(&self, Parameters(params): Parameters<UpdateIssueParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn update_issue(
+        &self,
+        Parameters(params): Parameters<UpdateIssueParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         let state = match params.state.as_deref() {
             None => None,
             Some(s) => match s.parse::<IssueState>() {
                 Ok(st) => Some(st),
                 Err(_) => {
-                    return format!("error: {}", git_forge::Error::InvalidState(s.to_string()));
+                    return Err(git_forge::Error::InvalidState(s.to_string()).to_string());
                 }
             },
         };
@@ -188,8 +168,8 @@ impl ForgeMcpServer {
             &remove_assignees,
             params.source_url.as_deref(),
         ) {
-            Ok(issue) => facet_json::to_string_pretty(&issue).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(issue) => facet_json::to_string_pretty(&issue).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 }
@@ -233,50 +213,54 @@ mod tests {
             labels: None,
             assignees: None,
         }));
-        assert!(!result.starts_with("error:"), "got error: {result}");
-        assert!(result.contains("test issue"));
+        let text = result.expect("should succeed");
+        assert!(text.contains("test issue"));
     }
 
     #[test]
     fn update_issue_changes_state() {
         let (_dir, server) = test_server();
-        let created = server.create_issue(Parameters(super::CreateIssueParams {
-            title: "close me".to_string(),
-            body: None,
-            labels: None,
-            assignees: None,
-        }));
-        assert!(!created.starts_with("error:"), "create failed: {created}");
+        let created = server
+            .create_issue(Parameters(super::CreateIssueParams {
+                title: "close me".to_string(),
+                body: None,
+                labels: None,
+                assignees: None,
+            }))
+            .expect("create");
 
         let oid = {
             let v: serde_json::Value = serde_json::from_str(&created).expect("parse");
             v["oid"].as_str().expect("oid field").to_string()
         };
 
-        let updated = server.update_issue(Parameters(super::UpdateIssueParams {
-            reference: oid,
-            title: None,
-            body: None,
-            state: Some("closed".to_string()),
-            add_labels: None,
-            remove_labels: None,
-            add_assignees: None,
-            remove_assignees: None,
-            source_url: None,
-        }));
-        assert!(!updated.starts_with("error:"), "update failed: {updated}");
+        let updated = server
+            .update_issue(Parameters(super::UpdateIssueParams {
+                reference: oid,
+                title: None,
+                body: None,
+                state: Some("closed".to_string()),
+                add_labels: None,
+                remove_labels: None,
+                add_assignees: None,
+                remove_assignees: None,
+                source_url: None,
+            }))
+            .expect("update");
         assert!(updated.contains("Closed"));
     }
 
     #[test]
     fn update_issue_invalid_state_returns_error() {
         let (_dir, server) = test_server();
-        let created = server.create_issue(Parameters(super::CreateIssueParams {
-            title: "state test".to_string(),
-            body: None,
-            labels: None,
-            assignees: None,
-        }));
+        let created = server
+            .create_issue(Parameters(super::CreateIssueParams {
+                title: "state test".to_string(),
+                body: None,
+                labels: None,
+                assignees: None,
+            }))
+            .expect("create");
         let oid = {
             let v: serde_json::Value = serde_json::from_str(&created).expect("parse");
             v["oid"].as_str().expect("oid").to_string()
@@ -292,6 +276,6 @@ mod tests {
             remove_assignees: None,
             source_url: None,
         }));
-        assert!(result.starts_with("error:"));
+        assert!(result.is_err());
     }
 }

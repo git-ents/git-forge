@@ -13,7 +13,14 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ServerHandler, prompt_handler, tool_handler};
 
+use git_forge::Store;
+use git_forge::issue::IssueState;
+
 /// MCP server that exposes forge metadata from a Git repository.
+///
+/// The `Repository` handle is opened per-call via [`Self::open_repo`] because
+/// `git2::Repository` is `!Sync`, so it cannot be held across the async
+/// boundary in the MCP handler. The repo *path* is cached and reused.
 #[derive(Debug, Clone)]
 pub struct ForgeMcpServer {
     repo_path: PathBuf,
@@ -22,12 +29,18 @@ pub struct ForgeMcpServer {
 }
 
 impl ForgeMcpServer {
-    /// Discover the nearest Git repository from the current directory.
+    /// Discover the forge Git repository.
+    ///
+    /// Uses `FORGE_REPO_PATH` if set, otherwise discovers from the current
+    /// directory.
     ///
     /// # Errors
     /// Returns an error if no repository is found.
     pub fn new() -> anyhow::Result<Self> {
-        let repo = Repository::discover(".")?;
+        let repo = match std::env::var("FORGE_REPO_PATH") {
+            Ok(path) => Repository::discover(&path)?,
+            Err(_) => Repository::discover(".")?,
+        };
         let repo_path = repo.path().to_path_buf();
         let mut tool_router = Self::issue_router();
         tool_router.merge(Self::comment_router());
@@ -39,8 +52,33 @@ impl ForgeMcpServer {
         })
     }
 
-    pub(crate) fn open_repo(&self) -> anyhow::Result<Repository> {
-        Ok(Repository::open(&self.repo_path)?)
+    pub(crate) fn open_repo(&self) -> Result<Repository, String> {
+        Repository::open(&self.repo_path).map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn fetch_issues(&self, state: Option<&str>) -> Result<String, String> {
+        let repo = self.open_repo()?;
+        let store = Store::new(&repo);
+        let issues = match state {
+            None => store.list_issues(),
+            Some(s) => s.parse::<IssueState>().map_or_else(
+                |_| Err(git_forge::Error::InvalidState(s.to_string())),
+                |st| store.list_issues_by_state(&st),
+            ),
+        };
+        match issues {
+            Ok(list) => facet_json::to_string_pretty(&list).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn fetch_issue(&self, reference: &str) -> Result<String, String> {
+        let repo = self.open_repo()?;
+        let store = Store::new(&repo);
+        match store.get_issue(reference) {
+            Ok(issue) => facet_json::to_string_pretty(&issue).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// Construct a server pointing at an explicit repository path, for use in tests.

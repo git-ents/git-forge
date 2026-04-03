@@ -1,4 +1,7 @@
 //! Forge MCP server binary — runs over stdio.
+//!
+//! Shutdown is handled by the stdio transport: when the client closes
+//! stdin the transport layer terminates the service.
 
 use forge_mcp::ForgeMcpServer;
 use rmcp::ServiceExt;

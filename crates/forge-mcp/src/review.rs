@@ -74,11 +74,11 @@ struct UpdateReviewParams {
 impl ForgeMcpServer {
     /// List reviews in the forge repository.
     #[tool(description = "List reviews in the forge repository.")]
-    fn list_reviews(&self, Parameters(params): Parameters<ListReviewsParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn list_reviews(
+        &self,
+        Parameters(params): Parameters<ListReviewsParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         let reviews = match params.state.as_deref() {
             None => store.list_reviews(),
@@ -88,22 +88,22 @@ impl ForgeMcpServer {
             ),
         };
         match reviews {
-            Ok(list) => facet_json::to_string_pretty(&list).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(list) => facet_json::to_string_pretty(&list).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
     /// Get a single review by display ID or OID prefix.
     #[tool(description = "Get a single review by display ID (e.g. \"GH#1\") or OID prefix.")]
-    fn get_review(&self, Parameters(params): Parameters<GetReviewParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn get_review(
+        &self,
+        Parameters(params): Parameters<GetReviewParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         match store.get_review(&params.reference) {
-            Ok(review) => facet_json::to_string_pretty(&review).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(review) => facet_json::to_string_pretty(&review).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -112,20 +112,15 @@ impl ForgeMcpServer {
     fn list_review_comments(
         &self,
         Parameters(params): Parameters<ListReviewCommentsParams>,
-    ) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
-        let review = match store.get_review(&params.reference) {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+        let review = store
+            .get_review(&params.reference)
+            .map_err(|e| e.to_string())?;
 
         let mut comments = Vec::new();
 
-        // Collect blob-anchored comments via v2 thread discovery.
         if let Ok(oid) = git2::Oid::from_str(&review.target.head)
             && let Ok(obj) = repo.find_object(oid, None)
         {
@@ -153,38 +148,53 @@ impl ForgeMcpServer {
                 if !seen.insert(blob_oid.clone()) {
                     continue;
                 }
-                if let Ok(thread_ids) = find_threads_by_object(&repo, blob_oid) {
-                    for tid in &thread_ids {
-                        if let Ok(cs) = list_thread_comments(&repo, tid) {
-                            comments.extend(cs);
+                match find_threads_by_object(&repo, blob_oid) {
+                    Ok(thread_ids) => {
+                        for tid in &thread_ids {
+                            match list_thread_comments(&repo, tid) {
+                                Ok(cs) => comments.extend(cs),
+                                Err(e) => {
+                                    eprintln!("list_thread_comments({tid}): {e}");
+                                }
+                            }
                         }
+                    }
+                    Err(e) => {
+                        eprintln!("find_threads_by_object({blob_oid}): {e}");
                     }
                 }
             }
         }
 
-        // Also collect threads anchored to the review OID itself.
-        if let Ok(thread_ids) = find_threads_by_object(&repo, &review.oid) {
-            for tid in &thread_ids {
-                if let Ok(cs) = list_thread_comments(&repo, tid) {
-                    comments.extend(cs);
+        match find_threads_by_object(&repo, &review.oid) {
+            Ok(thread_ids) => {
+                for tid in &thread_ids {
+                    match list_thread_comments(&repo, tid) {
+                        Ok(cs) => comments.extend(cs),
+                        Err(e) => {
+                            eprintln!("list_thread_comments({tid}): {e}");
+                        }
+                    }
                 }
+            }
+            Err(e) => {
+                eprintln!("find_threads_by_object({}): {e}", review.oid);
             }
         }
 
         comments.sort_by_key(|c| c.timestamp);
-        facet_json::to_string_pretty(&comments).expect("serialize")
+        facet_json::to_string_pretty(&comments).map_err(|e| e.to_string())
     }
 
     /// Create a new review.
     #[tool(
         description = "Create a new forge review targeting a git object (commit, blob, or tree)."
     )]
-    fn create_review(&self, Parameters(params): Parameters<CreateReviewParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn create_review(
+        &self,
+        Parameters(params): Parameters<CreateReviewParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         let target = ReviewTarget {
             head: params.head,
@@ -196,22 +206,26 @@ impl ForgeMcpServer {
             &target,
             params.source_ref.as_deref(),
         ) {
-            Ok(review) => facet_json::to_string_pretty(&review).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(review) => facet_json::to_string_pretty(&review).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
     /// Approve all objects in a review for a contributor.
+    ///
+    /// No authentication is performed: forge operates on a local git
+    /// repository with no multi-user auth model, so approval is
+    /// trust-the-client by design.
     #[tool(description = "Record approval of all objects in a review for a contributor UUID.")]
-    fn approve_review(&self, Parameters(params): Parameters<ApproveReviewParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn approve_review(
+        &self,
+        Parameters(params): Parameters<ApproveReviewParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         match store.approve_review(&params.reference, &params.contributor_uuid) {
-            Ok(review) => facet_json::to_string_pretty(&review).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(review) => facet_json::to_string_pretty(&review).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -219,18 +233,18 @@ impl ForgeMcpServer {
     #[tool(
         description = "Update an existing forge review by display ID or OID prefix. All fields are optional."
     )]
-    fn update_review(&self, Parameters(params): Parameters<UpdateReviewParams>) -> String {
-        let repo = match self.open_repo() {
-            Ok(r) => r,
-            Err(e) => return format!("error: {e}"),
-        };
+    fn update_review(
+        &self,
+        Parameters(params): Parameters<UpdateReviewParams>,
+    ) -> Result<String, String> {
+        let repo = self.open_repo()?;
         let store = Store::new(&repo);
         let state = match params.state.as_deref() {
             None => None,
             Some(s) => match s.parse::<ReviewState>() {
                 Ok(st) => Some(st),
                 Err(_) => {
-                    return format!("error: {}", git_forge::Error::InvalidState(s.to_string()));
+                    return Err(git_forge::Error::InvalidState(s.to_string()).to_string());
                 }
             },
         };
@@ -240,8 +254,8 @@ impl ForgeMcpServer {
             params.body.as_deref(),
             state.as_ref(),
         ) {
-            Ok(review) => facet_json::to_string_pretty(&review).expect("serialize"),
-            Err(e) => format!("error: {e}"),
+            Ok(review) => facet_json::to_string_pretty(&review).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 }
@@ -278,27 +292,29 @@ mod tests {
     #[test]
     fn update_review_changes_state() {
         let (_dir, server, head) = test_server_with_head();
-        let created = server.create_review(Parameters(super::CreateReviewParams {
-            title: "my review".to_string(),
-            head,
-            base: None,
-            body: None,
-            source_ref: None,
-        }));
-        assert!(!created.starts_with("error:"), "create failed: {created}");
+        let created = server
+            .create_review(Parameters(super::CreateReviewParams {
+                title: "my review".to_string(),
+                head,
+                base: None,
+                body: None,
+                source_ref: None,
+            }))
+            .expect("create");
 
         let oid = {
             let v: serde_json::Value = serde_json::from_str(&created).expect("parse");
             v["oid"].as_str().expect("oid").to_string()
         };
 
-        let updated = server.update_review(Parameters(super::UpdateReviewParams {
-            reference: oid,
-            title: Some("updated title".to_string()),
-            body: None,
-            state: Some("closed".to_string()),
-        }));
-        assert!(!updated.starts_with("error:"), "update failed: {updated}");
+        let updated = server
+            .update_review(Parameters(super::UpdateReviewParams {
+                reference: oid,
+                title: Some("updated title".to_string()),
+                body: None,
+                state: Some("closed".to_string()),
+            }))
+            .expect("update");
         assert!(updated.contains("updated title"));
         assert!(updated.contains("Closed"));
     }
@@ -306,13 +322,15 @@ mod tests {
     #[test]
     fn update_review_invalid_state_returns_error() {
         let (_dir, server, head) = test_server_with_head();
-        let created = server.create_review(Parameters(super::CreateReviewParams {
-            title: "state test".to_string(),
-            head,
-            base: None,
-            body: None,
-            source_ref: None,
-        }));
+        let created = server
+            .create_review(Parameters(super::CreateReviewParams {
+                title: "state test".to_string(),
+                head,
+                base: None,
+                body: None,
+                source_ref: None,
+            }))
+            .expect("create");
         let oid = {
             let v: serde_json::Value = serde_json::from_str(&created).expect("parse");
             v["oid"].as_str().expect("oid").to_string()
@@ -323,6 +341,6 @@ mod tests {
             body: None,
             state: Some("bogus".to_string()),
         }));
-        assert!(result.starts_with("error:"));
+        assert!(result.is_err());
     }
 }

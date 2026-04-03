@@ -8,5 +8,6 @@ mod issue;
 mod prompt;
 mod review;
 mod server;
+mod validate;
 
 pub use server::ForgeMcpServer;
