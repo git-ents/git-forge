@@ -2,6 +2,13 @@ use zed_extension_api::{self as zed, Command, ContextServerId, LanguageServerId,
 
 struct ForgeExtension;
 
+const LSP_BINARY: &str = "forge-lsp";
+const MCP_BINARY: &str = "forge-mcp";
+
+fn find_binary(worktree: &zed::Worktree, name: &str) -> Option<String> {
+    worktree.which(name)
+}
+
 impl zed::Extension for ForgeExtension {
     fn new() -> Self {
         Self
@@ -9,30 +16,18 @@ impl zed::Extension for ForgeExtension {
 
     fn language_server_command(
         &mut self,
-        _language_server_id: &LanguageServerId,
+        language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<Command> {
-        const BINARY_NAME: &str = "forge-lsp";
-
-        let candidate = format!("{}/target/debug/{BINARY_NAME}", worktree.root_path());
-        if std::fs::metadata(&candidate).is_ok() {
-            return Ok(Command {
-                command: candidate,
-                args: vec![],
-                env: vec![],
-            });
+        if language_server_id.as_ref() != LSP_BINARY {
+            return Err(format!("unknown language server: {}", language_server_id.as_ref()));
         }
 
-        if let Some(path) = worktree.which(BINARY_NAME) {
-            return Ok(Command {
-                command: path,
-                args: vec![],
-                env: vec![],
-            });
-        }
+        let command = find_binary(worktree, LSP_BINARY)
+            .ok_or_else(|| format!("{LSP_BINARY} not found in $PATH"))?;
 
         Ok(Command {
-            command: BINARY_NAME.to_string(),
+            command,
             args: vec![],
             env: vec![],
         })
@@ -40,37 +35,17 @@ impl zed::Extension for ForgeExtension {
 
     fn context_server_command(
         &mut self,
-        _context_server_id: &ContextServerId,
-        project: &Project,
+        context_server_id: &ContextServerId,
+        _project: &Project,
     ) -> Result<Command> {
-        let binary_name = "forge-mcp";
-
-        // Look for the binary in each worktree: first check target/debug, then $PATH.
-        for worktree_id in project.worktree_ids() {
-            let worktree = unsafe { zed::Worktree::from_handle(worktree_id as u32) };
-            let candidate = format!("{}/target/debug/{binary_name}", worktree.root_path());
-            if std::fs::metadata(&candidate).is_ok() {
-                return Ok(Command {
-                    command: candidate,
-                    args: vec![],
-                    env: vec![],
-                });
-            }
-            if let Some(path) = worktree.which(binary_name) {
-                return Ok(Command {
-                    command: path,
-                    args: vec![],
-                    env: vec![],
-                });
-            }
+        if context_server_id.as_ref() != MCP_BINARY {
+            return Err(format!("unknown context server: {}", context_server_id.as_ref()));
         }
 
-        // Last resort: bare name and hope the runtime resolves it.
-        Ok(Command {
-            command: binary_name.to_string(),
-            args: vec![],
-            env: vec![],
-        })
+        // Project only exposes worktree IDs, not Worktree handles.
+        // We cannot safely construct a Worktree from an ID (different namespaces).
+        // Fall back to bare $PATH lookup.
+        Err(format!("{MCP_BINARY} not found in $PATH"))
     }
 }
 
