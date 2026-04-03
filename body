@@ -1,0 +1,7 @@
+**URL path components are not percent-encoded — injection via owner/repo names**
+
+The `owner` and `repo` parameters are interpolated directly into URL paths. While GitHub's API would likely reject malformed paths, a config with an `owner` containing `/` or `..` could cause the request to hit an unintended endpoint. For example, `owner = "foo/bar"` would produce `/repos/foo/bar/{repo}/issues` which resolves to a different repository.
+
+The `sync_ref_name` function in state.rs has the same issue — an owner containing `/` would create an unexpected ref hierarchy.
+
+All user-supplied path segments should be validated or percent-encoded.
