@@ -2251,8 +2251,29 @@ impl Executor {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+
+        // Wait briefly for the process to exit and clean up its pidfile.
+        for _ in 0..10 {
+            if !Self::is_process_alive(pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Remove pidfile if the process didn't clean it up itself.
         let _ = std::fs::remove_file(self.pidfile_path());
-        eprintln!("forge-server stopped (pid {pid})");
+
+        if Self::is_process_alive(pid) {
+            eprintln!("forge-server (pid {pid}) did not exit, sending SIGKILL");
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        } else {
+            eprintln!("forge-server stopped (pid {pid})");
+        }
+
         Ok(())
     }
 

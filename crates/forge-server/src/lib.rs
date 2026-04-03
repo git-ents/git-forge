@@ -1,5 +1,7 @@
 //! Forge sync daemon library — coordinates import/export with remote adapters.
 
+mod pidfile;
+
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
@@ -57,6 +59,7 @@ pub fn discover_adapters(repo: &Repository) -> Result<Vec<GitHubAdapter>> {
 /// Returns an error if the tokio runtime fails to build or the sync loop
 /// encounters an unrecoverable error.
 pub fn run(repo: &Repository, config: &ServerConfig) -> Result<()> {
+    let _pid_guard = pidfile::PidGuard::acquire(repo.path())?;
     let adapters = discover_adapters(repo)?;
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
