@@ -1,0 +1,5 @@
+**Performance: byte-at-a-time generation is extremely slow for large artifacts**
+
+`gen_artifact_bytes` generates each byte individually via a weighted-index sample from the RNG. For a 50 MB shared library (`so_size` up to 50 * 1024 * 1024`), this means 50 million iterations of: RNG call -> weighted-index binary search over 256 entries -> cast -> collect. This is orders of magnitude slower than necessary.
+
+A faster approach: generate blocks of random bytes via `rng.fill(&mut buf)` and then apply a rejection/remapping step, or use the alias method for O(1) sampling. As-is, the artifact *generation* time likely dominates the benchmark setup and may be confused with the thing being measured if someone ever tries to time the full run.
