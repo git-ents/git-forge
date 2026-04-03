@@ -1,0 +1,14 @@
+The current `forge server start` spawns `forge-server` as a detached child process with stdio redirected to /dev/null. This works but is not proper daemonization — the process doesn't double-fork, detach from the session, or handle signals gracefully.
+
+Replace the subprocess spawn with `daemonix` (maintained fork of the `daemonize` crate). This would give us:
+
+- Double-fork + setsid for proper session detachment
+- Pidfile creation with exclusive flock (no races)
+- Stdio redirect to log files instead of /dev/null
+- Signal handling for clean shutdown (pair with tokio signals)
+
+Blocked by a cyclic dependency: `git-forge` cannot depend on `forge-server` (which depends on `git-forge`). Options:
+
+1. Move the `forge` binary into its own crate that depends on both `git-forge` and `forge-server`
+2. Have `forge server start` fork via daemonix, then exec the `forge-server` binary in the child
+3. Extract shared types into a leaf crate to break the cycle
