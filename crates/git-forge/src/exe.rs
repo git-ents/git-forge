@@ -702,30 +702,37 @@ impl Executor {
         Ok(entries)
     }
 
-    /// Edit sigils and sync scopes for an existing provider config entry.
+    /// Edit sigils and sync scopes for a provider config resolved from a
+    /// git remote.
     ///
     /// # Errors
-    /// Returns an error if the entry does not exist or a git operation fails.
+    /// Returns an error if the remote cannot be parsed, the config entry does
+    /// not exist, or a git operation fails.
     pub fn config_edit(
         &self,
-        provider: &str,
-        owner: &str,
-        repo: &str,
+        remote_name: &str,
         sigils: &[(String, String)],
         enable_sync: &[String],
         disable_sync: &[String],
     ) -> Result<()> {
+        let remote = self
+            .repo
+            .find_remote(remote_name)
+            .map_err(|_| Error::Config(format!("remote not found: {remote_name}")))?;
+        let url = remote
+            .url()
+            .ok_or_else(|| Error::Config(format!("remote {remote_name} has no URL")))?;
+        let (provider, owner, repo) = parse_remote_url(url)?;
         let prefix = format!("provider/{provider}/{owner}/{repo}");
 
         // Verify the entry exists by reading its sigil subtree.
         let existing = crate::refs::read_config_subtree(&self.repo, &format!("{prefix}/sigil"))?;
         if existing.is_empty() && sigils.is_empty() {
-            // Check if the entry exists at all by looking for any subtree.
             let sync_existing =
                 crate::refs::read_config_subtree(&self.repo, &format!("{prefix}/sync"))?;
             if sync_existing.is_empty() {
                 return Err(Error::Config(format!(
-                    "no config entry for {provider}/{owner}/{repo}"
+                    "no config entry for {provider}/{owner}/{repo} (from remote {remote_name})"
                 )));
             }
         }
@@ -1452,16 +1459,14 @@ impl Executor {
                 }
 
                 ConfigCommand::Edit {
-                    provider,
-                    owner,
-                    repo,
+                    remote,
                     sigils,
                     enable_sync,
                     disable_sync,
                 } => {
-                    self.config_edit(provider, owner, repo, sigils, enable_sync, disable_sync)?;
+                    self.config_edit(remote, sigils, enable_sync, disable_sync)?;
                     if !cli.json {
-                        println!("updated {provider}/{owner}/{repo}");
+                        println!("updated config for remote {remote}");
                     }
                 }
             },

@@ -95,16 +95,11 @@ pub enum ConfigCommand {
         /// Repository name.
         repo: String,
     },
-    /// Edit a provider config entry.
+    /// Edit a provider config entry (resolved from a git remote).
     Edit {
-        /// Provider name.
-        provider: String,
-
-        /// Repository owner or organization.
-        owner: String,
-
-        /// Repository name.
-        repo: String,
+        /// Remote name (default: origin).
+        #[arg(long, short = 'r', default_value = "origin")]
+        remote: String,
 
         /// Set a sigil (e.g. --sigil issue=GH#).
         #[arg(long = "sigil", value_parser = parse_key_value)]
