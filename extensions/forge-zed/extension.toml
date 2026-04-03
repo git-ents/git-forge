@@ -7,6 +7,28 @@ description = "Git Forge integration for Zed"
 
 [language_servers.forge-lsp]
 name = "Forge LSP"
-languages = ["Rust", "Markdown"]
+languages = [
+  "Rust",
+  "Python",
+  "TypeScript",
+  "JavaScript",
+  "Go",
+  "C",
+  "C++",
+  "Java",
+  "Ruby",
+  "Shell",
+  "TOML",
+  "YAML",
+  "JSON",
+  "Markdown",
+  "CSS",
+  "HTML",
+  "Swift",
+  "Kotlin",
+  "Zig",
+  "Elixir",
+  "Haskell",
+]
 
 [context_servers.forge-mcp]
