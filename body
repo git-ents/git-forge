@@ -1,0 +1,3 @@
+**Benchmarking flaw: `transfer_ms` in `run_git_fetch` includes `git init --bare`**
+
+`fetch_start` is set on line 161, but `git init --bare` happens on lines 166-171, *after* the timer starts. The init cost (creating dirs, writing HEAD, etc.) is included in `transfer_ms`. For small artifact sets this could be a significant fraction of the measured time. The timer should start after init completes.
