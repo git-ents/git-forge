@@ -1,0 +1,3 @@
+**`reindex.rs` is hardcoded to GitHub URL patterns.** `display_id_from_source` only parses `https://github.com/...` URLs. `build_sigil_map` only reads from `provider/github/...` config paths. `list_github_configs` is self-explanatory. If a user has configured a GitLab or Gitea provider (which the config system supports), reindexing will silently skip all their imported issues/reviews, assigning them unstable sequential numeric IDs instead.
+
+The `host_to_provider` function in `exe.rs` already rejects non-GitHub hosts, but the config system allows manual `forge config add gitlab ...` — creating a state where config exists but reindex ignores it.
