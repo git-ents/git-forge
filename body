@@ -1,0 +1,10 @@
+**Single adapter failure aborts the entire sync loop**
+
+`sync_one` returns `Result` and the `?` on line 86 means a transient failure (network timeout, GitHub 500, rate limit) from *one* adapter kills the entire daemon. Given this is a long-running poll loop, the expected behavior should be to log the error and continue to the next adapter, then retry on the next poll cycle. As written, a flaky GitHub API will terminate the server.
+
+Consider changing this to:
+```rust
+if let Err(e) = sync_one(repo, adapter).await {
+    eprintln!("forge-server: sync failed for adapter: {e:#}");
+}
+```
