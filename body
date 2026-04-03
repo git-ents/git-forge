@@ -1,0 +1,3 @@
+**Reindex assigns unstable local IDs.** When `reindex_issues` encounters a local issue (no `source/url`) that has no existing display ID, it assigns `next_local_id` which starts at 1 and increments. But the iteration order of `self.repo.list(ISSUE_PREFIX)` is not guaranteed to be stable across runs — if a new issue is created between two reindex calls, every subsequent local issue can get a different display ID. This silently breaks any external references to those IDs (bookmarks, CI integrations, human memory).
+
+The `next_local_id` counter also doesn't account for IDs already assigned: if the old index had local IDs `1, 2, 3` and issue `2` now gets a source/url match, the remaining local issues might get reassigned to `1, 2` — colliding with the now-sigiled former-`2`.
