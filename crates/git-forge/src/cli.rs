@@ -95,6 +95,36 @@ pub enum ConfigCommand {
         /// Repository name.
         repo: String,
     },
+    /// Edit a provider config entry.
+    Edit {
+        /// Provider name.
+        provider: String,
+
+        /// Repository owner or organization.
+        owner: String,
+
+        /// Repository name.
+        repo: String,
+
+        /// Set a sigil (e.g. --sigil issue=GH#).
+        #[arg(long = "sigil", value_parser = parse_key_value)]
+        sigils: Vec<(String, String)>,
+
+        /// Enable syncing a scope (issues, reviews).
+        #[arg(long = "enable-sync")]
+        enable_sync: Vec<String>,
+
+        /// Disable syncing a scope (issues, reviews).
+        #[arg(long = "disable-sync")]
+        disable_sync: Vec<String>,
+    },
+}
+
+fn parse_key_value(s: &str) -> std::result::Result<(String, String), String> {
+    let (key, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected KEY=VALUE, got {s}"))?;
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// Contributor subcommands.

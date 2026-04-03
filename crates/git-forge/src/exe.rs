@@ -702,6 +702,66 @@ impl Executor {
         Ok(entries)
     }
 
+    /// Edit sigils and sync scopes for an existing provider config entry.
+    ///
+    /// # Errors
+    /// Returns an error if the entry does not exist or a git operation fails.
+    pub fn config_edit(
+        &self,
+        provider: &str,
+        owner: &str,
+        repo: &str,
+        sigils: &[(String, String)],
+        enable_sync: &[String],
+        disable_sync: &[String],
+    ) -> Result<()> {
+        let prefix = format!("provider/{provider}/{owner}/{repo}");
+
+        // Verify the entry exists by reading its sigil subtree.
+        let existing = crate::refs::read_config_subtree(&self.repo, &format!("{prefix}/sigil"))?;
+        if existing.is_empty() && sigils.is_empty() {
+            // Check if the entry exists at all by looking for any subtree.
+            let sync_existing =
+                crate::refs::read_config_subtree(&self.repo, &format!("{prefix}/sync"))?;
+            if sync_existing.is_empty() {
+                return Err(Error::Config(format!(
+                    "no config entry for {provider}/{owner}/{repo}"
+                )));
+            }
+        }
+
+        for (key, value) in sigils {
+            crate::refs::write_config_blob(&self.repo, &format!("{prefix}/sigil/{key}"), value)?;
+        }
+
+        for scope in enable_sync {
+            match scope.as_str() {
+                "issues" | "reviews" => {
+                    crate::refs::write_config_blob(
+                        &self.repo,
+                        &format!("{prefix}/sync/{scope}"),
+                        "true",
+                    )?;
+                }
+                other => {
+                    return Err(Error::Config(format!("unknown sync scope: {other}")));
+                }
+            }
+        }
+        for scope in disable_sync {
+            match scope.as_str() {
+                "issues" | "reviews" => {
+                    crate::refs::remove_config_blob(&self.repo, &format!("{prefix}/sync/{scope}"))?;
+                }
+                other => {
+                    return Err(Error::Config(format!("unknown sync scope: {other}")));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Remove a provider config entry.
     ///
     /// # Errors
@@ -1388,6 +1448,20 @@ impl Executor {
                     self.config_remove(provider, owner, repo)?;
                     if !cli.json {
                         println!("removed {provider}/{owner}/{repo}");
+                    }
+                }
+
+                ConfigCommand::Edit {
+                    provider,
+                    owner,
+                    repo,
+                    sigils,
+                    enable_sync,
+                    disable_sync,
+                } => {
+                    self.config_edit(provider, owner, repo, sigils, enable_sync, disable_sync)?;
+                    if !cli.json {
+                        println!("updated {provider}/{owner}/{repo}");
                     }
                 }
             },

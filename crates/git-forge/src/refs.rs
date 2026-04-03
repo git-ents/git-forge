@@ -78,6 +78,73 @@ pub fn write_config_blob(repo: &Repository, path: &str, value: &str) -> Result<(
     Ok(())
 }
 
+/// Remove a blob at `path` from the `refs/forge/config` tree.
+///
+/// `path` is slash-separated (e.g. `provider/github/org/repo/sync/reviews`).
+/// The leaf segment is removed from its parent tree; ancestor trees are rebuilt
+/// upward. Silently succeeds if the path does not exist.
+///
+/// # Errors
+/// Returns an error if a git operation fails.
+pub fn remove_config_blob(repo: &Repository, path: &str) -> Result<()> {
+    let parent = match repo.find_reference(CONFIG) {
+        Ok(r) => r.peel_to_commit()?,
+        Err(e) if e.code() == ErrorCode::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    let root_tree = parent.tree()?;
+
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.is_empty() {
+        return Ok(());
+    }
+
+    // Walk down, collecting (segment, tree_oid) pairs for ancestors.
+    let mut pairs: Vec<(&str, git2::Oid)> = Vec::new();
+    let mut current_oid = root_tree.id();
+    for &seg in &parts[..parts.len() - 1] {
+        let tree = repo.find_tree(current_oid)?;
+        let Some(entry) = tree.get_name(seg) else {
+            return Ok(()); // path doesn't exist
+        };
+        if entry.kind() != Some(ObjectType::Tree) {
+            return Ok(());
+        }
+        pairs.push((seg, current_oid));
+        current_oid = entry.id();
+    }
+
+    // Remove the leaf from the innermost tree.
+    let leaf = parts[parts.len() - 1];
+    let inner_tree = repo.find_tree(current_oid)?;
+    if inner_tree.get_name(leaf).is_none() {
+        return Ok(()); // leaf doesn't exist
+    }
+    let mut builder = repo.treebuilder(Some(&inner_tree))?;
+    builder.remove(leaf)?;
+    let mut child_oid = builder.write()?;
+
+    // Fold back up.
+    for (seg, tree_oid) in pairs.into_iter().rev() {
+        let tree = repo.find_tree(tree_oid)?;
+        let mut b = repo.treebuilder(Some(&tree))?;
+        b.insert(seg, child_oid, 0o040_000)?;
+        child_oid = b.write()?;
+    }
+
+    let new_root = repo.find_tree(child_oid)?;
+    let sig = repo.signature()?;
+    repo.commit(
+        Some(CONFIG),
+        &sig,
+        &sig,
+        "forge: update config",
+        &new_root,
+        &[&parent],
+    )?;
+    Ok(())
+}
+
 /// Read all blob entries from a subtree at `path` under `refs/forge/config`.
 ///
 /// Returns a map of entry name → UTF-8 content. Returns an empty map when the
