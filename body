@@ -1,0 +1,3 @@
+**Correctness: shared-library generation is deterministic, not random**
+
+The comment on line 131 says "~1 in 15 crates produces a shared library" but the implementation uses `i % 15 == 0`, which is deterministic — it always picks crate 0, 15, 30, etc. This is inconsistent with the other random selection (`rng.gen_ratio(1, 4)` for build output on line 93). For a benchmark claiming to "approximate real compiled outputs," deterministic placement means the large blobs always appear at the same positions in the tree, which could bias tree-building and compression measurements. Should use `rng.gen_ratio(1, 15)` for consistency.
