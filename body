@@ -1,0 +1,5 @@
+**Adapters are discovered once at startup — config changes require restart**
+
+`discover_adapters` is called once in `run()` (line 63) and the resulting `Vec<GitHubAdapter>` is passed into the loop. If a user adds, removes, or modifies a GitHub config in `refs/forge/config` while the server is running, those changes are invisible until the daemon is restarted. This is especially surprising because `fetch_forge_refs` may pull *new* config from the remote, but the adapter list is already frozen.
+
+Consider re-discovering adapters at the top of each poll iteration, or at least after a successful fetch.
