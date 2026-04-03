@@ -1,0 +1,5 @@
+**`config.token` is always `None` after `read_github_config` — token is never populated from config**
+
+`read_github_config` hard-codes `token: None` (line 109). The token is never read from the config tree. This means the only way to authenticate is via the `GH_TOKEN` environment variable or by the caller manually setting `config.token` after construction.
+
+This isn't necessarily a bug (storing tokens in Git objects would be a security concern), but it means the `token` field on `GitHubSyncConfig` is misleading — it suggests per-remote token configuration is supported, but it's dead code from the config reader's perspective. There's no validation or warning if a user tries to store a token in the config tree.
