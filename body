@@ -1,0 +1,5 @@
+**Shelling out to `git` for fetch/push while holding a `git2::Repository` handle**
+
+The sync loop holds an open `git2::Repository` while simultaneously shelling out to `git` CLI for fetch and push operations. Both the libgit2 handle and the CLI process will be reading/writing the same `.git` directory concurrently (in the sense of overlapping lifetimes, though not truly parallel here due to single-thread).
+
+While currently safe because the CLI calls are synchronous and happen before/after adapter calls, this is architecturally fragile. If libgit2 has cached refs or index state, it won't see changes made by the CLI `git fetch`. Consider either using libgit2 for fetch/push (via `repo.find_remote()` + `remote.fetch()`), or re-opening the `Repository` handle after each fetch to ensure a fresh view of the refs.
