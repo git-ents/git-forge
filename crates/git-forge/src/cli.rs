@@ -418,17 +418,19 @@ pub enum ReviewCommand {
         revision: String,
     },
 
-    /// Check out a review into a worktree for commenting.
-    Checkout {
+    /// Start a review session: check out into a worktree and open the editor.
+    #[command(alias = "checkout")]
+    Start {
         /// Display ID or OID prefix.
         reference: String,
 
-        /// Worktree path (default: ../<repo-name>.review/<reference>).
+        /// Worktree path (default: ../<repo>@<reference>).
         path: Option<PathBuf>,
     },
 
-    /// Remove a review worktree created by `checkout`.
-    Done {
+    /// Finish a review session: remove the worktree.
+    #[command(alias = "done")]
+    Finish {
         /// Display ID or OID prefix (inferred from active worktree if omitted).
         reference: Option<String>,
     },

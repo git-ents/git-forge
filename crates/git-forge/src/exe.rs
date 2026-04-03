@@ -1564,7 +1564,7 @@ impl Executor {
                     }
                 }
 
-                ReviewCommand::Checkout { reference, path } => {
+                ReviewCommand::Start { reference, path } => {
                     let (review, wt_path) = self.checkout_review(reference, path.as_deref())?;
                     if cli.json {
                         print_review(&review, true);
@@ -1586,7 +1586,7 @@ impl Executor {
                     }
                 }
 
-                ReviewCommand::Done { reference } => {
+                ReviewCommand::Finish { reference } => {
                     let review = self.done_review(reference.as_deref())?;
                     if cli.json {
                         print_review(&review, true);
