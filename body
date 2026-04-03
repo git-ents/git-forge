@@ -1,0 +1,8 @@
+**No signal handling — unclean shutdown loses PID file cleanup on SIGTERM/SIGKILL**
+
+The `PidGuard` relies on `Drop` to clean up the PID file, but:
+1. `SIGKILL` prevents `Drop` from running — the PID file is always left behind.
+2. `SIGTERM` (the default signal from `kill`, systemd, etc.) causes immediate process termination in Rust by default — `Drop` does not run.
+3. Even `SIGINT` (Ctrl-C) behavior depends on whether the tokio runtime installs a signal handler.
+
+The server should install a `SIGTERM`/`SIGINT` handler (e.g., `tokio::signal::ctrl_c()` or `tokio::signal::unix::signal(SignalKind::terminate())`) that breaks the poll loop gracefully, allowing `PidGuard::drop` to execute. For `SIGKILL`, the stale-PID reclamation logic is the only defense — which circles back to the TOCTOU/PID-recycling issues above.
