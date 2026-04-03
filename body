@@ -1,0 +1,5 @@
+**`open_repo()` calls `Repository::discover()` on every request — no caching.**
+
+Each LSP request (diagnostics, inlay hints, code actions, execute command) calls `open_repo()`, which calls `Repository::discover()`. This re-discovers and re-opens the repository from scratch every time, performing filesystem traversal. For `did_change` this happens on every keystroke. The `repo_path` is already cached, but the `Repository` handle itself is not.
+
+While `git2::Repository` is not `Send`/`Sync` (so it can't be trivially cached in the server struct), the repeated discovery is wasteful. Consider opening the repo once per async task or caching the workdir path at minimum (currently `workdir()` also calls `open_repo()`, doubling the discovery cost in methods like `publish_all_diagnostics`).
