@@ -1,0 +1,5 @@
+**`is_draft` check is too loose — path traversal / false positives.**
+
+This checks whether *any* component is `"drafts"` and *any* component is `"forge"`, not that they appear in the expected order or position. A file at `/tmp/forge/unrelated/drafts/forge-comment-123.md` or even a user's project file at `src/forge/drafts/forge-comment-999.md` would match this predicate, causing `did_save` to treat it as a draft comment file — deleting it after processing.
+
+The check should verify the specific suffix `.git/forge/comments/drafts/` (matching `DRAFTS_DIR`) rather than testing components independently.
