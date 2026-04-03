@@ -1,0 +1,5 @@
+**`publish_all_diagnostics` never clears diagnostics for files that no longer have comments.**
+
+When a thread is resolved, `publish_all_diagnostics` is called. It publishes diagnostics for files that *currently* have comments, but it never publishes an empty diagnostic list for files that *used to* have comments but no longer do. Those files will retain stale diagnostics until the editor is restarted or the file is re-opened.
+
+The server needs to track which URIs have been published to and send empty diagnostic arrays for URIs that are no longer in the set.
