@@ -1,0 +1,5 @@
+**TOCTOU race in PID-file acquisition**
+
+There is a classic time-of-check-to-time-of-use race between reading the PID file (line 22–26) and writing the new PID (line 34). Two `forge-server` processes starting concurrently can both read the file, both decide it is stale or absent, and both write their own PID — the last writer wins but both proceed, defeating the mutual exclusion guarantee.
+
+The standard fix is to use an advisory lock (`flock`/`fcntl`) on the PID file *before* reading or writing it. `fs2::FileExt::try_lock_exclusive()` or `rustix::fs::flock` would make this atomic. The PID inside the file then becomes informational rather than the locking mechanism itself.
