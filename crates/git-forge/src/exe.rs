@@ -404,8 +404,7 @@ impl Executor {
         let default_path = workdir
             .parent()
             .unwrap_or(workdir)
-            .join(format!("{repo_name}.review"))
-            .join(&safe_label);
+            .join(format!("{repo_name}@{safe_label}"));
         let wt_path = path.unwrap_or(&default_path);
 
         // Resolve the head to a commit. If the target is a tree, create a
