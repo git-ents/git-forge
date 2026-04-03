@@ -1,0 +1,5 @@
+**`did_change` republishes diagnostics on every keystroke — performance concern.**
+
+Each character typed triggers: content store, inlay hint refresh, `open_repo()` (filesystem traversal), `hash_content` (blob write to ODB — see other comment), `find_threads_by_object` (ref scan or index lookup), and `publish_diagnostics`. This is a lot of synchronous git I/O on the hot path of typing.
+
+There is no debouncing. A user typing at 60 WPM generates ~5 events/second, each doing multiple git operations. Consider debouncing diagnostics publication, or at least deferring it to `did_save` only and keeping `did_change` limited to content tracking.
