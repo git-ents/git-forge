@@ -1,0 +1,5 @@
+**`git2::Repository` is `!Sync` — concurrent access is unsound if runtime changes**
+
+Currently this is safe because `new_current_thread()` ensures single-threaded execution. However, this is fragile: if anyone changes the runtime to multi-threaded (`new_multi_thread()`) or if an adapter internally spawns tasks, `&Repository` references passed across `.await` points could be accessed from multiple threads. The `Repository` is `Send` but not `Sync` in git2.
+
+This deserves at least a comment on the `new_current_thread()` call explaining it is load-bearing for soundness, not just a performance choice. Better yet, wrap the repo in an `Arc<Mutex<Repository>>` to make the invariant enforceable.
