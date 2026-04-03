@@ -1,0 +1,7 @@
+**Design flaw: ODB copy strategy doesn't measure what it claims**
+
+This function is labeled "Direct ODB-to-ODB copy" and described as skipping packfile negotiation, but it reads *loose objects* from a bare repo's ODB via `remote_odb.read()` and writes them as loose objects into the client ODB. In a real networked scenario, you can't call `remote_odb.read()` — you'd need some transport.
+
+The comparison is therefore misleading: it compares "read loose object bytes from local disk via libgit2 API" against "run `git fetch` over `file://` protocol." The ODB copy has no serialization, no packfile assembly/disassembly, and no network overhead — it's just memcpy with zlib decompress/recompress. This doesn't prove anything about a viable cache retrieval strategy because the access pattern can't be replicated over a network without building your own transport, at which point you're reimplementing packfiles.
+
+After the remote is repacked (line 497-508), this strategy is *not* re-run, so there's no data on how it performs when objects are in a packfile rather than loose — a significant omission since pack-backed `odb.read()` has very different performance characteristics.
