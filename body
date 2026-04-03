@@ -1,0 +1,3 @@
+**`retarget_review` does not clean up stale `objects/` pins.** When a review is retarget from old_head to new_head, new `objects/` pins are added via `Mutation::Pin`, but old `objects/` entries from the previous head are never removed. Over time, the `objects/` set grows monotonically. This means `approve_review` (which approves all objects) will approve OIDs from prior iterations that are no longer part of the review's target range.
+
+The same issue exists in `refresh_review_target`. Both methods should delete old `objects/` entries that are not in the new pin set.
