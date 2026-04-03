@@ -1,7 +1,8 @@
 {
-  "crates/git-forge": "0.0.0",
-  "crates/forge-github": "0.0.0",
-  "crates/forge-mcp": "0.0.0",
-  "crates/forge-server": "0.0.0",
-  "extensions/forge-zed": "0.0.0"
+  "crates/git-forge": "0.0.1-alpha.1",
+  "crates/forge-github": "0.0.1-alpha.1",
+  "crates/forge-mcp": "0.0.1-alpha.1",
+  "crates/forge-server": "0.0.1-alpha.1",
+  "extensions/forge-zed": "0.0.0",
+  "crates/forge-lsp": "0.0.1"
 }

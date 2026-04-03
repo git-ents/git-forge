@@ -578,7 +578,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "forge-github"
-version = "0.0.0"
+version = "0.0.1-alpha.1"
 dependencies = [
  "anyhow",
  "git-chain",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "forge-lsp"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "git-forge",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "forge-mcp"
-version = "0.0.0"
+version = "0.0.1-alpha.1"
 dependencies = [
  "anyhow",
  "facet-json",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "forge-server"
-version = "0.0.0"
+version = "0.0.1-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -799,7 +799,7 @@ dependencies = [
 
 [[package]]
 name = "git-forge"
-version = "0.0.0"
+version = "0.0.1-alpha.1"
 dependencies = [
  "clap",
  "comfy-table",
