@@ -1,0 +1,5 @@
+**`hash_content` writes a blob into the ODB as a side effect of hashing.**
+
+`repo.blob(content)` does not just hash — it actually *writes* a new blob object into the repository's object database. Every keystroke (via `did_change` -> `publish_file_diagnostics` -> `hash_content`) permanently writes a blob for the buffer's current contents into `.git/objects`. Over a long editing session this can create thousands of unreferenced loose objects, bloating the repo until `git gc` runs.
+
+Use `git2::Oid::hash_object(ObjectType::Blob, content)` or the equivalent to compute the hash without writing.
