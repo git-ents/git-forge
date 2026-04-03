@@ -1,0 +1,7 @@
+**PID recycling false negative**
+
+`process_alive` uses `kill -0` which only checks whether *a* process with that PID exists — not whether it is a `forge-server` instance. On long-lived systems PIDs wrap around, so a stale PID file whose PID has been recycled by an unrelated process will make `forge-server` refuse to start with a misleading error.
+
+This is hard to fully prevent, but mitigations include:
+- Write PID + process start time (or PID + executable path) into the file and verify both.
+- Use `flock`-based locking instead of PID-based liveness checks. If the lock is held, the process is alive — no PID reuse ambiguity.
