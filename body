@@ -1,0 +1,3 @@
+**Correctness: `dir_size_bytes` silently returns 0 on permission errors or missing dirs**
+
+Both `read_dir` and `entry.metadata()` errors are silently swallowed (via `if let Ok(...)` and `.flatten()`). For a benchmark that uses directory size to report compression ratios and repo overhead, silent underreporting would produce misleading results. At minimum this should propagate errors or `expect()` like the rest of the codebase does.
