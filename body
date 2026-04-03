@@ -1,0 +1,3 @@
+**`_language_server_id` is ignored — extension will use the same binary for any registered LSP**
+
+The `language_server_id` parameter is discarded without inspection. If a second language server were added to `extension.toml`, this method would return the same `forge-lsp` binary for both. This is fine today with a single LSP, but the parameter should at least be asserted against `"forge-lsp"` so a future misconfiguration fails loudly rather than silently launching the wrong server.
