@@ -158,7 +158,6 @@ fn run_git_fetch(
     let total_start = Instant::now();
 
     let client_dir = TempDir::new().expect("client tempdir");
-    let fetch_start = Instant::now();
 
     let remote_url = format!("file://{}", remote_path.display());
     let refspec = format!("+{ref_name}:{ref_name}");
@@ -169,6 +168,8 @@ fn run_git_fetch(
         .output()
         .expect("git init");
     assert!(output.status.success(), "git init failed");
+
+    let fetch_start = Instant::now();
 
     let mut fetch_cmd = Command::new("git");
     fetch_cmd.args(["fetch", "--no-tags"]);
@@ -208,6 +209,11 @@ fn run_git_fetch(
 /// Direct ODB-to-ODB copy — walk the commit's tree in the remote repo,
 /// copy every reachable object into the client repo's ODB, then materialize.
 /// Skips packfile negotiation entirely.
+///
+/// NOTE: This strategy accesses the remote ODB via local disk, which cannot
+/// be replicated over a network. The measurements here represent an upper
+/// bound on ODB-copy performance and are not directly comparable to the
+/// network-based strategies (git fetch, git bundle).
 fn run_odb_copy(remote_repo: &Repository, ref_name: &str, out_dir: &Path) -> FetchResult {
     let total_start = Instant::now();
 
@@ -331,7 +337,6 @@ fn run_bundle(remote_path: &Path, ref_name: &str, out_dir: &Path) -> FetchResult
 
     // Read bundle into memory (simulates network transfer).
     let bundle_bytes = std::fs::read(&bundle_path).expect("read bundle");
-    std::hint::black_box(&bundle_bytes);
 
     // Write to client-local temp (simulates writing to disk after download).
     let client_bundle = client_dir.path().join("incoming.bundle");
@@ -358,11 +363,28 @@ fn run_bundle(remote_path: &Path, ref_name: &str, out_dir: &Path) -> FetchResult
     let commit_hex = unbundle_stdout
         .lines()
         .next()
-        .and_then(|l| l.split_whitespace().next())
-        .expect("parse commit OID from unbundle output");
+        .and_then(|l| l.split_whitespace().next());
 
     let client_repo = Repository::open_bare(client_dir.path()).expect("open client repo");
-    let commit_oid = git2::Oid::from_str(commit_hex).expect("parse oid");
+
+    let is_hex_oid = |s: &str| s.len() >= 40 && s.chars().all(|c| c.is_ascii_hexdigit());
+
+    let commit_oid = match commit_hex.filter(|s| is_hex_oid(s)) {
+        Some(hex) => git2::Oid::from_str(hex).expect("parse oid"),
+        None => {
+            // Fallback: ask git for HEAD in the client repo.
+            let rev_output = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(client_dir.path())
+                .output()
+                .expect("git rev-parse HEAD");
+            assert!(rev_output.status.success(), "git rev-parse HEAD failed");
+            let hex = String::from_utf8_lossy(&rev_output.stdout)
+                .trim()
+                .to_string();
+            git2::Oid::from_str(&hex).expect("parse oid from rev-parse")
+        }
+    };
     client_repo
         .reference(ref_name, commit_oid, true, "unbundle")
         .expect("create ref");
@@ -532,6 +554,15 @@ fn main() {
                 out_dir.path(),
                 &["--depth=1"],
             )
+        },
+    );
+
+    // --- 7: direct ODB copy (packed remote) ---
+    run_strategy(
+        "direct ODB copy (packed remote, walk tree, copy objects by OID)",
+        &|_| {
+            let out_dir = TempDir::new().expect("tempdir");
+            run_odb_copy(&remote_repo.repo, ref_name, out_dir.path())
         },
     );
 

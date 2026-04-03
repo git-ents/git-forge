@@ -32,7 +32,7 @@ impl BenchRepo {
 
     /// Total on-disk size of the repository in bytes.
     pub fn size_bytes(&self) -> u64 {
-        dir_size_bytes(self.dir.path())
+        dir_size_bytes(self.dir.path()).expect("dir_size_bytes")
     }
 }
 
@@ -42,18 +42,16 @@ pub fn bench_sig() -> Signature<'static> {
 }
 
 /// Recursively compute directory size.
-pub fn dir_size_bytes(path: &Path) -> u64 {
+pub fn dir_size_bytes(path: &Path) -> std::io::Result<u64> {
     let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(m) = entry.metadata() {
-                if m.is_dir() {
-                    total += dir_size_bytes(&entry.path());
-                } else {
-                    total += m.len();
-                }
-            }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let m = entry.metadata()?;
+        if m.is_dir() {
+            total += dir_size_bytes(&entry.path())?;
+        } else {
+            total += m.len();
         }
     }
-    total
+    Ok(total)
 }

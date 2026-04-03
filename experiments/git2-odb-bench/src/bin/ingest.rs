@@ -187,10 +187,13 @@ fn main() {
     println!("{}", "-".repeat(60));
 
     // Success criterion from design doc: >100 MB/s at compression level 0.
+    // We record all iterations' throughput and use the median (discarding
+    // warmup bias) for the pass/fail check.
     let mut pass_fail: Vec<(usize, i32, f64)> = Vec::new();
 
     for &level in &compression_levels {
         for (n, artifacts) in &artifact_sets {
+            let mut throughputs = Vec::with_capacity(iterations);
             for iter in 1..=iterations {
                 let result = run_ingest(level, artifacts);
                 println!(
@@ -199,10 +202,11 @@ fn main() {
                     tp = result.throughput_mb_s,
                     sz = result.repo_size_mb,
                 );
-                if iter == iterations {
-                    pass_fail.push((*n, level, result.throughput_mb_s));
-                }
+                throughputs.push(result.throughput_mb_s);
             }
+            throughputs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = throughputs[throughputs.len() / 2];
+            pass_fail.push((*n, level, median));
         }
     }
 
