@@ -1,0 +1,5 @@
+**`comments_for_blob` filters out edits but shows both original and edited versions.**
+
+The filter `.filter(|c| c.replaces.is_none())` keeps only comments that are not edit-replacements. But it does not check whether the *original* comment has been superseded by an edit. If comment A is edited to produce comment B (where B has `replaces: Some(A.oid)`), this function returns A (the stale original) and omits B (the current version). The user sees outdated comment text in diagnostics and inlay hints.
+
+The correct logic should filter out comments that have been *replaced by* another comment, not comments that *are* replacements.
