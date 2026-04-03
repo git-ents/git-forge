@@ -42,11 +42,11 @@ pub enum Command {
         #[command(subcommand)]
         command: IssueCommand,
     },
-    /// Manage reviews.
+    /// Manage reviews (no subcommand = show status of active review).
     Review {
         /// Review subcommand.
         #[command(subcommand)]
-        command: ReviewCommand,
+        command: Option<ReviewCommand>,
     },
     /// Manage comments on issues or reviews.
     Comment {

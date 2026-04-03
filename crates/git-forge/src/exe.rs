@@ -338,6 +338,81 @@ impl Executor {
             .map(|s| s.trim().to_string())
     }
 
+    /// Print the status of the active review (unresolved comments, approvals).
+    ///
+    /// # Errors
+    /// Returns an error if not in a review worktree or a git operation fails.
+    pub fn review_status(&self, json: bool) -> Result<()> {
+        let review_oid = self
+            .active_review()
+            .ok_or_else(|| Error::Config("not in a review worktree".into()))?;
+        let review = self.store().get_review(&review_oid)?;
+
+        if json {
+            print_review(&review, true);
+            return Ok(());
+        }
+
+        let label = review
+            .display_id
+            .as_deref()
+            .unwrap_or(&review_oid[..review_oid.len().min(12)]);
+        println!("Review {label}: {}", review.title);
+        println!("State:  {:?}", review.state);
+
+        // Collect unresolved comment threads grouped by file.
+        let files = review_target_files(&self.repo, &review)?;
+        let mut unresolved_by_file: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut total_unresolved = 0usize;
+        let mut total_resolved = 0usize;
+
+        for (path, blob_oid) in &files {
+            let Ok(thread_ids) = crate::comment::find_threads_by_object(&self.repo, blob_oid)
+            else {
+                continue;
+            };
+            for tid in &thread_ids {
+                let Ok(comments) = crate::comment::list_thread_comments(&self.repo, tid) else {
+                    continue;
+                };
+                let root = comments.first();
+                if let Some(root) = root {
+                    if root.resolved {
+                        total_resolved += 1;
+                    } else {
+                        total_unresolved += 1;
+                        *unresolved_by_file.entry(path.clone()).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        println!("Threads: {total_unresolved} unresolved, {total_resolved} resolved");
+
+        if !unresolved_by_file.is_empty() {
+            println!();
+            for (path, count) in &unresolved_by_file {
+                println!("  {path}  ({count})");
+            }
+        }
+
+        if review.approvals.is_empty() {
+            println!("\nNot approved");
+        } else {
+            println!();
+            for entry in &review.approvals {
+                println!(
+                    "Approved[{}]: {}",
+                    &entry.oid[..entry.oid.len().min(12)],
+                    entry.approvers.join(", ")
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Check out a review into a git worktree.
     ///
     /// Creates a worktree at `path` (or a default location) with the review's
@@ -1427,7 +1502,12 @@ impl Executor {
                 }
             },
 
-            Command::Review { command } => match command {
+            Command::Review { command: None } => {
+                self.review_status(cli.json)?;
+            }
+            Command::Review {
+                command: Some(command),
+            } => match command {
                 ReviewCommand::New {
                     title,
                     body,
