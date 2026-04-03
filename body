@@ -1,0 +1,3 @@
+**Correctness: `black_box` on a reference does nothing useful**
+
+`std::hint::black_box(&bundle_bytes)` takes a reference to the `Vec<u8>` and discards the result. This prevents the compiler from optimizing away the *reference*, not the read. The `fs::read` return value is already bound to `bundle_bytes` which is used later in `fs::write`, so the compiler cannot eliminate it anyway. The `black_box` call is a no-op here — it neither prevents optimization (already impossible) nor forces the data to be touched (it only black-boxes a pointer, not the contents).
