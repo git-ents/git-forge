@@ -1,0 +1,5 @@
+**`draft_path` uses nanosecond timestamp — collisions and non-uniqueness.**
+
+`SystemTime::now().duration_since(UNIX_EPOCH).as_nanos()` is not guaranteed to be unique across calls. On fast hardware or if the clock has low resolution, two rapid calls to `draft_path()` (e.g., user triggers two "new comment" actions quickly) will produce the same filename. The second `open_draft` will silently overwrite the first pending comment's file via `overwrite: Some(true)`, and the first `PendingComment` entry in the `pending` map will be orphaned — it can never be saved because its draft file was clobbered.
+
+Use a UUID or atomic counter instead of a timestamp.
