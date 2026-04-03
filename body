@@ -1,0 +1,3 @@
+**Potential panic: `bundle unbundle` stdout parsing is fragile**
+
+Line 358-362 parses the commit OID from the first whitespace-delimited token of the first line of `git bundle unbundle` stdout. This format is not documented as stable in git. If a future git version changes the output format, adds a header line, or emits progress info to stdout, this will panic with "parse commit OID from unbundle output". Consider using `git rev-parse` on the ref instead, or at least validating the parsed string looks like a hex OID before calling `Oid::from_str`.
