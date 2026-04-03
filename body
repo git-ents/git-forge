@@ -1,0 +1,5 @@
+**`is_branch_name` false-positives on SHA-256 hex strings shorter than 40 chars**
+
+The function only rejects strings that are exactly 40 or 64 hex characters. A 7-character abbreviated SHA (common in Git output) like `"a1b2c3d"` would pass this check and be sent to GitHub as a head ref for PR creation, which would fail with a confusing API error.
+
+More broadly, this heuristic cannot distinguish between a branch named `"abc123"` (6 hex chars) and an abbreviated commit hash. A positive check (e.g., asking the Git repo whether the ref exists as a branch) would be more robust.
