@@ -1,0 +1,5 @@
+**Pagination has no upper bound — a malicious or buggy API could loop forever**
+
+All pagination loops (here and in `fetch_issue_comments`, `fetch_pulls`, `fetch_review_comments`) terminate only when the API returns fewer than 100 items. If the API consistently returns exactly 100 items (e.g., a repo with exactly N*100 issues, or an API bug/attack that always returns 100), the loop runs forever. There's also no guard against `page` overflowing `u32`.
+
+Consider adding a maximum page count (e.g., 1000 pages = 100k items) as a safety valve.
