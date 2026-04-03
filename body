@@ -1,0 +1,3 @@
+**Benchmarking flaw: `.d` files are generated with the binary artifact byte distribution**
+
+Dependency files (`.d`) are real-world ASCII text (Makefile-format dependency lists), not binary blobs. Generating them with the same `gen_artifact_bytes` weighted distribution (which has 40x weight on null bytes) means they'll compress like binary data, not like text. This inflates the measured repo size and penalizes compression benchmarks. A separate text-like distribution (or just actual `.d`-format content) would give more representative results.
