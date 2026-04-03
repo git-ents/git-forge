@@ -1,0 +1,3 @@
+**`find_contributor_by_handle` and `resolve_handle` do a full table scan.** Every call to `find_contributor_by_handle` calls `list_contributors()`, which iterates all refs under `refs/forge/contributors/`, reads each one, parses the tree, and compares the handle. This is called on every contributor mutation (add/remove name, email, role, key, rename) to verify the handle exists, and again during `create_contributor` to check uniqueness. Two linear scans per write operation.
+
+For a repository with many contributors, this degrades badly. An index from handle to UUID (similar to the issue/review display-ID index) would make this O(1) instead of O(n).
