@@ -1,0 +1,5 @@
+**Benchmarking flaw: artifact data is regenerated from the same seed but ingest timing includes blob generation**
+
+`run_ingest` receives a reference to pre-generated `BuildArtifacts`, but on every iteration it creates a brand-new `BenchRepo` (with a fresh temp directory) and re-writes the same blobs. The `start` timer on line 54 fires *before* the blob-writing loop begins, which is correct for measuring ingest — but the real problem is that across iterations, the OS page cache already holds the `artifact.data` `Vec<u8>` contents in hot memory. The first iteration pays the cost of touching those pages; subsequent iterations benefit from warm caches. This inflates the measured throughput for iterations 2+.
+
+More critically, the benchmark only records the *last* iteration's throughput for the pass/fail check (line 202: `if iter == iterations`). This means the "best case warm cache" number is what gets evaluated against the 100 MB/s threshold, not a median or worst-case. A real benchmark should either report the median, or explicitly discard warmup runs and label them as such.
