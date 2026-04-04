@@ -125,7 +125,7 @@ pub fn fetch_forge_refs(repo_path: &Path, remote: &str) {
     for refspec in SYNC_REF_PREFIXES {
         match Command::new("git")
             .args([OsStr::new("-C"), repo_path.as_os_str()])
-            .args(["fetch", remote, refspec])
+            .args(["fetch", "--no-prune", remote, refspec])
             .output()
         {
             Ok(output) if output.status.success() => {}
