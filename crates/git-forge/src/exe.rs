@@ -2371,7 +2371,8 @@ fn print_issue(issue: &Issue, json: bool) {
         return;
     }
     let id = issue.display_id.as_deref().unwrap_or(&issue.oid);
-    println!("issue #{id}");
+    let prefix = if id.starts_with('#') { "" } else { "#" };
+    println!("issue {prefix}{id}");
     println!("title:     {}", issue.title);
     println!("state:     {}", issue.state.as_str());
     if !issue.labels.is_empty() {
@@ -2482,7 +2483,8 @@ fn print_review(review: &Review, json: bool) {
         return;
     }
     let id = review.display_id.as_deref().unwrap_or(&review.oid);
-    println!("review #{id}");
+    let prefix = if id.starts_with('#') { "" } else { "#" };
+    println!("review {prefix}{id}");
     println!("title:       {}", review.title);
     println!("state:       {}", review.state.as_str());
     println!(
