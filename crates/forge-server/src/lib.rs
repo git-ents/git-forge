@@ -33,7 +33,7 @@ pub const SYNC_REF_PREFIXES: &[&str] = &[
     "refs/forge/reviews/*:refs/forge/reviews/*",
     "refs/forge/comments/*:refs/forge/comments/*",
     "refs/forge/contributors/*:refs/forge/contributors/*",
-    "refs/forge/index/*:refs/forge/index/*",
+    "+refs/forge/index/*:refs/forge/index/*",
 ];
 
 /// Discover GitHub adapters from the repository's forge config.
