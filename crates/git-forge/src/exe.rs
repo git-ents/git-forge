@@ -1728,6 +1728,9 @@ impl Executor {
                 }
 
                 ReviewCommand::List { state } => {
+                    let all_flag = state
+                        .as_deref()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("all"));
                     let states: Vec<ReviewState> = state
                         .as_deref()
                         .filter(|s| !s.eq_ignore_ascii_case("all"))
@@ -1737,15 +1740,15 @@ impl Executor {
                                 .collect::<Result<Vec<_>>>()
                         })
                         .transpose()?
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| vec![ReviewState::Open, ReviewState::Draft]);
 
-                    let reviews = if states.len() == 1 {
+                    let reviews = if all_flag {
+                        self.list_reviews(None)?
+                    } else if states.len() == 1 {
                         self.list_reviews(Some(&states[0]))?
                     } else {
                         let mut all = self.list_reviews(None)?;
-                        if !states.is_empty() {
-                            all.retain(|r| states.contains(&r.state));
-                        }
+                        all.retain(|r| states.contains(&r.state));
                         all
                     };
 
@@ -1755,7 +1758,8 @@ impl Executor {
                             facet_json::to_string_pretty(&reviews).expect("serialize")
                         );
                     } else {
-                        print_review_list(&reviews);
+                        let color = std::io::stdout().is_terminal();
+                        print_review_list(&reviews, color);
                     }
                 }
 
@@ -2718,17 +2722,69 @@ fn review_coverage(
     Ok((covered, uncovered))
 }
 
-fn print_review_list(reviews: &[Review]) {
+fn print_review_list(reviews: &[Review], color: bool) {
+    use comfy_table::{Cell, Table};
+
     if reviews.is_empty() {
         println!("No reviews found.");
         return;
     }
-    println!("Showing {} reviews\n", reviews.len());
-    for review in reviews {
-        let id = review
-            .display_id
-            .as_deref()
-            .unwrap_or(&review.oid[..review.oid.len().min(12)]);
-        println!("{id}  {}  {}", review.state.as_str(), review.title);
+
+    let mut sorted: Vec<&Review> = reviews.iter().collect();
+    sorted.sort_by(|a, b| {
+        let (sa, na) = parse_display_id(a.display_id.as_deref().unwrap_or(""));
+        let (sb, nb) = parse_display_id(b.display_id.as_deref().unwrap_or(""));
+        sa.cmp(sb).then(na.cmp(&nb))
+    });
+
+    println!("Showing {} reviews\n", sorted.len());
+
+    let max_num: u64 = sorted
+        .iter()
+        .filter_map(|r| r.display_id.as_deref())
+        .map(|id| parse_display_id(id).1)
+        .max()
+        .unwrap_or(0);
+    let pad = max_num.max(1).ilog10() as usize + 1;
+
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::NOTHING);
+
+    for review in sorted {
+        let (id_str, state_str) = if color {
+            let state_color = match review.state {
+                ReviewState::Open => "\x1b[32m",
+                ReviewState::Draft => "\x1b[33m",
+                ReviewState::Closed => "\x1b[35m",
+                ReviewState::Merged => "\x1b[36m",
+            };
+            let reset = "\x1b[0m";
+            let dim = "\x1b[2m";
+            let bold = "\x1b[1m";
+
+            let id = if let Some(id) = review.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{dim}{prefix}{reset}{state_color}{bold}{num:0>pad$}{reset}")
+            } else {
+                format!("{dim}{}{reset}", &review.oid[..8])
+            };
+            let state = format!("{state_color}{}{reset}", review.state.as_str());
+            (id, state)
+        } else {
+            let id = if let Some(id) = review.display_id.as_deref() {
+                let (prefix, num) = parse_display_id(id);
+                format!("{prefix}{num:0>pad$}")
+            } else {
+                review.oid[..8].to_string()
+            };
+            (id, review.state.as_str().to_string())
+        };
+
+        table.add_row(vec![
+            Cell::new(&id_str),
+            Cell::new(state_str),
+            Cell::new(&review.title),
+        ]);
     }
+    println!("{table}");
 }

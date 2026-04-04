@@ -107,6 +107,36 @@ pub(crate) fn resolve_oid(
         }
     }
 
+    // Bare-number fallback: if input is purely decimal digits with no sigil,
+    // scan the index for any key whose numeric suffix matches.
+    if !oid_or_id.is_empty()
+        && oid_or_id.chars().all(|c| c.is_ascii_digit())
+        && let Some(index) = index
+    {
+        let target: u64 = oid_or_id
+            .trim_start_matches('0')
+            .parse()
+            .unwrap_or(u64::MAX);
+        let mut hits: Vec<String> = index
+            .iter()
+            .filter_map(|(k, v)| {
+                if v.len() != 40 || !is_hex(v) {
+                    return None;
+                }
+                let num_start = k.find(|c: char| c.is_ascii_digit()).unwrap_or(k.len());
+                let n: u64 = k[num_start..].trim_start_matches('0').parse().ok()?;
+                if n == target { Some(v.clone()) } else { None }
+            })
+            .collect();
+        hits.sort();
+        hits.dedup();
+        match hits.len() {
+            1 => return Ok(hits.into_iter().next().unwrap()),
+            n if n > 1 => return Err(Error::Ambiguous(oid_or_id.to_string())),
+            _ => {}
+        }
+    }
+
     // Hex string → match against known OIDs
     if is_hex(oid_or_id) && !oid_or_id.is_empty() {
         // Short pure-numeric hex strings (< 4 chars) are ambiguous with
