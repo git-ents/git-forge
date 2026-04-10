@@ -577,3 +577,135 @@ fn revoke_approval_removes_entries() {
     let fetched = store.get_review(&review.oid).unwrap();
     assert!(fetched.approvals.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// approved_oids / approvals-by-oid index
+// ---------------------------------------------------------------------------
+
+/// Build a tree containing a single blob and return `(tree_oid, blob_oid)`.
+fn make_tree_with_blob(repo: &Repository, content: &[u8]) -> (String, String) {
+    let blob_oid = repo.blob(content).unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    builder.insert("file", blob_oid, 0o100_644).unwrap();
+    let tree_oid = builder.write().unwrap();
+    (tree_oid.to_string(), blob_oid.to_string())
+}
+
+/// Build a commit whose tree contains a single blob; return `(commit_oid, blob_oid)`.
+fn make_commit_with_blob(repo: &Repository, content: &[u8]) -> (String, String) {
+    let (tree_oid_str, blob_oid) = make_tree_with_blob(repo, content);
+    let tree = repo
+        .find_tree(git2::Oid::from_str(&tree_oid_str).unwrap())
+        .unwrap();
+    let sig = git2::Signature::now("test", "test@test.com").unwrap();
+    let parent = repo.head().unwrap().peel_to_commit().unwrap();
+    let commit_oid = repo
+        .commit(None, &sig, &sig, "test commit", &tree, &[&parent])
+        .unwrap();
+    (commit_oid.to_string(), blob_oid)
+}
+
+#[test]
+fn approved_oids_contains_blob_after_approve() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let blob = make_blob(&repo, b"hello");
+    let target = ReviewTarget {
+        head: blob.clone(),
+        base: None,
+        path: None,
+    };
+    let review = store
+        .create_review("Blob review", "", &target, None)
+        .unwrap();
+
+    let uuid = "00000000-0000-7000-8000-000000000010";
+    store.approve_review(&review.oid, uuid).unwrap();
+
+    let oids = store.approved_oids().unwrap();
+    assert!(
+        oids.contains(&blob),
+        "approved blob OID should appear in approved_oids"
+    );
+}
+
+#[test]
+fn approved_oids_flattens_tree_to_blobs() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let (tree_oid, blob_oid) = make_tree_with_blob(&repo, b"tree content");
+    let target = ReviewTarget {
+        head: tree_oid.clone(),
+        base: None,
+        path: None,
+    };
+    let review = store
+        .create_review("Tree review", "", &target, None)
+        .unwrap();
+
+    let uuid = "00000000-0000-7000-8000-000000000011";
+    store.approve_review(&review.oid, uuid).unwrap();
+
+    let oids = store.approved_oids().unwrap();
+    assert!(
+        oids.contains(&blob_oid),
+        "blob inside approved tree should appear in approved_oids"
+    );
+    assert!(
+        !oids.contains(&tree_oid),
+        "tree OID itself should not appear in approved_oids"
+    );
+}
+
+#[test]
+fn approved_oids_flattens_commit_to_blobs() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let (commit_oid, blob_oid) = make_commit_with_blob(&repo, b"commit content");
+    let target = ReviewTarget {
+        head: commit_oid.clone(),
+        base: None,
+        path: None,
+    };
+    let review = store
+        .create_review("Commit review", "", &target, None)
+        .unwrap();
+
+    let uuid = "00000000-0000-7000-8000-000000000012";
+    store.approve_review(&review.oid, uuid).unwrap();
+
+    let oids = store.approved_oids().unwrap();
+    assert!(
+        oids.contains(&blob_oid),
+        "blob in approved commit's tree should appear in approved_oids"
+    );
+    assert!(
+        !oids.contains(&commit_oid),
+        "commit OID itself should not appear in approved_oids"
+    );
+}
+
+#[test]
+fn approved_oids_empty_after_revoke() {
+    let (_dir, repo) = test_repo();
+    let store = Store::new(&repo);
+    let blob = make_blob(&repo, b"revoke me");
+    let target = ReviewTarget {
+        head: blob.clone(),
+        base: None,
+        path: None,
+    };
+    let review = store
+        .create_review("Revoke index", "", &target, None)
+        .unwrap();
+
+    let uuid = "00000000-0000-7000-8000-000000000013";
+    store.approve_review(&review.oid, uuid).unwrap();
+    store.revoke_approval(&review.oid, uuid).unwrap();
+
+    let oids = store.approved_oids().unwrap();
+    assert!(
+        oids.is_empty(),
+        "approved_oids should be empty after revocation"
+    );
+}

@@ -22,6 +22,8 @@ pub const COMMENTS_BY_COMMENT_INDEX: &str = "refs/forge/index/comments-by-commen
 pub const ISSUE_INDEX: &str = "refs/forge/meta/index/issues";
 /// Index ref mapping display IDs ↔ OIDs for reviews.
 pub const REVIEW_INDEX: &str = "refs/forge/meta/index/reviews";
+/// Derived index mapping approved blob OIDs to approver UUIDs.
+pub const APPROVALS_INDEX: &str = "refs/forge/index/approvals-by-oid";
 /// Configuration ref for provider settings.
 pub const CONFIG: &str = "refs/forge/config";
 

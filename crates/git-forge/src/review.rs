@@ -28,7 +28,7 @@ use git2::{ObjectType, Repository};
 use serde::Serialize;
 
 use crate::index::{display_id_for_oid, index_upsert, read_index, resolve_oid};
-use crate::refs::{REVIEW_INDEX, REVIEW_PREFIX};
+use crate::refs::{APPROVALS_INDEX, REVIEW_INDEX, REVIEW_PREFIX};
 use crate::{Error, Result, Store};
 
 // ── state ─────────────────────────────────────────────────────────────────────
@@ -231,6 +231,137 @@ fn read_objects_subtree(repo: &Repository, ref_name: &str) -> Vec<String> {
 /// For a commit range (`base..head`), yields every commit reachable from
 /// `head` that is not reachable from `base`.  For a single object, yields
 /// just that object.  Silently omits objects not present locally.
+/// Rebuild the `refs/forge/index/approvals-by-oid` derived index.
+///
+/// Walks every review, expands each approved OID to its constituent blobs
+/// (tree and commit approvals flatten recursively), and writes the result as
+/// a fanout tree: `<oid[0..2]>/<oid[2..]>` → newline-separated approver UUIDs.
+fn rebuild_approvals_index(repo: &Repository) -> Result<()> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let known_oids = repo.list(REVIEW_PREFIX)?;
+    let mut by_blob: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for ref_oid in &known_oids {
+        let ref_name = format!("{REVIEW_PREFIX}{ref_oid}");
+        let Ok(entry) = repo.read(&ref_name) else {
+            continue;
+        };
+        let Ok(review) = review_from_entry(repo, &entry, &ref_name, None) else {
+            continue;
+        };
+        for approval in review.approvals {
+            if approval.approvers.is_empty() {
+                continue;
+            }
+            let Ok(oid) = git2::Oid::from_str(&approval.oid) else {
+                continue;
+            };
+            for blob_oid in collect_blobs(repo, oid) {
+                let entry = by_blob.entry(blob_oid).or_default();
+                for approver in &approval.approvers {
+                    entry.insert(approver.clone());
+                }
+            }
+        }
+    }
+
+    let mut root_builder = repo.treebuilder(None)?;
+    let mut by_prefix: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
+    for (oid, approvers) in &by_blob {
+        if oid.len() < 3 {
+            continue;
+        }
+        let (prefix, rest) = oid.split_at(2);
+        by_prefix
+            .entry(prefix.to_string())
+            .or_default()
+            .insert(rest.to_string(), approvers.clone());
+    }
+    for (prefix, entries) in &by_prefix {
+        let mut dir_builder = repo.treebuilder(None)?;
+        for (rest, approvers) in entries {
+            let content: String = approvers.iter().fold(String::new(), |mut acc, a| {
+                acc.push_str(a);
+                acc.push('\n');
+                acc
+            });
+            let blob_oid = repo.blob(content.as_bytes())?;
+            dir_builder.insert(rest, blob_oid, 0o100_644)?;
+        }
+        let dir_oid = dir_builder.write()?;
+        root_builder.insert(prefix, dir_oid, 0o040_000)?;
+    }
+
+    let root_tree_oid = root_builder.write()?;
+    let root_tree = repo.find_tree(root_tree_oid)?;
+    let sig = repo.signature()?;
+    let parent = repo
+        .find_reference(APPROVALS_INDEX)
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
+    repo.commit(
+        Some(APPROVALS_INDEX),
+        &sig,
+        &sig,
+        "forge: rebuild approvals-by-oid index",
+        &root_tree,
+        &parents,
+    )?;
+    Ok(())
+}
+
+/// Recursively collect all blob OIDs reachable from `oid`.
+///
+/// - Blob → `[oid]`
+/// - Tree → all blobs in the tree, recursively
+/// - Commit → blobs reachable from the commit's tree
+///
+/// Any object that cannot be resolved is silently skipped.
+fn collect_blobs(repo: &Repository, oid: git2::Oid) -> Vec<String> {
+    let Ok(obj) = repo.find_object(oid, None) else {
+        return vec![];
+    };
+    match obj.kind() {
+        Some(ObjectType::Blob) => vec![oid.to_string()],
+        Some(ObjectType::Tree) => {
+            let Ok(tree) = repo.find_tree(oid) else {
+                return vec![];
+            };
+            let mut blobs = Vec::new();
+            collect_blobs_from_tree(repo, &tree, &mut blobs);
+            blobs
+        }
+        Some(ObjectType::Commit) => {
+            let Ok(commit) = repo.find_commit(oid) else {
+                return vec![];
+            };
+            let Ok(tree) = commit.tree() else {
+                return vec![];
+            };
+            let mut blobs = Vec::new();
+            collect_blobs_from_tree(repo, &tree, &mut blobs);
+            blobs
+        }
+        _ => vec![],
+    }
+}
+
+fn collect_blobs_from_tree(repo: &Repository, tree: &git2::Tree<'_>, out: &mut Vec<String>) {
+    for entry in tree {
+        match entry.kind() {
+            Some(ObjectType::Blob) => out.push(entry.id().to_string()),
+            Some(ObjectType::Tree) => {
+                if let Ok(subtree) = repo.find_tree(entry.id()) {
+                    collect_blobs_from_tree(repo, &subtree, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn enumerate_pins(
     repo: &Repository,
     target: &ReviewTarget,
@@ -696,6 +827,7 @@ impl Store<'_> {
             .collect();
 
         let entry = self.repo.update(&ref_name, &mutations, "approve review")?;
+        rebuild_approvals_index(self.repo)?;
         let display_id = display_id_for_oid(index.as_ref(), &oid);
         review_from_entry(self.repo, &entry, &ref_name, display_id)
     }
@@ -758,31 +890,58 @@ impl Store<'_> {
             .collect();
 
         let entry = self.repo.update(&ref_name, &mutations, "revoke approval")?;
+        rebuild_approvals_index(self.repo)?;
         let display_id = display_id_for_oid(index.as_ref(), &oid);
         review_from_entry(self.repo, &entry, &ref_name, display_id)
     }
 
-    /// Return the set of object OIDs that have at least one approval in any
-    /// review.
-    ///
-    /// Scans review refs directly. The `refs/forge/index/approvals-by-oid`
-    /// derived index (Phase 5 optimization) is not yet written; this method
-    /// is the authoritative fallback.
+    /// Return the set of blob OIDs that have at least one approval across all
+    /// reviews. Reads from the `refs/forge/index/approvals-by-oid` derived
+    /// index; falls back to a full review scan if the index is absent.
     ///
     /// # Errors
     /// Returns an error if a git operation fails.
-    //
-    // TODO: O(n*m) — loads every review and walks every approval entry.
-    // This will hit a performance cliff once the review count grows.
-    // Needs a derived `approvals-by-oid` index to avoid the full scan.
     pub fn approved_oids(&self) -> Result<std::collections::HashSet<String>> {
-        let reviews = self.list_reviews()?;
-        let mut set = std::collections::HashSet::new();
-        for review in reviews {
-            for entry in review.approvals {
-                if !entry.approvers.is_empty() {
-                    set.insert(entry.oid);
+        use git2::ErrorCode;
+
+        let reference = match self.repo.find_reference(APPROVALS_INDEX) {
+            Ok(r) => r,
+            Err(e) if e.code() == ErrorCode::NotFound => {
+                // Index not yet built; fall back to full scan.
+                let reviews = self.list_reviews()?;
+                let mut set = std::collections::HashSet::new();
+                for review in reviews {
+                    for entry in review.approvals {
+                        if !entry.approvers.is_empty() {
+                            let Ok(oid) = git2::Oid::from_str(&entry.oid) else {
+                                continue;
+                            };
+                            for blob_oid in collect_blobs(self.repo, oid) {
+                                set.insert(blob_oid);
+                            }
+                        }
+                    }
                 }
+                return Ok(set);
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        let tree = reference.peel_to_commit()?.tree()?;
+        let mut set = std::collections::HashSet::new();
+        for dir_entry in &tree {
+            let Some(prefix) = dir_entry.name() else {
+                continue;
+            };
+            if dir_entry.kind() != Some(ObjectType::Tree) {
+                continue;
+            }
+            let dir_tree = self.repo.find_tree(dir_entry.id())?;
+            for leaf in &dir_tree {
+                let Some(rest) = leaf.name() else {
+                    continue;
+                };
+                set.insert(format!("{prefix}{rest}"));
             }
         }
         Ok(set)
