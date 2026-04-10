@@ -48,6 +48,16 @@ pub enum Command {
         #[command(subcommand)]
         command: Option<ReviewCommand>,
     },
+    /// Approve a git object, creating a review if none exists.
+    Approve {
+        /// Git object spec: raw OID, `HEAD:<path>`, or any revspec (e.g. `HEAD`).
+        spec: String,
+
+        /// Review title (used only when creating a new review; defaults to short OID).
+        #[arg(long)]
+        title: Option<String>,
+    },
+
     /// Manage comments on issues or reviews.
     Comment {
         /// Comment subcommand.

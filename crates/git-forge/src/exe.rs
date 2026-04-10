@@ -182,6 +182,38 @@ impl Executor {
         self.store().approve_review(reference, contributor_uuid)
     }
 
+    /// Find the first open review whose head matches `oid`, or create one.
+    ///
+    /// # Errors
+    /// Returns an error if a git operation fails.
+    pub fn find_or_create_review_for_oid(&self, oid: &str, title: Option<&str>) -> Result<Review> {
+        let store = self.store();
+        if let Some(review) = store
+            .list_reviews()?
+            .into_iter()
+            .find(|r| r.target.head == oid && r.state == crate::review::ReviewState::Open)
+        {
+            return Ok(review);
+        }
+        let default_title;
+        let title = if let Some(t) = title {
+            t
+        } else {
+            default_title = format!("Review {}", &oid[..oid.len().min(12)]);
+            &default_title
+        };
+        store.create_review(
+            title,
+            "",
+            &crate::review::ReviewTarget {
+                head: oid.to_string(),
+                base: None,
+                path: None,
+            },
+            None,
+        )
+    }
+
     /// Revoke the current user's approval on a review.
     ///
     /// # Errors
@@ -1947,6 +1979,14 @@ impl Executor {
                     }
                 }
             },
+
+            Command::Approve { spec, title } => {
+                let oid = self.resolve_head(spec, cli.allow_dirty)?;
+                let uuid = current_contributor_uuid(&self.repo, &self.store())?;
+                let review = self.find_or_create_review_for_oid(&oid, title.as_deref())?;
+                let review = self.approve_review(&review.oid, &uuid)?;
+                print_review(&review, cli.json);
+            }
 
             Command::Issue { command } => match command {
                 IssueCommand::New {
