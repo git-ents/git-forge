@@ -240,8 +240,11 @@ fn enumerate_pins(
     if let Some(base_str) = &target.base {
         let base_oid = git2::Oid::from_str(base_str)?;
         let mut walk = repo.revwalk()?;
-        walk.push(head_oid)?;
-        walk.hide(base_oid)?;
+        if walk.push(head_oid).is_err() {
+            return Ok(vec![]);
+        }
+        // hide is best-effort: if base doesn't exist locally, walk from head only
+        let _ = walk.hide(base_oid);
         Ok(walk
             .flatten()
             .map(|oid| {
@@ -250,7 +253,9 @@ fn enumerate_pins(
             })
             .collect())
     } else {
-        let obj = repo.find_object(head_oid, None)?;
+        let Ok(obj) = repo.find_object(head_oid, None) else {
+            return Ok(vec![]);
+        };
         Ok(vec![(
             target.head.clone(),
             head_oid,
