@@ -28,7 +28,7 @@ use crate::{Error, Result, Store};
 // ── subtree helpers ─────────────────────────────────────────────────────────
 
 /// Validate that `key` is safe to use as a single git tree entry name.
-fn validate_entry_name(key: &str) -> Result<()> {
+pub(crate) fn validate_entry_name(key: &str) -> Result<()> {
     if key.is_empty() || key.contains('/') || key.contains('\0') {
         return Err(Error::Config(format!(
             "invalid entry name {key:?}: must be non-empty with no slashes or NUL bytes"
@@ -39,7 +39,7 @@ fn validate_entry_name(key: &str) -> Result<()> {
 
 /// Insert `blob_oid` as `subtree_name/key` into `root_tree`, returning the
 /// new root tree OID.  Creates the subtree if it doesn't exist yet.
-fn insert_into_subtree(
+pub(crate) fn insert_into_subtree(
     repo: &Repository,
     root_tree: &git2::Tree<'_>,
     subtree_name: &str,
@@ -61,7 +61,7 @@ fn insert_into_subtree(
 
 /// Remove a single entry from a subtree within `root_tree`, returning the new
 /// root tree OID.
-fn drop_from_subtree(
+pub(crate) fn drop_from_subtree(
     repo: &Repository,
     root_tree: &git2::Tree<'_>,
     subtree_name: &str,
@@ -215,7 +215,11 @@ fn read_contributor(repo: &Repository, id: &ContributorId) -> Result<Option<Cont
 }
 
 /// Collect the entry names under `subtree_name` in `tree`.
-fn read_subtree_keys(repo: &Repository, tree: &git2::Tree<'_>, subtree_name: &str) -> Vec<String> {
+pub(crate) fn read_subtree_keys(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    subtree_name: &str,
+) -> Vec<String> {
     let Some(entry) = tree.get_name(subtree_name) else {
         return Vec::new();
     };
