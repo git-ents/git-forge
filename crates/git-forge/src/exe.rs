@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::cli::CommentStateFilter;
 use crate::comment::{
-    Anchor, Comment, create_thread, find_threads_by_object, list_all_thread_ids,
+    Anchor, Comment, create_thread, find_threads_by_object, list_all_thread_ids, list_comments_in,
     list_thread_comments, reply_to_thread, resolve_thread, thread_is_resolved,
 };
 use crate::issue::{Issue, IssueState};
@@ -1778,7 +1778,12 @@ impl Executor {
                     print_comment(&result, cli.json);
                 }
 
-                CommentCommand::List { on, all, state } => {
+                CommentCommand::List {
+                    on,
+                    in_rev,
+                    all,
+                    state,
+                } => {
                     let comments = if *all {
                         let thread_ids = list_all_thread_ids(&self.repo)?;
                         let mut acc = Vec::new();
@@ -1796,9 +1801,13 @@ impl Executor {
                         }
                         acc.sort_by_key(|c| c.timestamp);
                         acc
+                    } else if let Some(rev) = in_rev {
+                        list_comments_in(&self.repo, rev)?
                     } else {
-                        let oid = self
-                            .resolve_anchor_spec(on.as_deref().expect("--on or --all required"))?;
+                        let oid = self.resolve_anchor_spec(
+                            on.as_deref()
+                                .expect("clap group requires --on, --in, or --all"),
+                        )?;
                         self.list_comments_on(&oid)?
                     };
                     if cli.json {

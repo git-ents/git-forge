@@ -415,14 +415,25 @@ pub enum CommentCommand {
 
     /// List comment threads.
     ///
-    /// Use `--on` to scope to one git object, or `--all` to list across the
-    /// whole repository.  With `--all`, `--state` filters by resolved state
-    /// (default: `active`).
-    #[command(group(clap::ArgGroup::new("target").required(true).args(["on", "all"])))]
+    /// Use `--on` to scope to one git object, `--in` to aggregate all comments
+    /// reachable from a commit (defaults to HEAD), or `--all` to list across
+    /// the whole repository.  With `--all`, `--state` filters by resolved
+    /// state (default: `active`).
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["on", "in_rev", "all"])))]
     List {
         /// Anchor spec: raw OID, `HEAD:<path>`, `issue:<id>`, or `review:<id>`.
         #[arg(long, group = "target")]
         on: Option<String>,
+
+        /// Commit rev whose reachable tree to search (default: `HEAD`).
+        #[arg(
+            long = "in",
+            value_name = "REV",
+            group = "target",
+            num_args = 0..=1,
+            default_missing_value = "HEAD"
+        )]
+        in_rev: Option<String>,
 
         /// List threads across the entire repository.
         #[arg(long, group = "target")]

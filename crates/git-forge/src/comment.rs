@@ -1,6 +1,6 @@
 //! Comment chains backed by `git-chain`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use facet::Facet;
 use git_chain::{Chain, ChainEntry};
@@ -600,6 +600,39 @@ pub fn thread_is_resolved(repo: &Repository, thread_id: &str) -> Result<bool> {
         let (_, trailers) = parse_trailers(&e.message);
         trailers.get("Resolved").is_some_and(|v| v == "true")
     }))
+}
+
+/// List all comments anchored to any object reachable from a commit.
+///
+/// Resolves `rev` to a commit, walks its full tree recursively, and
+/// aggregates comments anchored to the commit itself, the root tree, and
+/// every blob and subtree within it.  Results are sorted by timestamp.
+///
+/// # Errors
+/// Returns an error if `rev` cannot be resolved or a git operation fails.
+pub fn list_comments_in(repo: &Repository, rev: &str) -> Result<Vec<Comment>> {
+    let obj = repo.revparse_single(rev)?;
+    let commit = obj.peel_to_commit()?;
+    let tree = commit.tree()?;
+
+    let mut oids = BTreeSet::new();
+    oids.insert(commit.id().to_string());
+    oids.insert(tree.id().to_string());
+    tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+        oids.insert(entry.id().to_string());
+        git2::TreeWalkResult::Ok
+    })?;
+
+    let mut comments = Vec::new();
+    for oid in &oids {
+        let thread_ids = find_threads_by_object(repo, oid)?;
+        for tid in &thread_ids {
+            let cs = list_thread_comments(repo, tid)?;
+            comments.extend(cs);
+        }
+    }
+    comments.sort_by_key(|c| c.timestamp);
+    Ok(comments)
 }
 
 /// List all thread UUIDs in the repository.
