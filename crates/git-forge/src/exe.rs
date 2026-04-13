@@ -2520,82 +2520,104 @@ fn print_comment(comment: &Comment, json: bool) {
         );
         return;
     }
-    println!("comment {}", &comment.oid[..comment.oid.len().min(8)]);
-    println!(
-        "author:  {} <{}>",
-        comment.author_name, comment.author_email
-    );
-    if comment.resolved {
-        println!("resolved");
-    }
-    if let Some(ref r) = comment.replaces {
-        println!("replaces: {}", &r[..8.min(r.len())]);
-    }
-    if !comment.body.is_empty() {
-        println!();
-        println!("{}", render_markdown(&comment.body));
+    let color = std::io::stdout().is_terminal();
+    print_comment_node(comment, 0, color);
+}
+
+fn walk_comment_tree(
+    ordered: &[&Comment],
+    children: &std::collections::HashMap<usize, Vec<usize>>,
+    idx: usize,
+    depth: usize,
+    color: bool,
+) {
+    print_comment_node(ordered[idx], depth, color);
+    if let Some(kids) = children.get(&idx) {
+        for &kid in kids {
+            walk_comment_tree(ordered, children, kid, depth + 1, color);
+        }
     }
 }
 
 fn print_comment_list(comments: &[Comment], color: bool) {
-    use comfy_table::{Cell, Table};
+    use std::collections::HashMap;
 
     if comments.is_empty() {
         println!("No comments.");
         return;
     }
 
-    println!("Showing {} comments\n", comments.len());
+    // Sort by timestamp so replies always appear after their parents chronologically.
+    let mut ordered: Vec<&Comment> = comments.iter().collect();
+    ordered.sort_by_key(|c| c.timestamp);
 
-    let mut table = Table::new();
-    table.load_preset(comfy_table::presets::NOTHING);
+    // Map OID → position in `ordered`.
+    let oid_to_idx: HashMap<&str, usize> = ordered
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.oid.as_str(), i))
+        .collect();
 
-    for c in comments {
-        let short = &c.oid[..c.oid.len().min(8)];
-        let preview: String = render_markdown(
-            &c.body
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(72)
-                .collect::<String>(),
-        );
+    // Build parent → children map and collect roots.
+    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut roots: Vec<usize> = Vec::new();
 
-        let (id_str, author_str) = if color {
-            let dim = "\x1b[2m";
-            let reset = "\x1b[0m";
-            let yellow = "\x1b[33m";
-            let reply_prefix = if c.reply_to.is_some() {
-                format!("{dim}↳{reset} ")
-            } else {
-                String::new()
-            };
-            let resolved_suffix = if c.resolved {
-                format!(" {dim}[resolved]{reset}")
-            } else {
-                String::new()
-            };
-            (
-                format!("{reply_prefix}{dim}{short}{reset}{resolved_suffix}"),
-                format!("{yellow}{}{reset}", c.author_name),
-            )
-        } else {
-            let reply_prefix = if c.reply_to.is_some() { "↳ " } else { "" };
-            let resolved_suffix = if c.resolved { " [resolved]" } else { "" };
-            (
-                format!("{reply_prefix}{short}{resolved_suffix}"),
-                c.author_name.clone(),
-            )
-        };
-
-        table.add_row(vec![
-            Cell::new(&id_str),
-            Cell::new(author_str),
-            Cell::new(preview),
-        ]);
+    for (i, c) in ordered.iter().enumerate() {
+        match c.reply_to.as_deref().and_then(|rt| oid_to_idx.get(rt)) {
+            Some(&parent_idx) => children.entry(parent_idx).or_default().push(i),
+            None => roots.push(i),
+        }
     }
-    println!("{table}");
+
+    for root_idx in roots {
+        walk_comment_tree(&ordered, &children, root_idx, 0, color);
+    }
+}
+
+fn print_comment_node(c: &Comment, depth: usize, color: bool) {
+    let indent = "  ".repeat(depth);
+    let short = &c.oid[..c.oid.len().min(8)];
+    let ts = format_timestamp(c.timestamp);
+
+    if color {
+        let dim = "\x1b[2m";
+        let yellow = "\x1b[33m";
+        let reset = "\x1b[0m";
+        let resolved = if c.resolved {
+            format!("  {dim}[resolved]{reset}")
+        } else {
+            String::new()
+        };
+        println!(
+            "{indent}{dim}{short}{reset}  {yellow}{}{reset}  {dim}{ts}{reset}{resolved}",
+            c.author_name
+        );
+    } else {
+        let resolved = if c.resolved { "  [resolved]" } else { "" };
+        println!("{indent}{short}  {}  {ts}{resolved}", c.author_name);
+    }
+
+    if !c.body.is_empty() {
+        let rendered = render_markdown_block(&c.body);
+        for line in rendered.lines() {
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                println!();
+            } else {
+                println!("{indent}  {trimmed}");
+            }
+        }
+    }
+    println!();
+}
+
+/// Format a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC).
+fn format_timestamp(ts: i64) -> String {
+    use chrono::{DateTime, Utc};
+    DateTime::<Utc>::from_timestamp(ts, 0).map_or_else(
+        || ts.to_string(),
+        |dt| dt.format("%Y-%m-%d %H:%M").to_string(),
+    )
 }
 
 #[cfg(feature = "cli")]
@@ -2605,6 +2627,16 @@ fn render_markdown(text: &str) -> String {
 
 #[cfg(not(feature = "cli"))]
 fn render_markdown(text: &str) -> String {
+    text.to_string()
+}
+
+#[cfg(feature = "cli")]
+fn render_markdown_block(text: &str) -> String {
+    format!("{}", termimad::term_text(text))
+}
+
+#[cfg(not(feature = "cli"))]
+fn render_markdown_block(text: &str) -> String {
     text.to_string()
 }
 

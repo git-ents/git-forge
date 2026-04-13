@@ -31,6 +31,7 @@ clap = { workspace = true, optional = true }
 inquire = { workspace = true, optional = true }
 comfy-table = { workspace = true, optional = true }
 termimad = { version = "0.34", optional = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
