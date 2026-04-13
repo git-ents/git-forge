@@ -1,0 +1,7 @@
+///
+/// # Errors
+/// Returns an error if the ref does not exist.
+pub fn list_thread_comments(repo: &Repository, thread_id: &str) -> Result<Vec<Comment>> {
+    let ref_name = comment_thread_ref(thread_id);
+    let entries = repo.walk(&ref_name, None)?;
+    let comments: Vec<Comment> = entries
