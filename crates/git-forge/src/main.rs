@@ -1,5 +1,7 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
+use std::io::{IsTerminal, Write as _};
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use gix_forge::{Issue, Review, ReviewTarget};
@@ -17,6 +19,13 @@ enum Command {
     Issue(IssueCommand),
     #[command(subcommand)]
     Review(ReviewCommand),
+    Install(InstallArgs),
+}
+
+#[derive(Args)]
+struct InstallArgs {
+    #[arg(short = 'i', long = "interactive")]
+    interactive: bool,
 }
 
 #[derive(Subcommand)]
@@ -84,6 +93,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Issue(command) => run_issue(&repo, command)?,
         Command::Review(command) => run_review(&repo, command)?,
+        Command::Install(args) => run_install(&repo, args)?,
     }
 
     Ok(())
@@ -115,6 +125,56 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
+    let mut installed = false;
+
+    if should_install(args.interactive, "issue schema")? {
+        println!("{} {}", Issue::KIND, gix_forge::ensure_issue_schema(repo)?);
+        installed = true;
+    }
+
+    if should_install(args.interactive, "review schema")? {
+        println!(
+            "{} {}",
+            Review::KIND,
+            gix_forge::ensure_review_schema(repo)?
+        );
+        installed = true;
+    }
+
+    if !installed {
+        bail!("no schemas selected for installation");
+    }
+
+    Ok(())
+}
+
+fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
+    if !interactive {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("--interactive requires a terminal");
+    }
+
+    loop {
+        eprint!("install {prompt}? [Y/n]: ");
+        std::io::stderr().flush()?;
+
+        let mut input = String::new();
+        let read = std::io::stdin().read_line(&mut input)?;
+        if read == 0 {
+            bail!("unexpected end of input");
+        }
+
+        match input.trim().to_ascii_lowercase().as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => eprintln!("please answer y or n"),
+        }
+    }
 }
 
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {

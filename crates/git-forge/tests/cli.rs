@@ -40,6 +40,17 @@ fn bare_cli_lists_groups() {
 }
 
 #[test]
+fn install_publishes_forge_schemas() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (out, err, ok) = run(dir.path(), &["install"]);
+    assert!(ok, "install failed: {err}");
+    assert!(out.contains("issue "), "install output: {out}");
+    assert!(out.contains("review "), "install output: {out}");
+}
+
+#[test]
 fn issue_put_get_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

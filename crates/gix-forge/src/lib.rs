@@ -102,6 +102,16 @@ pub struct Review {
     pub target: ReviewTarget,
 }
 
+pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
+    let store = gix_store::Store::open(repo);
+    Issue::ensure_schema(&store)
+}
+
+pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
+    let store = gix_store::Store::open(repo);
+    Review::ensure_schema(&store)
+}
+
 impl Review {
     /// The `gix-store` kind this entity is published under.
     pub const KIND: &'static str = "review";
