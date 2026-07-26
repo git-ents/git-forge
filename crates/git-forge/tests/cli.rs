@@ -244,3 +244,108 @@ fn review_new_get_list_log_and_remove() {
     let (_, _, ok) = run(path, &get_args);
     assert!(!ok, "review get after rm should fail");
 }
+
+#[test]
+fn query_sugar_filters_by_people_and_keyword() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+
+    let issue_id = create_origin_commit(path);
+    let (_, err, ok) = run(
+        path,
+        &[
+            "issue",
+            "new",
+            "--body",
+            "release blocker",
+            "--assignee",
+            "alice",
+            "--reporter",
+            "bob",
+        ],
+    );
+    assert!(ok, "issue new failed: {err}");
+
+    let review_id = create_origin_commit(path);
+    let (_, err, ok) = run(
+        path,
+        &[
+            "review",
+            "new",
+            "--body",
+            "release reviewed",
+            "--reviewer",
+            "carol",
+            "--requester",
+            "dave",
+            "--target",
+            "commit:deadbeef",
+        ],
+    );
+    assert!(ok, "review new failed: {err}");
+
+    let (out, err, ok) = run(path, &["query", "assignee", "alice"]);
+    assert!(ok, "query assignee failed: {err}");
+    assert_eq!(out.trim(), issue_id);
+
+    let (out, err, ok) = run(path, &["query", "reviewer", "carol"]);
+    assert!(ok, "query reviewer failed: {err}");
+    assert_eq!(out.trim(), review_id);
+
+    let (out, err, ok) = run(path, &["query", "requester", "dave"]);
+    assert!(ok, "query requester failed: {err}");
+    assert_eq!(out.trim(), review_id);
+
+    let (out, err, ok) = run(path, &["query", "keyword", "release"]);
+    assert!(ok, "query keyword failed: {err}");
+    assert!(
+        out.contains(&format!("issue:{issue_id}")),
+        "query keyword output: {out}"
+    );
+    assert!(
+        out.contains(&format!("review:{review_id}")),
+        "query keyword output: {out}"
+    );
+
+    let (out, err, ok) = run(path, &["query", "title", "reviewed"]);
+    assert!(ok, "query title alias failed: {err}");
+    assert_eq!(out.trim(), format!("review:{review_id}"));
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "query",
+            "find",
+            "--assignee",
+            "alice",
+            "--keyword",
+            "blocker",
+        ],
+    );
+    assert!(ok, "query find issue filter failed: {err}");
+    assert_eq!(out.trim(), format!("issue:{issue_id}"));
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "query",
+            "find",
+            "--reviewer",
+            "carol",
+            "--requester",
+            "dave",
+            "--title",
+            "reviewed",
+        ],
+    );
+    assert!(ok, "query find review filter failed: {err}");
+    assert_eq!(out.trim(), format!("review:{review_id}"));
+
+    let (_, err, ok) = run(path, &["query", "find"]);
+    assert!(!ok, "query find without filters should fail");
+    assert!(
+        err.contains("requires at least one filter"),
+        "query find without filters stderr: {err}"
+    );
+}

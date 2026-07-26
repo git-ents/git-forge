@@ -92,6 +92,31 @@ enum QueryCommand {
         #[arg(long, value_delimiter = ',')]
         select: Vec<String>,
     },
+    Assignee {
+        name: String,
+    },
+    Reviewer {
+        name: String,
+    },
+    Requester {
+        name: String,
+    },
+    #[command(visible_alias = "title")]
+    Keyword {
+        value: String,
+    },
+    Find {
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        requester: Option<String>,
+        #[arg(long)]
+        keyword: Option<String>,
+        #[arg(long, conflicts_with = "keyword")]
+        title: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -311,6 +336,116 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
             (None, None) => bail!("run requires either a predicate or --goal"),
             (Some(_), Some(_)) => unreachable!("clap rejects predicate with --goal"),
         },
+        QueryCommand::Assignee { name } => {
+            let ids = Issue::list(repo)?;
+            for id in ids {
+                if let Some(issue) = Issue::load_from_repo(repo, &id)?
+                    && issue.assignees.iter().any(|assignee| assignee == &name)
+                {
+                    println!("{}", issue.id);
+                }
+            }
+        }
+        QueryCommand::Reviewer { name } => {
+            let ids = Review::list(repo)?;
+            for id in ids {
+                if let Some(review) = Review::load_from_repo(repo, &id)?
+                    && review.reviewers.iter().any(|reviewer| reviewer == &name)
+                {
+                    println!("{}", review.id);
+                }
+            }
+        }
+        QueryCommand::Requester { name } => {
+            let ids = Review::list(repo)?;
+            for id in ids {
+                if let Some(review) = Review::load_from_repo(repo, &id)?
+                    && review.requesters.iter().any(|requester| requester == &name)
+                {
+                    println!("{}", review.id);
+                }
+            }
+        }
+        QueryCommand::Keyword { value } => {
+            let needle = value.to_ascii_lowercase();
+
+            let issue_ids = Issue::list(repo)?;
+            for id in issue_ids {
+                if let Some(issue) = Issue::load_from_repo(repo, &id)?
+                    && issue.body.to_ascii_lowercase().contains(&needle)
+                {
+                    println!("issue:{}", issue.id);
+                }
+            }
+
+            let review_ids = Review::list(repo)?;
+            for id in review_ids {
+                if let Some(review) = Review::load_from_repo(repo, &id)?
+                    && review.body.to_ascii_lowercase().contains(&needle)
+                {
+                    println!("review:{}", review.id);
+                }
+            }
+        }
+        QueryCommand::Find {
+            assignee,
+            reviewer,
+            requester,
+            keyword,
+            title,
+        } => {
+            let needle = keyword.or(title).map(|value| value.to_ascii_lowercase());
+            if assignee.is_none() && reviewer.is_none() && requester.is_none() && needle.is_none() {
+                bail!(
+                    "query find requires at least one filter: --assignee, --reviewer, --requester, --keyword, or --title"
+                );
+            }
+
+            let issue_ids = Issue::list(repo)?;
+            for id in issue_ids {
+                if let Some(issue) = Issue::load_from_repo(repo, &id)? {
+                    if let Some(name) = &assignee
+                        && !issue.assignees.iter().any(|a| a == name)
+                    {
+                        continue;
+                    }
+                    if reviewer.is_some() || requester.is_some() {
+                        continue;
+                    }
+                    if let Some(needle) = &needle
+                        && !issue.body.to_ascii_lowercase().contains(needle)
+                    {
+                        continue;
+                    }
+                    println!("issue:{}", issue.id);
+                }
+            }
+
+            let review_ids = Review::list(repo)?;
+            for id in review_ids {
+                if let Some(review) = Review::load_from_repo(repo, &id)? {
+                    if assignee.is_some() {
+                        continue;
+                    }
+                    if let Some(name) = &reviewer
+                        && !review.reviewers.iter().any(|r| r == name)
+                    {
+                        continue;
+                    }
+                    if let Some(name) = &requester
+                        && !review.requesters.iter().any(|r| r == name)
+                    {
+                        continue;
+                    }
+                    if let Some(needle) = &needle
+                        && !review.body.to_ascii_lowercase().contains(needle)
+                    {
+                        continue;
+                    }
+                    println!("review:{}", review.id);
+                }
+            }
+        }
     }
     Ok(())
 }
