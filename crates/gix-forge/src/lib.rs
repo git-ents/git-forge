@@ -1,7 +1,7 @@
 //! Core logic for git-forge.
 
 use facet::Facet;
-use gix::ObjectId;
+use gix::{ObjectId, Repository};
 use gix_comment::{Binding, Comments};
 
 pub use gix_comment::{Comment, State as CommentState};
@@ -60,6 +60,37 @@ impl Issue {
         };
         Ok(Some(facet_value::from_value(value)?))
     }
+
+    /// Ensure schema and save to the repository-backed store.
+    pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::ensure_schema(&store)?;
+        self.save(&store)
+    }
+
+    /// Load an issue from the repository-backed store.
+    pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Issue>, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::load(&store, id)
+    }
+
+    /// List issue ids in the repository-backed store.
+    pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.list(Self::KIND)?)
+    }
+
+    /// List issue version history, newest first.
+    pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.history(Self::KIND, id)?)
+    }
+
+    /// Delete an issue by id.
+    pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.delete(Self::KIND, id)?)
+    }
 }
 
 #[derive(Debug, Facet)]
@@ -94,6 +125,37 @@ impl Review {
             return Ok(None);
         };
         Ok(Some(facet_value::from_value(value)?))
+    }
+
+    /// Ensure schema and save to the repository-backed store.
+    pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::ensure_schema(&store)?;
+        self.save(&store)
+    }
+
+    /// Load a review from the repository-backed store.
+    pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Review>, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::load(&store, id)
+    }
+
+    /// List review ids in the repository-backed store.
+    pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.list(Self::KIND)?)
+    }
+
+    /// List review version history, newest first.
+    pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.history(Self::KIND, id)?)
+    }
+
+    /// Delete a review by id.
+    pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.delete(Self::KIND, id)?)
     }
 }
 
