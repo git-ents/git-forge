@@ -35,7 +35,7 @@ enum IssueCommand {
     New(IssueNewArgs),
     #[command(hide = true)]
     Put(IssueNewArgs),
-    Get {
+    Show {
         id: String,
     },
     #[command(visible_alias = "ls")]
@@ -67,7 +67,7 @@ enum ReviewCommand {
     New(ReviewNewArgs),
     #[command(hide = true)]
     Put(ReviewNewArgs),
-    Get {
+    Show {
         id: String,
     },
     #[command(visible_alias = "ls")]
@@ -170,7 +170,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
             };
             println!("{}", issue.save_in_repo(repo)?);
         }
-        IssueCommand::Get { id } => {
+        IssueCommand::Show { id } => {
             let issue =
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             print_issue(&issue);
@@ -497,7 +497,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
             };
             println!("{}", review.save_in_repo(repo)?);
         }
-        ReviewCommand::Get { id } => {
+        ReviewCommand::Show { id } => {
             let review =
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
             print_review(&review);

@@ -73,7 +73,7 @@ fn install_publishes_forge_schemas() {
 }
 
 #[test]
-fn issue_new_get_list_log_and_remove() {
+fn issue_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
@@ -98,17 +98,17 @@ fn issue_new_get_list_log_and_remove() {
     );
     assert!(ok, "issue new failed: {err}");
 
-    let get_args = vec!["issue", "get", issue_id.as_str()];
-    let (out, err, ok) = run(path, &get_args);
-    assert!(ok, "issue get failed: {err}");
+    let show_args = vec!["issue", "show", issue_id.as_str()];
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "issue show failed: {err}");
     assert!(
         out.contains(&format!("id: {issue_id}")),
-        "issue get output: {out}"
+        "issue show output: {out}"
     );
-    assert!(out.contains("body: first body"), "issue get output: {out}");
-    assert!(out.contains("labels: bug,p1"), "issue get output: {out}");
-    assert!(out.contains("assignees: alice"), "issue get output: {out}");
-    assert!(out.contains("reporters: bob"), "issue get output: {out}");
+    assert!(out.contains("body: first body"), "issue show output: {out}");
+    assert!(out.contains("labels: bug,p1"), "issue show output: {out}");
+    assert!(out.contains("assignees: alice"), "issue show output: {out}");
+    assert!(out.contains("reporters: bob"), "issue show output: {out}");
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
@@ -141,8 +141,8 @@ fn issue_new_get_list_log_and_remove() {
     let (_, err, ok) = run(path, &rm_args);
     assert!(ok, "issue rm failed: {err}");
 
-    let (_, _, ok) = run(path, &get_args);
-    assert!(!ok, "issue get after rm should fail");
+    let (_, _, ok) = run(path, &show_args);
+    assert!(!ok, "issue show after rm should fail");
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn review_new_interactive_requires_terminal() {
 }
 
 #[test]
-fn review_new_get_list_log_and_remove() {
+fn review_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
@@ -195,19 +195,28 @@ fn review_new_get_list_log_and_remove() {
     );
     assert!(ok, "review new failed: {err}");
 
-    let get_args = vec!["review", "get", review_id.as_str()];
-    let (out, err, ok) = run(path, &get_args);
-    assert!(ok, "review get failed: {err}");
+    let show_args = vec!["review", "show", review_id.as_str()];
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "review show failed: {err}");
     assert!(
         out.contains(&format!("id: {review_id}")),
-        "review get output: {out}"
+        "review show output: {out}"
     );
-    assert!(out.contains("body: looks good"), "review get output: {out}");
-    assert!(out.contains("reviewers: carol"), "review get output: {out}");
-    assert!(out.contains("requesters: dave"), "review get output: {out}");
+    assert!(
+        out.contains("body: looks good"),
+        "review show output: {out}"
+    );
+    assert!(
+        out.contains("reviewers: carol"),
+        "review show output: {out}"
+    );
+    assert!(
+        out.contains("requesters: dave"),
+        "review show output: {out}"
+    );
     assert!(
         out.contains("target: commit:deadbeef"),
-        "review get output: {out}"
+        "review show output: {out}"
     );
 
     let (out, err, ok) = run(path, &["review", "ls"]);
@@ -241,8 +250,8 @@ fn review_new_get_list_log_and_remove() {
     let (_, err, ok) = run(path, &rm_args);
     assert!(ok, "review rm failed: {err}");
 
-    let (_, _, ok) = run(path, &get_args);
-    assert!(!ok, "review get after rm should fail");
+    let (_, _, ok) = run(path, &show_args);
+    assert!(!ok, "review show after rm should fail");
 }
 
 #[test]
