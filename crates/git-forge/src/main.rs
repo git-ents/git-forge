@@ -4,7 +4,7 @@ use std::io::{IsTerminal, Write as _};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use gix_forge::{Issue, Review, ReviewTarget};
+use gix_forge::{Issue, QueryValue, Review, ReviewTarget};
 
 #[derive(Parser)]
 #[command(name = "git-forge", about = "Forge software on Git", version)]
@@ -19,6 +19,8 @@ enum Command {
     Issue(IssueCommand),
     #[command(subcommand)]
     Review(ReviewCommand),
+    #[command(subcommand)]
+    Query(QueryCommand),
     Install(InstallArgs),
 }
 
@@ -73,6 +75,20 @@ enum ReviewCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum QueryCommand {
+    Run {
+        #[arg(conflicts_with = "goal")]
+        predicate: Option<String>,
+        #[arg(long = "bind", value_name = "POSITION=VALUE")]
+        bind: Vec<String>,
+        #[arg(long)]
+        goal: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        select: Vec<String>,
+    },
+}
+
 #[derive(Args)]
 struct ReviewPutArgs {
     id: String,
@@ -93,6 +109,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Issue(command) => run_issue(&repo, command)?,
         Command::Review(command) => run_review(&repo, command)?,
+        Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
     }
 
@@ -144,6 +161,12 @@ fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
         installed = true;
     }
 
+    if should_install(args.interactive, "query rules")? {
+        gix_forge::install_builtin_query_rules(repo)?;
+        println!("query rules review");
+        installed = true;
+    }
+
     if !installed {
         bail!("no schemas selected for installation");
     }
@@ -174,6 +197,60 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
             "n" | "no" => return Ok(false),
             _ => eprintln!("please answer y or n"),
         }
+    }
+}
+
+fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
+    match command {
+        QueryCommand::Run {
+            predicate,
+            bind,
+            goal,
+            select,
+        } => match (predicate, goal) {
+            (Some(predicate), None) => {
+                let bound: Vec<(usize, QueryValue)> = bind
+                    .iter()
+                    .map(|item| parse_bind(item))
+                    .collect::<Result<_>>()?;
+                let rows = gix_forge::query_predicate(repo, &predicate, &bound)?;
+                print_rows(&rows);
+            }
+            (None, Some(goal)) => {
+                if select.is_empty() {
+                    bail!("--goal requires --select");
+                }
+                let select: Vec<&str> = select.iter().map(String::as_str).collect();
+                let rows = gix_forge::query_goal(repo, &goal, &select)?;
+                print_rows(&rows);
+            }
+            (None, None) => bail!("run requires either a predicate or --goal"),
+            (Some(_), Some(_)) => unreachable!("clap rejects predicate with --goal"),
+        },
+    }
+    Ok(())
+}
+
+fn parse_bind(arg: &str) -> Result<(usize, QueryValue)> {
+    let (position, value) = arg
+        .split_once('=')
+        .with_context(|| format!("`--bind {arg}` is not `<position>=<value>`"))?;
+    let position: usize = position
+        .parse()
+        .with_context(|| format!("`--bind {arg}`: `{position}` is not a position"))?;
+
+    let value = match value.parse::<i64>() {
+        Ok(n) => QueryValue::Int(n),
+        Err(_) => QueryValue::Sym(value.into()),
+    };
+
+    Ok((position, value))
+}
+
+fn print_rows(rows: &[Vec<QueryValue>]) {
+    for row in rows {
+        let cols: Vec<String> = row.iter().map(ToString::to_string).collect();
+        println!("{}", cols.join("\t"));
     }
 }
 

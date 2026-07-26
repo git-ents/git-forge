@@ -5,6 +5,7 @@ use gix::{ObjectId, Repository};
 use gix_comment::{Binding, Comments};
 
 pub use gix_comment::{Comment, State as CommentState};
+pub use gix_query::Value as QueryValue;
 
 /// Errors from `gix-forge`'s storage operations.
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +22,12 @@ pub enum Error {
     /// Failed to derive a `SchemaDoc` for a type.
     #[error("failed to derive schema: {0}")]
     Schema(String),
+    /// Failed at the `gix-query` layer.
+    #[error(transparent)]
+    Query(#[from] gix_query::QueryError),
+    /// Failed storing built-in query rules.
+    #[error("failed to install built-in query rules: {0}")]
+    QueryRules(String),
 }
 
 // =========================================================================
@@ -111,6 +118,63 @@ pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
     let store = gix_store::Store::open(repo);
     Review::ensure_schema(&store)
 }
+
+pub fn install_builtin_query_rules(repo: &Repository) -> Result<(), Error> {
+    let store = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
+    store
+        .put("review", BUILTIN_REVIEW_RULES)
+        .map_err(|e| Error::QueryRules(e.to_string()))?;
+    gix_query::checked_program(repo)?;
+    Ok(())
+}
+
+pub fn query_goal(
+    repo: &Repository,
+    goal: &str,
+    select: &[&str],
+) -> Result<Vec<Vec<QueryValue>>, Error> {
+    Ok(gix_query::run_goal(repo, goal, select)?)
+}
+
+pub fn query_predicate(
+    repo: &Repository,
+    predicate: &str,
+    bound: &[(usize, QueryValue)],
+) -> Result<Vec<Vec<QueryValue>>, Error> {
+    Ok(gix_query::run_predicate(repo, predicate, bound)?)
+}
+
+const BUILTIN_REVIEW_RULES: &str = r#"
+pub reviewed(B).
+pub unreviewed(Rev, B).
+pub blocked(Rev).
+pub mergeable(Rev).
+
+active_member(M) :- member(M), !revoked(M).
+review(C)        :- claim(C), kind(C, review).
+
+approved_by(B, M) :- review(C), target(C, B), signer(C, M),
+                     verdict(C, approve), active_member(M).
+rejected(B)       :- review(C), target(C, B), verdict(C, reject),
+                     signer(C, M), active_member(M).
+reviewed(B)       :- approved_by(B, _).
+
+reach(Rev, Rev) :- commit(Rev).
+reach(Rev, C)   :- reach(Rev, X), parent(X, C).
+
+has_parent(C)         :- parent(C, _).
+introduced(Rev, B, C) :- reach(Rev, C), tree_entry(C, P, B),
+                         parent(C, Pc), !tree_entry(Pc, P, B).
+introduced(Rev, B, C) :- reach(Rev, C), tree_entry(C, P, B), !has_parent(C).
+authored(Rev, B, M)   :- introduced(Rev, B, C), author(C, M).
+self_approved(Rev, B, M) :- authored(Rev, B, M), approved_by(B, M).
+
+unreviewed(Rev, B) :- tree_entry(Rev, _, B), !reviewed(B).
+blocked(Rev)       :- unreviewed(Rev, _).
+blocked(Rev)       :- tree_entry(Rev, _, B), rejected(B).
+blocked(Rev)       :- tree_entry(Rev, _, B), self_approved(Rev, B, _).
+mergeable(Rev)     :- commit(Rev), !blocked(Rev).
+"#;
 
 impl Review {
     /// The `gix-store` kind this entity is published under.
