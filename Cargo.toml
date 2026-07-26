@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/gix-forge",
+    "crates/git-forge",
+    "crates/test-support",
+]
+resolver = "3"
