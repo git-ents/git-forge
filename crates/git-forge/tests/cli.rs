@@ -137,25 +137,15 @@ fn issue_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "issue show failed: {err}");
     assert!(
-        out.contains(&format!("issue {issue_id}")),
+        out.contains(&format!("#{issue_id}")),
         "issue show output: {out}"
     );
+    assert!(out.contains("first body"), "issue show output: {out}");
     assert!(
-        out.contains("body:\n  first body"),
+        out.contains("Assigned to alice"),
         "issue show output: {out}"
     );
-    assert!(
-        out.contains("labels:\n  - bug\n  - p1"),
-        "issue show output: {out}"
-    );
-    assert!(
-        out.contains("assignees:\n  - alice"),
-        "issue show output: {out}"
-    );
-    assert!(
-        out.contains("reporters:\n  - bob"),
-        "issue show output: {out}"
-    );
+    assert!(out.contains("Reported by bob"), "issue show output: {out}");
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
@@ -208,11 +198,8 @@ fn issue_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
 
     let (out, err, ok) = run(path, &["issue", "show", "abc1"]);
     assert!(ok, "issue show by unique prefix failed: {err}");
-    assert!(out.contains("issue abc11111"), "issue show output: {out}");
-    assert!(
-        out.contains("body:\n  first body"),
-        "issue show output: {out}"
-    );
+    assert!(out.contains("#abc11111"), "issue show output: {out}");
+    assert!(out.contains("first body"), "issue show output: {out}");
 
     let (_, err, ok) = run(path, &["issue", "show", "abc"]);
     assert!(!ok, "issue show should fail on ambiguous prefix");
@@ -251,10 +238,7 @@ fn review_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
     let (out, err, ok) = run(path, &["review", "show", "def1"]);
     assert!(ok, "review show by unique prefix failed: {err}");
     assert!(out.contains("review def11111"), "review show output: {out}");
-    assert!(
-        out.contains("body:\n  first review"),
-        "review show output: {out}"
-    );
+    assert!(out.contains("first review"), "review show output: {out}");
 
     let (_, err, ok) = run(path, &["review", "show", "def"]);
     assert!(!ok, "review show should fail on ambiguous prefix");
@@ -312,22 +296,10 @@ fn review_new_show_list_log_and_remove() {
         out.contains(&format!("review {review_id}")),
         "review show output: {out}"
     );
-    assert!(
-        out.contains("body:\n  looks good"),
-        "review show output: {out}"
-    );
-    assert!(
-        out.contains("reviewers:\n  - carol"),
-        "review show output: {out}"
-    );
-    assert!(
-        out.contains("requesters:\n  - dave"),
-        "review show output: {out}"
-    );
-    assert!(
-        out.contains("target:\n  commit:deadbeef"),
-        "review show output: {out}"
-    );
+    assert!(out.contains("looks good"), "review show output: {out}");
+    assert!(out.contains("carol"), "review show output: {out}");
+    assert!(out.contains("dave"), "review show output: {out}");
+    assert!(out.contains("commit:deadbeef"), "review show output: {out}");
 
     let (out, err, ok) = run(path, &["review", "ls"]);
     assert!(ok, "review ls failed: {err}");

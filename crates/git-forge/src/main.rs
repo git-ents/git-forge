@@ -1,7 +1,13 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
-use std::io::{IsTerminal, Write as _};
+use std::{
+    fmt::Write as _,
+    io::{IsTerminal, Write as _},
+};
 
+use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
+use acdc_converters_terminal::Processor as TerminalProcessor;
+use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use gix_forge::{Issue, QueryValue, Review, ReviewTarget};
@@ -660,9 +666,9 @@ fn print_id_list(title: &str, ids: &[String]) {
 }
 
 fn print_bulleted_section(title: &str, items: &[String]) {
-    println!("{title}:");
+    println!("{}:", color_field_name(title));
     if items.is_empty() {
-        println!("  (none)");
+        println!("  {}", color_empty_marker("(none)"));
         return;
     }
     for item in items {
@@ -676,9 +682,14 @@ fn print_log(
     repo: &gix::Repository,
     commits: Vec<gix::ObjectId>,
 ) -> Result<()> {
-    println!("{kind} history {id}:");
+    println!(
+        "{} {} {}:",
+        color_heading(kind),
+        color_field_name("history"),
+        color_id(id)
+    );
     if commits.is_empty() {
-        println!("  (none)");
+        println!("  {}", color_empty_marker("(none)"));
         return Ok(());
     }
     for oid in commits {
@@ -690,41 +701,109 @@ fn print_log(
 }
 
 fn print_issue(issue: &Issue) {
-    println!("issue {}", issue.id);
-    print_text_field("body", &issue.body);
-    print_list_field("labels", &issue.labels);
-    print_list_field("assignees", &issue.assignees);
-    print_list_field("reporters", &issue.reporters);
+    println!("----");
+    println!("#{}", color_id(&issue.id));
+    println!();
+
+    if issue.body.is_empty() {
+        println!("{}", color_empty_marker("(none)"));
+    } else {
+        print_rendered(&render_asciidoc_terminal(&issue.body));
+    }
+
+    println!();
+    println!("Assigned to {}", join_values_or_none(&issue.assignees));
+    println!("Reported by {}", join_values_or_none(&issue.reporters));
 }
 
 fn print_review(review: &Review) {
-    println!("review {}", review.id);
-    print_text_field("body", &review.body);
-    print_list_field("reviewers", &review.reviewers);
-    print_list_field("requesters", &review.requesters);
-    print_text_field("target", &format_target(&review.target));
+    let mut source = String::new();
+    let _ = writeln!(&mut source, "= review {}", review.id);
+    source.push_str(":!sectnums:\n\n");
+    source.push_str("[horizontal]\n");
+    let _ = writeln!(&mut source, "id:: {}", review.id);
+    let _ = writeln!(
+        &mut source,
+        "reviewers:: {}",
+        join_values_or_none(&review.reviewers)
+    );
+    let _ = writeln!(
+        &mut source,
+        "requesters:: {}",
+        join_values_or_none(&review.requesters)
+    );
+    let _ = writeln!(&mut source, "target:: {}", format_target(&review.target));
+    source.push_str("\n== body\n\n");
+    source.push_str(&review.body);
+    source.push('\n');
+    print_rendered(&render_asciidoc_terminal(&source));
 }
 
-fn print_text_field(name: &str, value: &str) {
-    println!("{name}:");
-    if value.is_empty() {
-        println!("  (none)");
-        return;
+fn render_asciidoc_terminal(value: &str) -> String {
+    let parsed = match parse_asciidoc(value, &ParseOptions::default()) {
+        Ok(parsed) => parsed,
+        Err(_) => return value.to_owned(),
+    };
+
+    let document = parsed.document();
+    let processor = TerminalProcessor::new(ConvertOptions::default(), document.attributes.clone());
+    let source = WarningSource::new("git-forge");
+    let mut warnings = Vec::new();
+    let mut diagnostics = Diagnostics::new(&source, &mut warnings);
+    let mut output = Vec::new();
+
+    if processor
+        .write_to(document, &mut output, None, None, &mut diagnostics)
+        .is_err()
+    {
+        return value.to_owned();
     }
-    for line in value.lines() {
-        println!("  {line}");
+
+    String::from_utf8_lossy(&output).to_string()
+}
+
+fn print_rendered(rendered: &str) {
+    if rendered.ends_with('\n') {
+        print!("{rendered}");
+    } else {
+        println!("{rendered}");
     }
 }
 
-fn print_list_field(name: &str, values: &[String]) {
-    println!("{name}:");
+fn join_values_or_none(values: &[String]) -> String {
     if values.is_empty() {
-        println!("  - (none)");
-        return;
+        "(none)".to_owned()
+    } else {
+        values.join(", ")
     }
-    for value in values {
-        println!("  - {value}");
+}
+
+fn color_heading(value: &str) -> String {
+    colorize(value, "1;36")
+}
+
+fn color_field_name(value: &str) -> String {
+    colorize(value, "1;34")
+}
+
+fn color_id(value: &str) -> String {
+    colorize(value, "33")
+}
+
+fn color_empty_marker(value: &str) -> String {
+    colorize(value, "2")
+}
+
+fn colorize(value: &str, code: &str) -> String {
+    if color_output_enabled() {
+        format!("\u{1b}[{code}m{value}\u{1b}[0m")
+    } else {
+        value.to_owned()
     }
+}
+
+fn color_output_enabled() -> bool {
+    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
 }
 
 fn format_target(target: &ReviewTarget) -> String {
