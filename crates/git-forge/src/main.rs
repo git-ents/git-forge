@@ -15,10 +15,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    #[command(subcommand)]
-    Issue(IssueCommand),
-    #[command(subcommand)]
-    Review(ReviewCommand),
+    Issue(IssueArgs),
+    Review(ReviewArgs),
     #[command(subcommand)]
     Query(QueryCommand),
     Install(InstallArgs),
@@ -28,6 +26,14 @@ enum Command {
 struct InstallArgs {
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
+}
+
+#[derive(Args)]
+struct IssueArgs {
+    #[arg(short = 'i', long = "interactive")]
+    interactive: bool,
+    #[command(subcommand)]
+    command: IssueCommand,
 }
 
 #[derive(Subcommand)]
@@ -57,6 +63,14 @@ struct IssuePutArgs {
     assignees: Vec<String>,
     #[arg(long = "reporter")]
     reporters: Vec<String>,
+}
+
+#[derive(Args)]
+struct ReviewArgs {
+    #[arg(short = 'i', long = "interactive")]
+    interactive: bool,
+    #[command(subcommand)]
+    command: ReviewCommand,
 }
 
 #[derive(Subcommand)]
@@ -107,8 +121,8 @@ fn main() -> Result<()> {
     let repo = gix::discover(".").context("not inside a git repository")?;
 
     match cli.command {
-        Command::Issue(command) => run_issue(&repo, command)?,
-        Command::Review(command) => run_review(&repo, command)?,
+        Command::Issue(args) => run_issue(&repo, args)?,
+        Command::Review(args) => run_review(&repo, args)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
     }
@@ -116,8 +130,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
-    match command {
+fn run_issue(repo: &gix::Repository, args: IssueArgs) -> Result<()> {
+    match args.command {
         IssueCommand::Put(args) => {
             let issue = Issue {
                 id: args.id,
@@ -136,7 +150,9 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
         IssueCommand::List => print_lines(Issue::list(repo)?),
         IssueCommand::Log { id } => print_log(repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
-            if !Issue::delete(repo, &id)? {
+            if should_install(args.interactive, &format!("issue {id}"))?
+                && !Issue::delete(repo, &id)?
+            {
                 bail!("no issue {id}");
             }
         }
@@ -254,8 +270,8 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
     }
 }
 
-fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
-    match command {
+fn run_review(repo: &gix::Repository, args: ReviewArgs) -> Result<()> {
+    match args.command {
         ReviewCommand::Put(args) => {
             let review = Review {
                 id: args.id,
@@ -274,7 +290,9 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
         ReviewCommand::List => print_lines(Review::list(repo)?),
         ReviewCommand::Log { id } => print_log(repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
-            if !Review::delete(repo, &id)? {
+            if should_install(args.interactive, &format!("review {id}"))?
+                && !Review::delete(repo, &id)?
+            {
                 bail!("no review {id}");
             }
         }
