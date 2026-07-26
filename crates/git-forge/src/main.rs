@@ -647,19 +647,41 @@ fn print_log(repo: &gix::Repository, commits: Vec<gix::ObjectId>) -> Result<()> 
 }
 
 fn print_issue(issue: &Issue) {
-    println!("id: {}", issue.id);
-    println!("body: {}", issue.body);
-    println!("labels: {}", issue.labels.join(","));
-    println!("assignees: {}", issue.assignees.join(","));
-    println!("reporters: {}", issue.reporters.join(","));
+    println!("issue {}", issue.id);
+    print_text_field("body", &issue.body);
+    print_list_field("labels", &issue.labels);
+    print_list_field("assignees", &issue.assignees);
+    print_list_field("reporters", &issue.reporters);
 }
 
 fn print_review(review: &Review) {
-    println!("id: {}", review.id);
-    println!("body: {}", review.body);
-    println!("reviewers: {}", review.reviewers.join(","));
-    println!("requesters: {}", review.requesters.join(","));
-    println!("target: {}", format_target(&review.target));
+    println!("review {}", review.id);
+    print_text_field("body", &review.body);
+    print_list_field("reviewers", &review.reviewers);
+    print_list_field("requesters", &review.requesters);
+    print_text_field("target", &format_target(&review.target));
+}
+
+fn print_text_field(name: &str, value: &str) {
+    println!("{name}:");
+    if value.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    for line in value.lines() {
+        println!("  {line}");
+    }
+}
+
+fn print_list_field(name: &str, values: &[String]) {
+    println!("{name}:");
+    if values.is_empty() {
+        println!("  - (none)");
+        return;
+    }
+    for value in values {
+        println!("  - {value}");
+    }
 }
 
 fn format_target(target: &ReviewTarget) -> String {
