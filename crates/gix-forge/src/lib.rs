@@ -112,6 +112,38 @@ pub struct Review {
     pub edit: Option<String>,
 }
 
+#[derive(Debug, Facet)]
+pub struct CommentEdit {
+    pub id: String,
+    pub edit: String,
+}
+
+impl CommentEdit {
+    pub const KIND: &'static str = "comment";
+
+    pub fn ensure_schema(store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
+        let doc =
+            gix_store::schema_of::<CommentEdit>().map_err(|e| Error::Schema(e.to_string()))?;
+        Ok(store.put_schema(Self::KIND, &doc)?)
+    }
+
+    pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
+        let value = facet_value::to_value(self).map_err(|e| Error::ToValue(e.to_string()))?;
+        Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    }
+
+    pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::ensure_schema(&store)?;
+        self.save(&store)
+    }
+
+    pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
+        let store = gix_store::Store::open(repo);
+        Ok(store.history(Self::KIND, id)?)
+    }
+}
+
 pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
     let store = gix_store::Store::open(repo);
     Issue::ensure_schema(&store)

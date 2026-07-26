@@ -10,7 +10,7 @@ use acdc_converters_terminal::Processor as TerminalProcessor;
 use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use gix_forge::{Issue, QueryValue, Review, ReviewTarget};
+use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget};
 
 #[derive(Parser)]
 #[command(name = "git-forge", about = "Forge software on Git", version)]
@@ -25,6 +25,8 @@ enum Command {
     Issue(IssueCommand),
     #[command(subcommand)]
     Review(ReviewCommand),
+    #[command(subcommand)]
+    Comment(CommentCommand),
     #[command(subcommand)]
     Query(QueryCommand),
     Install(InstallArgs),
@@ -41,6 +43,7 @@ enum IssueCommand {
     New(IssueNewArgs),
     #[command(hide = true)]
     Put(IssueNewArgs),
+    Edit(IssueEditArgs),
     Show {
         id: String,
     },
@@ -56,7 +59,7 @@ enum IssueCommand {
 
 #[derive(Args)]
 struct IssueNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters", "edit"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters"])]
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
@@ -68,8 +71,6 @@ struct IssueNewArgs {
     assignees: Vec<String>,
     #[arg(long = "reporter")]
     reporters: Vec<String>,
-    #[arg(long)]
-    edit: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -77,6 +78,7 @@ enum ReviewCommand {
     New(ReviewNewArgs),
     #[command(hide = true)]
     Put(ReviewNewArgs),
+    Edit(ReviewEditArgs),
     Show {
         id: String,
     },
@@ -88,6 +90,12 @@ enum ReviewCommand {
     Rm {
         id: String,
     },
+}
+
+#[derive(Subcommand)]
+enum CommentCommand {
+    Edit(CommentEditArgs),
+    Log { id: String },
 }
 
 #[derive(Subcommand)]
@@ -131,7 +139,7 @@ enum QueryCommand {
 
 #[derive(Args)]
 struct ReviewNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target", "edit"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
     interactive: bool,
     #[arg(long, required_unless_present = "interactive")]
     body: Option<String>,
@@ -141,8 +149,35 @@ struct ReviewNewArgs {
     requesters: Vec<String>,
     #[arg(long, value_name = "TARGET", required_unless_present = "interactive")]
     target: Option<String>,
+}
+
+#[derive(Args)]
+struct IssueEditArgs {
+    id: String,
     #[arg(long)]
-    edit: Option<String>,
+    title: Option<String>,
+    #[arg(long)]
+    body: Option<String>,
+    #[arg(long)]
+    edit: String,
+}
+
+#[derive(Args)]
+struct ReviewEditArgs {
+    id: String,
+    #[arg(long)]
+    body: Option<String>,
+    #[arg(long)]
+    target: Option<String>,
+    #[arg(long)]
+    edit: String,
+}
+
+#[derive(Args)]
+struct CommentEditArgs {
+    id: String,
+    #[arg(long)]
+    edit: String,
 }
 
 fn main() -> Result<()> {
@@ -152,6 +187,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Issue(command) => run_issue(&repo, command)?,
         Command::Review(command) => run_review(&repo, command)?,
+        Command::Comment(command) => run_comment(&repo, command)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
     }
@@ -162,7 +198,7 @@ fn main() -> Result<()> {
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
         IssueCommand::New(args) | IssueCommand::Put(args) => {
-            let (title, body, labels, assignees, reporters, edit) = if args.interactive {
+            let (title, body, labels, assignees, reporters) = if args.interactive {
                 prompt_issue_fields()?
             } else {
                 (
@@ -172,7 +208,6 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                     args.labels,
                     args.assignees,
                     args.reporters,
-                    args.edit,
                 )
             };
             let issue = Issue {
@@ -182,8 +217,22 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 labels,
                 assignees,
                 reporters,
-                edit,
+                edit: None,
             };
+            println!("{}", issue.save_in_repo(repo)?);
+        }
+        IssueCommand::Edit(args) => {
+            let id = resolve_issue_show_id(repo, &args.id)?
+                .with_context(|| format!("no issue {}", args.id))?;
+            let mut issue =
+                Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
+            if let Some(title) = args.title {
+                issue.title = title;
+            }
+            if let Some(body) = args.body {
+                issue.body = body;
+            }
+            issue.edit = Some(args.edit);
             println!("{}", issue.save_in_repo(repo)?);
         }
         IssueCommand::Show { id } => {
@@ -201,6 +250,22 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
             if !Issue::delete(repo, &id)? {
                 bail!("no issue {id}");
             }
+        }
+    }
+    Ok(())
+}
+
+fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
+    match command {
+        CommentCommand::Edit(args) => {
+            let edit = CommentEdit {
+                id: args.id,
+                edit: args.edit,
+            };
+            println!("{}", edit.save_in_repo(repo)?);
+        }
+        CommentCommand::Log { id } => {
+            print_log("comment", &id, repo, CommentEdit::history(repo, &id)?)?;
         }
     }
     Ok(())
@@ -262,32 +327,23 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     }
 }
 
-fn prompt_issue_fields() -> Result<(
-    String,
-    String,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Option<String>,
-)> {
+fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
     require_terminal_for_interactive()?;
     let title = prompt_line("title (optional)")?;
     let body = prompt_required("body")?;
     let labels = prompt_csv("labels (comma-separated, optional)")?;
     let assignees = prompt_csv("assignees (comma-separated, optional)")?;
     let reporters = prompt_csv("reporters (comma-separated, optional)")?;
-    let edit = optional_line(prompt_line("edit (optional)")?);
-    Ok((title, body, labels, assignees, reporters, edit))
+    Ok((title, body, labels, assignees, reporters))
 }
 
-fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String, Option<String>)> {
+fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
     require_terminal_for_interactive()?;
     let body = prompt_required("body")?;
     let reviewers = prompt_csv("reviewers (comma-separated, optional)")?;
     let requesters = prompt_csv("requesters (comma-separated, optional)")?;
     let target = prompt_required("target")?;
-    let edit = optional_line(prompt_line("edit (optional)")?);
-    Ok((body, reviewers, requesters, target, edit))
+    Ok((body, reviewers, requesters, target))
 }
 
 fn require_terminal_for_interactive() -> Result<()> {
@@ -329,10 +385,6 @@ fn prompt_line(field: &str) -> Result<String> {
     }
 
     Ok(input.trim().to_owned())
-}
-
-fn optional_line(input: String) -> Option<String> {
-    if input.is_empty() { None } else { Some(input) }
 }
 
 fn origin_commit_short_id(repo: &gix::Repository) -> Result<String> {
@@ -528,7 +580,7 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
     match command {
         ReviewCommand::New(args) | ReviewCommand::Put(args) => {
-            let (body, reviewers, requesters, target, edit) = if args.interactive {
+            let (body, reviewers, requesters, target) = if args.interactive {
                 prompt_review_fields()?
             } else {
                 (
@@ -538,7 +590,6 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     args.requesters,
                     args.target
                         .context("--target is required unless --interactive")?,
-                    args.edit,
                 )
             };
             let review = Review {
@@ -547,8 +598,22 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 reviewers,
                 requesters,
                 target: parse_review_target(&target)?,
-                edit,
+                edit: None,
             };
+            println!("{}", review.save_in_repo(repo)?);
+        }
+        ReviewCommand::Edit(args) => {
+            let id = resolve_review_show_id(repo, &args.id)?
+                .with_context(|| format!("no review {}", args.id))?;
+            let mut review =
+                Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
+            if let Some(body) = args.body {
+                review.body = body;
+            }
+            if let Some(target) = args.target {
+                review.target = parse_review_target(&target)?;
+            }
+            review.edit = Some(args.edit);
             println!("{}", review.save_in_repo(repo)?);
         }
         ReviewCommand::Show { id } => {

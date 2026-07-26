@@ -162,18 +162,20 @@ fn issue_new_show_list_log_and_remove() {
         path,
         &[
             "issue",
-            "new",
+            "edit",
+            issue_id.as_str(),
             "--body",
             "second body",
-            "--label",
-            "bug",
-            "--assignee",
-            "alice",
-            "--reporter",
-            "bob",
+            "--edit",
+            "typo fix",
         ],
     );
-    assert!(ok, "second issue new failed: {err}");
+    assert!(ok, "issue edit failed: {err}");
+
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "issue show after edit failed: {err}");
+    assert!(out.contains("second body"), "issue show output: {out}");
+    assert!(out.contains("Edit typo fix"), "issue show output: {out}");
 
     let log_args = vec!["issue", "log", issue_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -316,18 +318,25 @@ fn review_new_show_list_log_and_remove() {
         path,
         &[
             "review",
-            "new",
+            "edit",
+            review_id.as_str(),
             "--body",
             "needs changes",
-            "--reviewer",
-            "carol",
-            "--requester",
-            "dave",
             "--target",
             "commit:feedface",
+            "--edit",
+            "address feedback",
         ],
     );
-    assert!(ok, "second review new failed: {err}");
+    assert!(ok, "review edit failed: {err}");
+
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "review show after edit failed: {err}");
+    assert!(out.contains("needs changes"), "review show output: {out}");
+    assert!(
+        out.contains("address feedback"),
+        "review show output: {out}"
+    );
 
     let log_args = vec!["review", "log", review_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -345,6 +354,29 @@ fn review_new_show_list_log_and_remove() {
 
     let (_, _, ok) = run(path, &show_args);
     assert!(!ok, "review show after rm should fail");
+}
+
+#[test]
+fn comment_edit_and_log() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+
+    let comment_id = "comment-1";
+    let (_, err, ok) = run(
+        path,
+        &["comment", "edit", comment_id, "--edit", "fix wording"],
+    );
+    assert!(ok, "comment edit failed: {err}");
+
+    let (out, err, ok) = run(path, &["comment", "log", comment_id]);
+    assert!(ok, "comment log failed: {err}");
+    assert!(
+        out.contains(&format!("comment history {comment_id}:")),
+        "comment log output: {out}"
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines.len() >= 2, "comment log output: {out}");
 }
 
 #[test]
