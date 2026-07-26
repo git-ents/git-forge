@@ -31,9 +31,12 @@ fn bare_cli_lists_groups() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
-    let (out, err, ok) = run(dir.path(), &[]);
-    assert!(ok, "bare command failed: {err}");
-    assert_eq!(out, "issue\nreview\n");
+    let (_, err, ok) = run(dir.path(), &[]);
+    assert!(!ok, "bare command should fail without subcommand");
+    assert!(
+        err.contains("Usage: git-forge <COMMAND>"),
+        "bare command stderr: {err}"
+    );
 }
 
 #[test]

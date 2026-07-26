@@ -8,7 +8,7 @@ use gix_forge::{Issue, Review, ReviewTarget};
 #[command(name = "git-forge", about = "Forge software on Git", version)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand)]
@@ -82,12 +82,8 @@ fn main() -> Result<()> {
     let repo = gix::discover(".").context("not inside a git repository")?;
 
     match cli.command {
-        None => {
-            println!("issue");
-            println!("review");
-        }
-        Some(Command::Issue(command)) => run_issue(&repo, command)?,
-        Some(Command::Review(command)) => run_review(&repo, command)?,
+        Command::Issue(command) => run_issue(&repo, command)?,
+        Command::Review(command) => run_review(&repo, command)?,
     }
 
     Ok(())
