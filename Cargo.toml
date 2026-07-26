@@ -11,3 +11,8 @@ gix-comment = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-store = { git = "https://github.com/git-ents/git-store.git" }
 gix-query = { git = "https://github.com/git-ents/git-query.git" }
+gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs"] }
+facet = "0.50.0-rc.5"
+facet-value = "0.50.0-rc.5"
+thiserror = "2"
+tempfile = "3"
