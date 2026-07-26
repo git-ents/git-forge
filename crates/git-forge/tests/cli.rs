@@ -440,3 +440,118 @@ fn query_sugar_filters_by_people_and_keyword() {
         "query find without filters stderr: {err}"
     );
 }
+
+#[test]
+fn query_find_supports_all_filter_combinations() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+
+    let repo = gix::open(path).unwrap();
+
+    let matching_issue_id = "iss11111";
+    Issue {
+        id: matching_issue_id.to_owned(),
+        body: "release blocker".to_owned(),
+        labels: vec![],
+        assignees: vec!["alice".to_owned()],
+        reporters: vec![],
+    }
+    .save_in_repo(&repo)
+    .unwrap();
+
+    Issue {
+        id: "iss22222".to_owned(),
+        body: "misc task".to_owned(),
+        labels: vec![],
+        assignees: vec!["eve".to_owned()],
+        reporters: vec![],
+    }
+    .save_in_repo(&repo)
+    .unwrap();
+
+    let matching_review_id = "rev11111";
+    Review {
+        id: matching_review_id.to_owned(),
+        body: "release reviewed".to_owned(),
+        reviewers: vec!["carol".to_owned()],
+        requesters: vec!["dave".to_owned()],
+        target: ReviewTarget::Commit {
+            oid: "deadbeef".to_owned(),
+        },
+    }
+    .save_in_repo(&repo)
+    .unwrap();
+
+    Review {
+        id: "rev22222".to_owned(),
+        body: "other note".to_owned(),
+        reviewers: vec!["mallory".to_owned()],
+        requesters: vec!["trent".to_owned()],
+        target: ReviewTarget::Commit {
+            oid: "feedface".to_owned(),
+        },
+    }
+    .save_in_repo(&repo)
+    .unwrap();
+
+    for use_assignee in [false, true] {
+        for use_reviewer in [false, true] {
+            for use_requester in [false, true] {
+                for text_filter in [None, Some("keyword"), Some("title")] {
+                    if !use_assignee && !use_reviewer && !use_requester && text_filter.is_none() {
+                        continue;
+                    }
+
+                    let mut args = vec!["query", "find"];
+                    if use_assignee {
+                        args.push("--assignee");
+                        args.push("alice");
+                    }
+                    if use_reviewer {
+                        args.push("--reviewer");
+                        args.push("carol");
+                    }
+                    if use_requester {
+                        args.push("--requester");
+                        args.push("dave");
+                    }
+                    match text_filter {
+                        Some("keyword") => {
+                            args.push("--keyword");
+                            args.push("release");
+                        }
+                        Some("title") => {
+                            args.push("--title");
+                            args.push("release");
+                        }
+                        _ => {}
+                    }
+
+                    let (out, err, ok) = run(path, &args);
+                    assert!(ok, "query find {:?} failed: {err}", &args[2..],);
+
+                    let issue_matches = !use_reviewer && !use_requester;
+                    let review_matches = !use_assignee;
+
+                    let mut expected = Vec::new();
+                    if issue_matches {
+                        expected.push(format!("issue:{matching_issue_id}"));
+                    }
+                    if review_matches {
+                        expected.push(format!("review:{matching_review_id}"));
+                    }
+
+                    let got: Vec<&str> = out.lines().filter(|line| !line.is_empty()).collect();
+                    let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
+                    assert_eq!(
+                        got,
+                        expected_refs,
+                        "unexpected output for args {:?}",
+                        &args[2..]
+                    );
+                }
+            }
+        }
+    }
+}
