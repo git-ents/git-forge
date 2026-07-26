@@ -32,7 +32,9 @@ struct InstallArgs {
 
 #[derive(Subcommand)]
 enum IssueCommand {
-    Put(IssuePutArgs),
+    New(IssueNewArgs),
+    #[command(hide = true)]
+    Put(IssueNewArgs),
     Get {
         id: String,
     },
@@ -47,8 +49,7 @@ enum IssueCommand {
 }
 
 #[derive(Args)]
-struct IssuePutArgs {
-    id: String,
+struct IssueNewArgs {
     #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "labels", "assignees", "reporters"])]
     interactive: bool,
     #[arg(long, required_unless_present = "interactive")]
@@ -63,7 +64,9 @@ struct IssuePutArgs {
 
 #[derive(Subcommand)]
 enum ReviewCommand {
-    Put(ReviewPutArgs),
+    New(ReviewNewArgs),
+    #[command(hide = true)]
+    Put(ReviewNewArgs),
     Get {
         id: String,
     },
@@ -92,8 +95,7 @@ enum QueryCommand {
 }
 
 #[derive(Args)]
-struct ReviewPutArgs {
-    id: String,
+struct ReviewNewArgs {
     #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
     interactive: bool,
     #[arg(long, required_unless_present = "interactive")]
@@ -122,7 +124,7 @@ fn main() -> Result<()> {
 
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
-        IssueCommand::Put(args) => {
+        IssueCommand::New(args) | IssueCommand::Put(args) => {
             let (body, labels, assignees, reporters) = if args.interactive {
                 prompt_issue_fields()?
             } else {
@@ -135,7 +137,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 )
             };
             let issue = Issue {
-                id: args.id,
+                id: origin_commit_short_id(repo)?,
                 body,
                 labels,
                 assignees,
@@ -274,6 +276,14 @@ fn prompt_line(field: &str) -> Result<String> {
     Ok(input.trim().to_owned())
 }
 
+fn origin_commit_short_id(repo: &gix::Repository) -> Result<String> {
+    let id = repo
+        .head_id()
+        .context("cannot create issue/review without a checked-out commit")?;
+    let full = id.to_string();
+    Ok(full.chars().take(8).collect())
+}
+
 fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
     match command {
         QueryCommand::Run {
@@ -330,7 +340,7 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
 
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
     match command {
-        ReviewCommand::Put(args) => {
+        ReviewCommand::New(args) | ReviewCommand::Put(args) => {
             let (body, reviewers, requesters, target) = if args.interactive {
                 prompt_review_fields()?
             } else {
@@ -344,7 +354,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 )
             };
             let review = Review {
-                id: args.id,
+                id: origin_commit_short_id(repo)?,
                 body,
                 reviewers,
                 requesters,
