@@ -56,7 +56,7 @@ enum IssueCommand {
 
 #[derive(Args)]
 struct IssueNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters", "edit"])]
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
@@ -68,6 +68,8 @@ struct IssueNewArgs {
     assignees: Vec<String>,
     #[arg(long = "reporter")]
     reporters: Vec<String>,
+    #[arg(long)]
+    edit: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -129,7 +131,7 @@ enum QueryCommand {
 
 #[derive(Args)]
 struct ReviewNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target", "edit"])]
     interactive: bool,
     #[arg(long, required_unless_present = "interactive")]
     body: Option<String>,
@@ -139,6 +141,8 @@ struct ReviewNewArgs {
     requesters: Vec<String>,
     #[arg(long, value_name = "TARGET", required_unless_present = "interactive")]
     target: Option<String>,
+    #[arg(long)]
+    edit: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -158,7 +162,7 @@ fn main() -> Result<()> {
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
         IssueCommand::New(args) | IssueCommand::Put(args) => {
-            let (title, body, labels, assignees, reporters) = if args.interactive {
+            let (title, body, labels, assignees, reporters, edit) = if args.interactive {
                 prompt_issue_fields()?
             } else {
                 (
@@ -168,6 +172,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                     args.labels,
                     args.assignees,
                     args.reporters,
+                    args.edit,
                 )
             };
             let issue = Issue {
@@ -177,6 +182,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 labels,
                 assignees,
                 reporters,
+                edit,
             };
             println!("{}", issue.save_in_repo(repo)?);
         }
@@ -256,23 +262,32 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     }
 }
 
-fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
+fn prompt_issue_fields() -> Result<(
+    String,
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Option<String>,
+)> {
     require_terminal_for_interactive()?;
     let title = prompt_line("title (optional)")?;
     let body = prompt_required("body")?;
     let labels = prompt_csv("labels (comma-separated, optional)")?;
     let assignees = prompt_csv("assignees (comma-separated, optional)")?;
     let reporters = prompt_csv("reporters (comma-separated, optional)")?;
-    Ok((title, body, labels, assignees, reporters))
+    let edit = optional_line(prompt_line("edit (optional)")?);
+    Ok((title, body, labels, assignees, reporters, edit))
 }
 
-fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
+fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String, Option<String>)> {
     require_terminal_for_interactive()?;
     let body = prompt_required("body")?;
     let reviewers = prompt_csv("reviewers (comma-separated, optional)")?;
     let requesters = prompt_csv("requesters (comma-separated, optional)")?;
     let target = prompt_required("target")?;
-    Ok((body, reviewers, requesters, target))
+    let edit = optional_line(prompt_line("edit (optional)")?);
+    Ok((body, reviewers, requesters, target, edit))
 }
 
 fn require_terminal_for_interactive() -> Result<()> {
@@ -314,6 +329,10 @@ fn prompt_line(field: &str) -> Result<String> {
     }
 
     Ok(input.trim().to_owned())
+}
+
+fn optional_line(input: String) -> Option<String> {
+    if input.is_empty() { None } else { Some(input) }
 }
 
 fn origin_commit_short_id(repo: &gix::Repository) -> Result<String> {
@@ -509,7 +528,7 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
     match command {
         ReviewCommand::New(args) | ReviewCommand::Put(args) => {
-            let (body, reviewers, requesters, target) = if args.interactive {
+            let (body, reviewers, requesters, target, edit) = if args.interactive {
                 prompt_review_fields()?
             } else {
                 (
@@ -519,6 +538,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     args.requesters,
                     args.target
                         .context("--target is required unless --interactive")?,
+                    args.edit,
                 )
             };
             let review = Review {
@@ -527,6 +547,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 reviewers,
                 requesters,
                 target: parse_review_target(&target)?,
+                edit,
             };
             println!("{}", review.save_in_repo(repo)?);
         }
@@ -721,6 +742,11 @@ fn print_issue(issue: &Issue) {
         print_rendered(&render_asciidoc_terminal(&issue.body));
     }
 
+    if let Some(edit) = &issue.edit {
+        println!();
+        println!("Edit {}", edit);
+    }
+
     println!();
     println!("Assigned to {}", join_values_or_none(&issue.assignees));
     println!("Reported by {}", join_values_or_none(&issue.reporters));
@@ -743,6 +769,11 @@ fn print_review(review: &Review) {
         join_values_or_none(&review.requesters)
     );
     let _ = writeln!(&mut source, "target:: {}", format_target(&review.target));
+    let _ = writeln!(
+        &mut source,
+        "edit:: {}",
+        review.edit.as_deref().unwrap_or("(none)")
+    );
     source.push_str("\n== body\n\n");
     source.push_str(&review.body);
     source.push('\n');

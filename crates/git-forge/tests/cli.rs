@@ -66,6 +66,7 @@ fn put_issue(dir: &Path, id: &str, body: &str) {
         labels: vec![],
         assignees: vec![],
         reporters: vec![],
+        edit: None,
     };
     issue.save_in_repo(&repo).unwrap();
 }
@@ -80,6 +81,7 @@ fn put_review(dir: &Path, id: &str, body: &str) {
         target: ReviewTarget::Commit {
             oid: "deadbeef".to_owned(),
         },
+        edit: None,
     };
     review.save_in_repo(&repo).unwrap();
 }
@@ -492,6 +494,7 @@ proptest! {
                 labels: vec![],
                 assignees: vec![(*assignee).to_owned()],
                 reporters: vec![],
+                edit: None,
             }
             .save_in_repo(&repo)
             .unwrap();
@@ -510,6 +513,7 @@ proptest! {
                 target: ReviewTarget::Commit {
                     oid: (*oid).to_owned(),
                 },
+                edit: None,
             }
             .save_in_repo(&repo)
             .unwrap();

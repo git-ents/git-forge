@@ -42,6 +42,7 @@ pub struct Issue {
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
     pub reporters: Vec<String>,
+    pub edit: Option<String>,
 }
 
 impl Issue {
@@ -108,6 +109,7 @@ pub struct Review {
     pub reviewers: Vec<String>,
     pub requesters: Vec<String>,
     pub target: ReviewTarget,
+    pub edit: Option<String>,
 }
 
 pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
@@ -257,6 +259,7 @@ pub struct Anchor {
     pub target: Target,
     pub position: Position,
     pub comment: Comment,
+    pub edit: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +300,7 @@ pub trait Commentable {
             target,
             position,
             comment,
+            edit: None,
         };
         let _comments_ref = self.comments_ref();
         // TODO: implement anchored comment storage
@@ -334,6 +338,7 @@ pub trait Commentable {
                 target,
                 position,
                 comment,
+                edit: None,
             });
         }
 
@@ -370,6 +375,7 @@ mod tests {
             labels: vec!["bug".to_string(), "high-priority".to_string()],
             assignees: vec!["jdc-pub".to_string()],
             reporters: vec!["alice".to_string()],
+            edit: None,
         };
     }
 
@@ -384,6 +390,7 @@ mod tests {
                 start: ObjectId::null(gix::hash::Kind::Sha1).to_string(),
                 end: ObjectId::null(gix::hash::Kind::Sha1).to_string(),
             },
+            edit: None,
         };
     }
 
@@ -403,6 +410,7 @@ mod tests {
             labels: vec!["bug".to_string(), "P1".to_string()],
             assignees: vec!["alice".to_string()],
             reporters: vec!["bob".to_string()],
+            edit: Some("initial edit note".to_string()),
         };
 
         issue.save(&store).expect("save issue");
@@ -416,6 +424,7 @@ mod tests {
         assert_eq!(loaded.labels, issue.labels);
         assert_eq!(loaded.assignees, issue.assignees);
         assert_eq!(loaded.reporters, issue.reporters);
+        assert_eq!(loaded.edit, issue.edit);
     }
 
     #[test]
@@ -436,6 +445,7 @@ mod tests {
                 start: ObjectId::null(gix::hash::Kind::Sha1).to_string(),
                 end: ObjectId::null(gix::hash::Kind::Sha1).to_string(),
             },
+            edit: Some("initial edit note".to_string()),
         };
 
         review.save(&store).expect("save review");
@@ -447,6 +457,7 @@ mod tests {
         assert_eq!(loaded.body, review.body);
         assert_eq!(loaded.reviewers, review.reviewers);
         assert_eq!(loaded.requesters, review.requesters);
+        assert_eq!(loaded.edit, review.edit);
         match (&loaded.target, &review.target) {
             (
                 ReviewTarget::CommitRange {
