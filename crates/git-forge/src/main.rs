@@ -176,8 +176,11 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             print_issue(&issue);
         }
-        IssueCommand::List => print_lines(Issue::list(repo)?),
-        IssueCommand::Log { id } => print_log(repo, Issue::history(repo, &id)?)?,
+        IssueCommand::List => {
+            let ids = Issue::list(repo)?;
+            print_id_list("issues", &ids);
+        }
+        IssueCommand::Log { id } => print_log("issue", &id, repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
             if !Issue::delete(repo, &id)? {
                 bail!("no issue {id}");
@@ -339,43 +342,50 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
         },
         QueryCommand::Assignee { name } => {
             let ids = Issue::list(repo)?;
+            let mut matches = Vec::new();
             for id in ids {
                 if let Some(issue) = Issue::load_from_repo(repo, &id)?
                     && issue.assignees.iter().any(|assignee| assignee == &name)
                 {
-                    println!("{}", issue.id);
+                    matches.push(issue.id);
                 }
             }
+            print_id_list(&format!("issues assigned to {name}"), &matches);
         }
         QueryCommand::Reviewer { name } => {
             let ids = Review::list(repo)?;
+            let mut matches = Vec::new();
             for id in ids {
                 if let Some(review) = Review::load_from_repo(repo, &id)?
                     && review.reviewers.iter().any(|reviewer| reviewer == &name)
                 {
-                    println!("{}", review.id);
+                    matches.push(review.id);
                 }
             }
+            print_id_list(&format!("reviews by reviewer {name}"), &matches);
         }
         QueryCommand::Requester { name } => {
             let ids = Review::list(repo)?;
+            let mut matches = Vec::new();
             for id in ids {
                 if let Some(review) = Review::load_from_repo(repo, &id)?
                     && review.requesters.iter().any(|requester| requester == &name)
                 {
-                    println!("{}", review.id);
+                    matches.push(review.id);
                 }
             }
+            print_id_list(&format!("reviews by requester {name}"), &matches);
         }
         QueryCommand::Keyword { value } => {
             let needle = value.to_ascii_lowercase();
+            let mut matches = Vec::new();
 
             let issue_ids = Issue::list(repo)?;
             for id in issue_ids {
                 if let Some(issue) = Issue::load_from_repo(repo, &id)?
                     && issue.body.to_ascii_lowercase().contains(&needle)
                 {
-                    println!("issue:{}", issue.id);
+                    matches.push(format!("issue {}", issue.id));
                 }
             }
 
@@ -384,9 +394,11 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                 if let Some(review) = Review::load_from_repo(repo, &id)?
                     && review.body.to_ascii_lowercase().contains(&needle)
                 {
-                    println!("review:{}", review.id);
+                    matches.push(format!("review {}", review.id));
                 }
             }
+
+            print_bulleted_section(&format!("matches for \"{value}\""), &matches);
         }
         QueryCommand::Find {
             assignee,
@@ -401,6 +413,8 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                     "query find requires at least one filter: --assignee, --reviewer, --requester, --keyword, or --title"
                 );
             }
+
+            let mut matches = Vec::new();
 
             let issue_ids = Issue::list(repo)?;
             for id in issue_ids {
@@ -418,7 +432,7 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                     {
                         continue;
                     }
-                    println!("issue:{}", issue.id);
+                    matches.push(format!("issue {}", issue.id));
                 }
             }
 
@@ -443,9 +457,11 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                     {
                         continue;
                     }
-                    println!("review:{}", review.id);
+                    matches.push(format!("review {}", review.id));
                 }
             }
+
+            print_bulleted_section("query matches", &matches);
         }
     }
     Ok(())
@@ -468,9 +484,14 @@ fn parse_bind(arg: &str) -> Result<(usize, QueryValue)> {
 }
 
 fn print_rows(rows: &[Vec<QueryValue>]) {
+    println!("query results:");
+    if rows.is_empty() {
+        println!("  (none)");
+        return;
+    }
     for row in rows {
         let cols: Vec<String> = row.iter().map(ToString::to_string).collect();
-        println!("{}", cols.join("\t"));
+        println!("  - {}", cols.join(" | "));
     }
 }
 
@@ -505,8 +526,11 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
             print_review(&review);
         }
-        ReviewCommand::List => print_lines(Review::list(repo)?),
-        ReviewCommand::Log { id } => print_log(repo, Review::history(repo, &id)?)?,
+        ReviewCommand::List => {
+            let ids = Review::list(repo)?;
+            print_id_list("reviews", &ids);
+        }
+        ReviewCommand::Log { id } => print_log("review", &id, repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
             if !Review::delete(repo, &id)? {
                 bail!("no review {id}");
@@ -631,17 +655,36 @@ fn parse_review_target(target: &str) -> Result<ReviewTarget> {
     })
 }
 
-fn print_lines(items: Vec<String>) {
+fn print_id_list(title: &str, ids: &[String]) {
+    print_bulleted_section(title, ids);
+}
+
+fn print_bulleted_section(title: &str, items: &[String]) {
+    println!("{title}:");
+    if items.is_empty() {
+        println!("  (none)");
+        return;
+    }
     for item in items {
-        println!("{item}");
+        println!("  - {item}");
     }
 }
 
-fn print_log(repo: &gix::Repository, commits: Vec<gix::ObjectId>) -> Result<()> {
-    for id in commits {
-        let commit = repo.find_commit(id)?;
+fn print_log(
+    kind: &str,
+    id: &str,
+    repo: &gix::Repository,
+    commits: Vec<gix::ObjectId>,
+) -> Result<()> {
+    println!("{kind} history {id}:");
+    if commits.is_empty() {
+        println!("  (none)");
+        return Ok(());
+    }
+    for oid in commits {
+        let commit = repo.find_commit(oid)?;
         let when = commit.time()?.format(gix::date::time::format::ISO8601)?;
-        println!("{id} {when}");
+        println!("  - {oid}  {when}");
     }
     Ok(())
 }

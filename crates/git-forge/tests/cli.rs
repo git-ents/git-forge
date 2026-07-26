@@ -28,6 +28,13 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
+fn bulleted_items(out: &str) -> Vec<String> {
+    out.lines()
+        .filter_map(|line| line.strip_prefix("  - "))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .current_dir(dir)
@@ -152,7 +159,8 @@ fn issue_new_show_list_log_and_remove() {
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
-    assert_eq!(out.trim(), issue_id);
+    assert!(out.contains("issues:"), "issue ls output: {out}");
+    assert_eq!(bulleted_items(&out), vec![issue_id.clone()]);
 
     let (_, err, ok) = run(
         path,
@@ -174,8 +182,12 @@ fn issue_new_show_list_log_and_remove() {
     let log_args = vec!["issue", "log", issue_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
     assert!(ok, "issue log failed: {err}");
+    assert!(
+        out.contains(&format!("issue history {issue_id}:")),
+        "issue log output: {out}"
+    );
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines.len() >= 2, "issue log output: {out}");
+    assert!(lines.len() >= 3, "issue log output: {out}");
 
     let rm_args = vec!["issue", "rm", issue_id.as_str()];
     let (_, err, ok) = run(path, &rm_args);
@@ -319,7 +331,8 @@ fn review_new_show_list_log_and_remove() {
 
     let (out, err, ok) = run(path, &["review", "ls"]);
     assert!(ok, "review ls failed: {err}");
-    assert_eq!(out.trim(), review_id);
+    assert!(out.contains("reviews:"), "review ls output: {out}");
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
 
     let (_, err, ok) = run(
         path,
@@ -341,8 +354,12 @@ fn review_new_show_list_log_and_remove() {
     let log_args = vec!["review", "log", review_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
     assert!(ok, "review log failed: {err}");
+    assert!(
+        out.contains(&format!("review history {review_id}:")),
+        "review log output: {out}"
+    );
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines.len() >= 2, "review log output: {out}");
+    assert!(lines.len() >= 3, "review log output: {out}");
 
     let rm_args = vec!["review", "rm", review_id.as_str()];
     let (_, err, ok) = run(path, &rm_args);
@@ -394,30 +411,42 @@ fn query_sugar_filters_by_people_and_keyword() {
 
     let (out, err, ok) = run(path, &["query", "assignee", "alice"]);
     assert!(ok, "query assignee failed: {err}");
-    assert_eq!(out.trim(), issue_id);
+    assert!(
+        out.contains("issues assigned to alice:"),
+        "query assignee output: {out}"
+    );
+    assert_eq!(bulleted_items(&out), vec![issue_id.clone()]);
 
     let (out, err, ok) = run(path, &["query", "reviewer", "carol"]);
     assert!(ok, "query reviewer failed: {err}");
-    assert_eq!(out.trim(), review_id);
+    assert!(
+        out.contains("reviews by reviewer carol:"),
+        "query reviewer output: {out}"
+    );
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
 
     let (out, err, ok) = run(path, &["query", "requester", "dave"]);
     assert!(ok, "query requester failed: {err}");
-    assert_eq!(out.trim(), review_id);
+    assert!(
+        out.contains("reviews by requester dave:"),
+        "query requester output: {out}"
+    );
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
 
     let (out, err, ok) = run(path, &["query", "keyword", "release"]);
     assert!(ok, "query keyword failed: {err}");
     assert!(
-        out.contains(&format!("issue:{issue_id}")),
+        out.contains(&format!("  - issue {issue_id}")),
         "query keyword output: {out}"
     );
     assert!(
-        out.contains(&format!("review:{review_id}")),
+        out.contains(&format!("  - review {review_id}")),
         "query keyword output: {out}"
     );
 
     let (out, err, ok) = run(path, &["query", "title", "reviewed"]);
     assert!(ok, "query title alias failed: {err}");
-    assert_eq!(out.trim(), format!("review:{review_id}"));
+    assert_eq!(bulleted_items(&out), vec![format!("review {review_id}")]);
 
     let (out, err, ok) = run(
         path,
@@ -431,7 +460,7 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "query find issue filter failed: {err}");
-    assert_eq!(out.trim(), format!("issue:{issue_id}"));
+    assert_eq!(bulleted_items(&out), vec![format!("issue {issue_id}")]);
 
     let (out, err, ok) = run(
         path,
@@ -447,7 +476,7 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "query find review filter failed: {err}");
-    assert_eq!(out.trim(), format!("review:{review_id}"));
+    assert_eq!(bulleted_items(&out), vec![format!("review {review_id}")]);
 
     let (_, err, ok) = run(path, &["query", "find"]);
     assert!(!ok, "query find without filters should fail");
@@ -545,7 +574,7 @@ proptest! {
             let matches_kind_specific = !use_reviewer && !use_requester;
             let matches_text = !use_text_filter || body.contains("release");
             if matches_assignee && matches_kind_specific && matches_text {
-                expected.push(format!("issue:{id}"));
+                expected.push(format!("issue {id}"));
             }
         }
 
@@ -555,16 +584,15 @@ proptest! {
             let matches_requester = !use_requester || *requester == "dave";
             let matches_text = !use_text_filter || body.contains("release");
             if matches_assignee && matches_reviewer && matches_requester && matches_text {
-                expected.push(format!("review:{id}"));
+                expected.push(format!("review {id}"));
             }
         }
 
-        let got: Vec<&str> = out.lines().filter(|line| !line.is_empty()).collect();
-        let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
+        let got = bulleted_items(&out);
         let oracle = "oracle: issues where assignee/alice if set, no reviewer/requester filters, text has release if set; reviews where no assignee filter, reviewer/requester match if set, text has release if set";
         prop_assert_eq!(
             got,
-            expected_refs,
+            expected,
             "unexpected output for args {:?}; {}",
             &args[2..],
             oracle
