@@ -119,6 +119,32 @@ fn issue_put_get_list_log_and_remove() {
 }
 
 #[test]
+fn issue_put_interactive_requires_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["issue", "put", "issue-1", "-i"]);
+    assert!(!ok, "interactive issue put should fail without terminal");
+    assert!(
+        err.contains("--interactive requires a terminal"),
+        "interactive issue put stderr: {err}"
+    );
+}
+
+#[test]
+fn review_put_interactive_requires_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["review", "put", "review-1", "-i"]);
+    assert!(!ok, "interactive review put should fail without terminal");
+    assert!(
+        err.contains("--interactive requires a terminal"),
+        "interactive review put stderr: {err}"
+    );
+}
+
+#[test]
 fn review_put_get_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

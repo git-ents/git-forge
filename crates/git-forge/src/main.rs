@@ -15,8 +15,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Issue(IssueArgs),
-    Review(ReviewArgs),
+    #[command(subcommand)]
+    Issue(IssueCommand),
+    #[command(subcommand)]
+    Review(ReviewCommand),
     #[command(subcommand)]
     Query(QueryCommand),
     Install(InstallArgs),
@@ -26,14 +28,6 @@ enum Command {
 struct InstallArgs {
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
-}
-
-#[derive(Args)]
-struct IssueArgs {
-    #[arg(short = 'i', long = "interactive")]
-    interactive: bool,
-    #[command(subcommand)]
-    command: IssueCommand,
 }
 
 #[derive(Subcommand)]
@@ -55,22 +49,16 @@ enum IssueCommand {
 #[derive(Args)]
 struct IssuePutArgs {
     id: String,
-    #[arg(long)]
-    body: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "labels", "assignees", "reporters"])]
+    interactive: bool,
+    #[arg(long, required_unless_present = "interactive")]
+    body: Option<String>,
     #[arg(long = "label")]
     labels: Vec<String>,
     #[arg(long = "assignee")]
     assignees: Vec<String>,
     #[arg(long = "reporter")]
     reporters: Vec<String>,
-}
-
-#[derive(Args)]
-struct ReviewArgs {
-    #[arg(short = 'i', long = "interactive")]
-    interactive: bool,
-    #[command(subcommand)]
-    command: ReviewCommand,
 }
 
 #[derive(Subcommand)]
@@ -106,14 +94,16 @@ enum QueryCommand {
 #[derive(Args)]
 struct ReviewPutArgs {
     id: String,
-    #[arg(long)]
-    body: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
+    interactive: bool,
+    #[arg(long, required_unless_present = "interactive")]
+    body: Option<String>,
     #[arg(long = "reviewer")]
     reviewers: Vec<String>,
     #[arg(long = "requester")]
     requesters: Vec<String>,
-    #[arg(long, value_name = "TARGET")]
-    target: String,
+    #[arg(long, value_name = "TARGET", required_unless_present = "interactive")]
+    target: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -121,8 +111,8 @@ fn main() -> Result<()> {
     let repo = gix::discover(".").context("not inside a git repository")?;
 
     match cli.command {
-        Command::Issue(args) => run_issue(&repo, args)?,
-        Command::Review(args) => run_review(&repo, args)?,
+        Command::Issue(command) => run_issue(&repo, command)?,
+        Command::Review(command) => run_review(&repo, command)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
     }
@@ -130,15 +120,26 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_issue(repo: &gix::Repository, args: IssueArgs) -> Result<()> {
-    match args.command {
+fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
+    match command {
         IssueCommand::Put(args) => {
+            let (body, labels, assignees, reporters) = if args.interactive {
+                prompt_issue_fields()?
+            } else {
+                (
+                    args.body
+                        .context("--body is required unless --interactive")?,
+                    args.labels,
+                    args.assignees,
+                    args.reporters,
+                )
+            };
             let issue = Issue {
                 id: args.id,
-                body: args.body,
-                labels: args.labels,
-                assignees: args.assignees,
-                reporters: args.reporters,
+                body,
+                labels,
+                assignees,
+                reporters,
             };
             println!("{}", issue.save_in_repo(repo)?);
         }
@@ -150,9 +151,7 @@ fn run_issue(repo: &gix::Repository, args: IssueArgs) -> Result<()> {
         IssueCommand::List => print_lines(Issue::list(repo)?),
         IssueCommand::Log { id } => print_log(repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
-            if should_install(args.interactive, &format!("issue {id}"))?
-                && !Issue::delete(repo, &id)?
-            {
+            if !Issue::delete(repo, &id)? {
                 bail!("no issue {id}");
             }
         }
@@ -216,6 +215,65 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     }
 }
 
+fn prompt_issue_fields() -> Result<(String, Vec<String>, Vec<String>, Vec<String>)> {
+    require_terminal_for_interactive()?;
+    let body = prompt_required("body")?;
+    let labels = prompt_csv("labels (comma-separated, optional)")?;
+    let assignees = prompt_csv("assignees (comma-separated, optional)")?;
+    let reporters = prompt_csv("reporters (comma-separated, optional)")?;
+    Ok((body, labels, assignees, reporters))
+}
+
+fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
+    require_terminal_for_interactive()?;
+    let body = prompt_required("body")?;
+    let reviewers = prompt_csv("reviewers (comma-separated, optional)")?;
+    let requesters = prompt_csv("requesters (comma-separated, optional)")?;
+    let target = prompt_required("target")?;
+    Ok((body, reviewers, requesters, target))
+}
+
+fn require_terminal_for_interactive() -> Result<()> {
+    if std::io::stdin().is_terminal() {
+        Ok(())
+    } else {
+        bail!("--interactive requires a terminal")
+    }
+}
+
+fn prompt_required(field: &str) -> Result<String> {
+    loop {
+        let input = prompt_line(field)?;
+        if !input.trim().is_empty() {
+            return Ok(input);
+        }
+        eprintln!("{field} is required");
+    }
+}
+
+fn prompt_csv(field: &str) -> Result<Vec<String>> {
+    let input = prompt_line(field)?;
+    Ok(input
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+fn prompt_line(field: &str) -> Result<String> {
+    eprint!("{field}: ");
+    std::io::stderr().flush()?;
+
+    let mut input = String::new();
+    let read = std::io::stdin().read_line(&mut input)?;
+    if read == 0 {
+        bail!("unexpected end of input");
+    }
+
+    Ok(input.trim().to_owned())
+}
+
 fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
     match command {
         QueryCommand::Run {
@@ -270,15 +328,27 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
     }
 }
 
-fn run_review(repo: &gix::Repository, args: ReviewArgs) -> Result<()> {
-    match args.command {
+fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
+    match command {
         ReviewCommand::Put(args) => {
+            let (body, reviewers, requesters, target) = if args.interactive {
+                prompt_review_fields()?
+            } else {
+                (
+                    args.body
+                        .context("--body is required unless --interactive")?,
+                    args.reviewers,
+                    args.requesters,
+                    args.target
+                        .context("--target is required unless --interactive")?,
+                )
+            };
             let review = Review {
                 id: args.id,
-                body: args.body,
-                reviewers: args.reviewers,
-                requesters: args.requesters,
-                target: parse_review_target(&args.target)?,
+                body,
+                reviewers,
+                requesters,
+                target: parse_review_target(&target)?,
             };
             println!("{}", review.save_in_repo(repo)?);
         }
@@ -290,9 +360,7 @@ fn run_review(repo: &gix::Repository, args: ReviewArgs) -> Result<()> {
         ReviewCommand::List => print_lines(Review::list(repo)?),
         ReviewCommand::Log { id } => print_log(repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
-            if should_install(args.interactive, &format!("review {id}"))?
-                && !Review::delete(repo, &id)?
-            {
+            if !Review::delete(repo, &id)? {
                 bail!("no review {id}");
             }
         }
