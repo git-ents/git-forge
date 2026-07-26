@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use gix_forge::{Issue, Review, ReviewTarget};
 use test_support::init_repo;
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-forge");
@@ -46,6 +47,32 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
 fn create_origin_commit(dir: &Path) -> String {
     let _ = git_stdout(dir, &["commit", "--allow-empty", "-m", "init"]);
     git_stdout(dir, &["rev-parse", "--short=8", "HEAD"])
+}
+
+fn put_issue(dir: &Path, id: &str, body: &str) {
+    let repo = gix::open(dir).unwrap();
+    let issue = Issue {
+        id: id.to_owned(),
+        body: body.to_owned(),
+        labels: vec![],
+        assignees: vec![],
+        reporters: vec![],
+    };
+    issue.save_in_repo(&repo).unwrap();
+}
+
+fn put_review(dir: &Path, id: &str, body: &str) {
+    let repo = gix::open(dir).unwrap();
+    let review = Review {
+        id: id.to_owned(),
+        body: body.to_owned(),
+        reviewers: vec![],
+        requesters: vec![],
+        target: ReviewTarget::Commit {
+            oid: "deadbeef".to_owned(),
+        },
+    };
+    review.save_in_repo(&repo).unwrap();
 }
 
 #[test]
@@ -146,6 +173,32 @@ fn issue_new_show_list_log_and_remove() {
 }
 
 #[test]
+fn issue_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+
+    put_issue(path, "abc11111", "first body");
+    put_issue(path, "abc22222", "second body");
+
+    let (out, err, ok) = run(path, &["issue", "show", "abc1"]);
+    assert!(ok, "issue show by unique prefix failed: {err}");
+    assert!(out.contains("id: abc11111"), "issue show output: {out}");
+    assert!(out.contains("body: first body"), "issue show output: {out}");
+
+    let (_, err, ok) = run(path, &["issue", "show", "abc"]);
+    assert!(!ok, "issue show should fail on ambiguous prefix");
+    assert!(
+        err.contains("ambiguous issue id abc"),
+        "issue show stderr: {err}"
+    );
+    assert!(
+        err.contains("**abc1**1111") && err.contains("**abc2**2222"),
+        "issue show stderr: {err}"
+    );
+}
+
+#[test]
 fn issue_new_interactive_requires_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -155,6 +208,35 @@ fn issue_new_interactive_requires_terminal() {
     assert!(
         err.contains("--interactive requires a terminal"),
         "interactive issue put stderr: {err}"
+    );
+}
+
+#[test]
+fn review_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+
+    put_review(path, "def11111", "first review");
+    put_review(path, "def22222", "second review");
+
+    let (out, err, ok) = run(path, &["review", "show", "def1"]);
+    assert!(ok, "review show by unique prefix failed: {err}");
+    assert!(out.contains("id: def11111"), "review show output: {out}");
+    assert!(
+        out.contains("body: first review"),
+        "review show output: {out}"
+    );
+
+    let (_, err, ok) = run(path, &["review", "show", "def"]);
+    assert!(!ok, "review show should fail on ambiguous prefix");
+    assert!(
+        err.contains("ambiguous review id def"),
+        "review show stderr: {err}"
+    );
+    assert!(
+        err.contains("**def1**1111") && err.contains("**def2**2222"),
+        "review show stderr: {err}"
     );
 }
 

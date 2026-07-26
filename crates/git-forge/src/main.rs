@@ -171,6 +171,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
             println!("{}", issue.save_in_repo(repo)?);
         }
         IssueCommand::Show { id } => {
+            let id = resolve_issue_show_id(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             let issue =
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             print_issue(&issue);
@@ -498,6 +499,8 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
             println!("{}", review.save_in_repo(repo)?);
         }
         ReviewCommand::Show { id } => {
+            let id =
+                resolve_review_show_id(repo, &id)?.with_context(|| format!("no review {id}"))?;
             let review =
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
             print_review(&review);
@@ -511,6 +514,57 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_issue_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
+    let ids = Issue::list(repo)?;
+    resolve_show_id("issue", id, &ids)
+}
+
+fn resolve_review_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
+    let ids = Review::list(repo)?;
+    resolve_show_id("review", id, &ids)
+}
+
+fn resolve_show_id(kind: &str, input: &str, ids: &[String]) -> Result<Option<String>> {
+    if ids.iter().any(|id| id == input) {
+        return Ok(Some(input.to_owned()));
+    }
+
+    let matches: Vec<&String> = ids.iter().filter(|id| id.starts_with(input)).collect();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some((**only).clone())),
+        many => {
+            let options = many
+                .iter()
+                .map(|id| format!("  {}", emphasize_min_unique_prefix(id, ids)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!("ambiguous {kind} id {input}; matches:\n{options}")
+        }
+    }
+}
+
+fn emphasize_min_unique_prefix(id: &str, ids: &[String]) -> String {
+    let min_len = min_unique_prefix_len(id, ids);
+    let (prefix, suffix) = id.split_at(min_len);
+    format!("**{prefix}**{suffix}")
+}
+
+fn min_unique_prefix_len(id: &str, ids: &[String]) -> usize {
+    for len in 1..=id.len() {
+        let prefix = &id[..len];
+        if ids
+            .iter()
+            .filter(|candidate| candidate.starts_with(prefix))
+            .count()
+            == 1
+        {
+            return len;
+        }
+    }
+    id.len()
 }
 
 fn parse_review_target(target: &str) -> Result<ReviewTarget> {
