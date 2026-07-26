@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use gix_forge::{Issue, Review, ReviewTarget};
+use proptest::prelude::*;
 use test_support::init_repo;
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-forge");
@@ -441,117 +442,117 @@ fn query_sugar_filters_by_people_and_keyword() {
     );
 }
 
-#[test]
-fn query_find_supports_all_filter_combinations() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    let path = dir.path();
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(96))]
 
-    let repo = gix::open(path).unwrap();
+    #[test]
+    fn query_find_supports_all_filter_combinations(
+        use_assignee in any::<bool>(),
+        use_reviewer in any::<bool>(),
+        use_requester in any::<bool>(),
+        text_filter_kind in 0u8..3,
+    ) {
+        prop_assume!(use_assignee || use_reviewer || use_requester || text_filter_kind != 0);
 
-    let matching_issue_id = "iss11111";
-    Issue {
-        id: matching_issue_id.to_owned(),
-        body: "release blocker".to_owned(),
-        labels: vec![],
-        assignees: vec!["alice".to_owned()],
-        reporters: vec![],
-    }
-    .save_in_repo(&repo)
-    .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let path = dir.path();
 
-    Issue {
-        id: "iss22222".to_owned(),
-        body: "misc task".to_owned(),
-        labels: vec![],
-        assignees: vec!["eve".to_owned()],
-        reporters: vec![],
-    }
-    .save_in_repo(&repo)
-    .unwrap();
+        let repo = gix::open(path).unwrap();
 
-    let matching_review_id = "rev11111";
-    Review {
-        id: matching_review_id.to_owned(),
-        body: "release reviewed".to_owned(),
-        reviewers: vec!["carol".to_owned()],
-        requesters: vec!["dave".to_owned()],
-        target: ReviewTarget::Commit {
-            oid: "deadbeef".to_owned(),
-        },
-    }
-    .save_in_repo(&repo)
-    .unwrap();
+        let issue_rows = vec![
+            ("iss11111", "release blocker", "alice"),
+            ("iss22222", "misc task", "eve"),
+        ];
+        for (id, body, assignee) in &issue_rows {
+            Issue {
+                id: (*id).to_owned(),
+                body: (*body).to_owned(),
+                labels: vec![],
+                assignees: vec![(*assignee).to_owned()],
+                reporters: vec![],
+            }
+            .save_in_repo(&repo)
+            .unwrap();
+        }
 
-    Review {
-        id: "rev22222".to_owned(),
-        body: "other note".to_owned(),
-        reviewers: vec!["mallory".to_owned()],
-        requesters: vec!["trent".to_owned()],
-        target: ReviewTarget::Commit {
-            oid: "feedface".to_owned(),
-        },
-    }
-    .save_in_repo(&repo)
-    .unwrap();
+        let review_rows = vec![
+            ("rev11111", "release reviewed", "carol", "dave", "deadbeef"),
+            ("rev22222", "other note", "mallory", "trent", "feedface"),
+        ];
+        for (id, body, reviewer, requester, oid) in &review_rows {
+            Review {
+                id: (*id).to_owned(),
+                body: (*body).to_owned(),
+                reviewers: vec![(*reviewer).to_owned()],
+                requesters: vec![(*requester).to_owned()],
+                target: ReviewTarget::Commit {
+                    oid: (*oid).to_owned(),
+                },
+            }
+            .save_in_repo(&repo)
+            .unwrap();
+        }
 
-    for use_assignee in [false, true] {
-        for use_reviewer in [false, true] {
-            for use_requester in [false, true] {
-                for text_filter in [None, Some("keyword"), Some("title")] {
-                    if !use_assignee && !use_reviewer && !use_requester && text_filter.is_none() {
-                        continue;
-                    }
+        let mut args = vec!["query", "find"];
+        if use_assignee {
+            args.push("--assignee");
+            args.push("alice");
+        }
+        if use_reviewer {
+            args.push("--reviewer");
+            args.push("carol");
+        }
+        if use_requester {
+            args.push("--requester");
+            args.push("dave");
+        }
+        match text_filter_kind {
+            1 => {
+                args.push("--keyword");
+                args.push("release");
+            }
+            2 => {
+                args.push("--title");
+                args.push("release");
+            }
+            _ => {}
+        }
 
-                    let mut args = vec!["query", "find"];
-                    if use_assignee {
-                        args.push("--assignee");
-                        args.push("alice");
-                    }
-                    if use_reviewer {
-                        args.push("--reviewer");
-                        args.push("carol");
-                    }
-                    if use_requester {
-                        args.push("--requester");
-                        args.push("dave");
-                    }
-                    match text_filter {
-                        Some("keyword") => {
-                            args.push("--keyword");
-                            args.push("release");
-                        }
-                        Some("title") => {
-                            args.push("--title");
-                            args.push("release");
-                        }
-                        _ => {}
-                    }
+        let (out, err, ok) = run(path, &args);
+        prop_assert!(ok, "query find {:?} failed: {err}", &args[2..]);
 
-                    let (out, err, ok) = run(path, &args);
-                    assert!(ok, "query find {:?} failed: {err}", &args[2..],);
+        let use_text_filter = text_filter_kind != 0;
+        let mut expected = Vec::new();
 
-                    let issue_matches = !use_reviewer && !use_requester;
-                    let review_matches = !use_assignee;
-
-                    let mut expected = Vec::new();
-                    if issue_matches {
-                        expected.push(format!("issue:{matching_issue_id}"));
-                    }
-                    if review_matches {
-                        expected.push(format!("review:{matching_review_id}"));
-                    }
-
-                    let got: Vec<&str> = out.lines().filter(|line| !line.is_empty()).collect();
-                    let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
-                    assert_eq!(
-                        got,
-                        expected_refs,
-                        "unexpected output for args {:?}",
-                        &args[2..]
-                    );
-                }
+        for (id, body, assignee) in &issue_rows {
+            let matches_assignee = !use_assignee || *assignee == "alice";
+            let matches_kind_specific = !use_reviewer && !use_requester;
+            let matches_text = !use_text_filter || body.contains("release");
+            if matches_assignee && matches_kind_specific && matches_text {
+                expected.push(format!("issue:{id}"));
             }
         }
+
+        for (id, body, reviewer, requester, _) in &review_rows {
+            let matches_assignee = !use_assignee;
+            let matches_reviewer = !use_reviewer || *reviewer == "carol";
+            let matches_requester = !use_requester || *requester == "dave";
+            let matches_text = !use_text_filter || body.contains("release");
+            if matches_assignee && matches_reviewer && matches_requester && matches_text {
+                expected.push(format!("review:{id}"));
+            }
+        }
+
+        let got: Vec<&str> = out.lines().filter(|line| !line.is_empty()).collect();
+        let expected_refs: Vec<&str> = expected.iter().map(String::as_str).collect();
+        let oracle = "oracle: issues where assignee/alice if set, no reviewer/requester filters, text has release if set; reviews where no assignee filter, reviewer/requester match if set, text has release if set";
+        prop_assert_eq!(
+            got,
+            expected_refs,
+            "unexpected output for args {:?}; {}",
+            &args[2..],
+            oracle
+        );
     }
 }
