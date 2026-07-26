@@ -61,6 +61,7 @@ fn put_issue(dir: &Path, id: &str, body: &str) {
     let repo = gix::open(dir).unwrap();
     let issue = Issue {
         id: id.to_owned(),
+        title: String::new(),
         body: body.to_owned(),
         labels: vec![],
         assignees: vec![],
@@ -119,6 +120,8 @@ fn issue_new_show_list_log_and_remove() {
         &[
             "issue",
             "new",
+            "--title",
+            "first title",
             "--body",
             "first body",
             "--label",
@@ -140,6 +143,7 @@ fn issue_new_show_list_log_and_remove() {
         out.contains(&format!("#{issue_id}")),
         "issue show output: {out}"
     );
+    assert!(out.contains("first title"), "issue show output: {out}");
     assert!(out.contains("first body"), "issue show output: {out}");
     assert!(
         out.contains("Assigned to alice"),
@@ -483,6 +487,7 @@ proptest! {
         for (id, body, assignee) in &issue_rows {
             Issue {
                 id: (*id).to_owned(),
+                title: String::new(),
                 body: (*body).to_owned(),
                 labels: vec![],
                 assignees: vec![(*assignee).to_owned()],

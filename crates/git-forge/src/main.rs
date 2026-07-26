@@ -56,8 +56,10 @@ enum IssueCommand {
 
 #[derive(Args)]
 struct IssueNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "labels", "assignees", "reporters"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters"])]
     interactive: bool,
+    #[arg(long)]
+    title: Option<String>,
     #[arg(long, required_unless_present = "interactive")]
     body: Option<String>,
     #[arg(long = "label")]
@@ -156,10 +158,11 @@ fn main() -> Result<()> {
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
         IssueCommand::New(args) | IssueCommand::Put(args) => {
-            let (body, labels, assignees, reporters) = if args.interactive {
+            let (title, body, labels, assignees, reporters) = if args.interactive {
                 prompt_issue_fields()?
             } else {
                 (
+                    args.title.unwrap_or_default(),
                     args.body
                         .context("--body is required unless --interactive")?,
                     args.labels,
@@ -169,6 +172,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
             };
             let issue = Issue {
                 id: origin_commit_short_id(repo)?,
+                title,
                 body,
                 labels,
                 assignees,
@@ -252,13 +256,14 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     }
 }
 
-fn prompt_issue_fields() -> Result<(String, Vec<String>, Vec<String>, Vec<String>)> {
+fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
     require_terminal_for_interactive()?;
+    let title = prompt_line("title (optional)")?;
     let body = prompt_required("body")?;
     let labels = prompt_csv("labels (comma-separated, optional)")?;
     let assignees = prompt_csv("assignees (comma-separated, optional)")?;
     let reporters = prompt_csv("reporters (comma-separated, optional)")?;
-    Ok((body, labels, assignees, reporters))
+    Ok((title, body, labels, assignees, reporters))
 }
 
 fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
@@ -703,6 +708,11 @@ fn print_log(
 fn print_issue(issue: &Issue) {
     println!("----");
     println!("#{}", color_id(&issue.id));
+    if issue.title.is_empty() {
+        println!("{}", color_empty_marker("(untitled)"));
+    } else {
+        println!("{}", issue.title);
+    }
     println!();
 
     if issue.body.is_empty() {

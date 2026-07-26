@@ -37,6 +37,7 @@ pub enum Error {
 #[derive(Debug, Facet)]
 pub struct Issue {
     pub id: String,
+    pub title: String,
     pub body: String,
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
@@ -364,6 +365,7 @@ mod tests {
     fn example_issue_creation() {
         let _issue = Issue {
             id: "123".to_string(),
+            title: "Cannot save issue".to_string(),
             body: "This is a bug report.".to_string(),
             labels: vec!["bug".to_string(), "high-priority".to_string()],
             assignees: vec!["jdc-pub".to_string()],
@@ -396,6 +398,7 @@ mod tests {
 
         let issue = Issue {
             id: "issue-1".to_string(),
+            title: "Round trip issue".to_string(),
             body: "round trip issue".to_string(),
             labels: vec!["bug".to_string(), "P1".to_string()],
             assignees: vec!["alice".to_string()],
@@ -408,6 +411,7 @@ mod tests {
             .expect("issue exists");
 
         assert_eq!(loaded.id, issue.id);
+        assert_eq!(loaded.title, issue.title);
         assert_eq!(loaded.body, issue.body);
         assert_eq!(loaded.labels, issue.labels);
         assert_eq!(loaded.assignees, issue.assignees);
