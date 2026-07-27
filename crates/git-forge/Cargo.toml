@@ -15,7 +15,7 @@ anyhow = "1"
 chrono = "0.4"
 comfy-table = "7"
 owo-colors = "4"
-crossterm = "0.29"
+dialoguer = "0.11"
 acdc-parser = { git = "https://github.com/nlopes/acdc.git", package = "acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
 acdc-converters-core = { git = "https://github.com/nlopes/acdc.git", package = "acdc-converters-core", default-features = false }
 acdc-converters-terminal = { git = "https://github.com/nlopes/acdc.git", package = "acdc-converters-terminal", default-features = false, features = ["pre-spec-subs", "highlighting"] }

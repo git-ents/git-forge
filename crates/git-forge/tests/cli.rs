@@ -409,7 +409,7 @@ fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
         &["issue", "edit", issue_id.as_str()],
         &[
             ("What would you like to edit?", " \r"),
-            ("title [first title]:", "second title\n"),
+            ("Title (first title)", "second title\n"),
         ],
         &[],
     );
@@ -661,19 +661,11 @@ fn comment_edit_without_edit_defaults_to_interactive_with_pty() {
     init_repo(dir.path());
     let path = dir.path();
 
-    let editor_script = path.join("editor-write-comment.sh");
-    std::fs::write(
-        &editor_script,
-        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nEDIT:\neditor reason\nEOF\n",
-    )
-    .unwrap();
-
-    let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["comment", "edit", "comment-1"],
+        &[("Edit reason", "editor reason\n")],
         &[],
-        &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive comment edit failed: {err}");
 

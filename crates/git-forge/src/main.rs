@@ -1,9 +1,6 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
-use std::io::{IsTerminal, Write as _};
-use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::IsTerminal;
 
 use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
 use acdc_converters_terminal::Processor as TerminalProcessor;
@@ -15,11 +12,8 @@ use comfy_table::{
     Attribute, Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
     presets::UTF8_FULL,
 };
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    terminal::{self, ClearType},
+use dialoguer::{
+    Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select, theme::ColorfulTheme,
 };
 use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget, Status};
 use owo_colors::OwoColorize;
@@ -245,7 +239,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                     && args.reporters.is_empty(),
             )?;
             let (title, body, labels, assignees, reporters) = if interactive {
-                prompt_issue_fields()?
+                prompt_issue_fields(repo)?
             } else {
                 (
                     args.title.unwrap_or_default(),
@@ -383,26 +377,12 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     if !interactive {
         return Ok(true);
     }
-    if !std::io::stdin().is_terminal() {
-        bail!("--interactive requires a terminal");
-    }
+    require_terminal_for_interactive()?;
 
-    loop {
-        eprint!("install {prompt}? [Y/n]: ");
-        std::io::stderr().flush()?;
-
-        let mut input = String::new();
-        let read = std::io::stdin().read_line(&mut input)?;
-        if read == 0 {
-            bail!("unexpected end of input");
-        }
-
-        match input.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => eprintln!("please answer y or n"),
-        }
-    }
+    Ok(Confirm::with_theme(&interactive_theme())
+        .with_prompt(format!("install {prompt}?"))
+        .default(true)
+        .interact()?)
 }
 
 fn resolve_interactive(explicit: bool, no_args_supplied: bool) -> Result<bool> {
@@ -413,514 +393,227 @@ fn resolve_interactive(explicit: bool, no_args_supplied: bool) -> Result<bool> {
     Ok(no_args_supplied && std::io::stdin().is_terminal())
 }
 
-fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
-    let values = collect_interactive_form(
-        "Create issue fields.",
-        &[
-            InteractiveField::new("TITLE", "title (optional)", false, None),
-            InteractiveField::new("BODY", "body", true, None),
-            InteractiveField::new("LABELS", "labels (comma-separated, optional)", false, None),
-            InteractiveField::new(
-                "ASSIGNEES",
-                "assignees (comma-separated, optional)",
-                false,
-                None,
-            ),
-            InteractiveField::new(
-                "REPORTERS",
-                "reporters (comma-separated, optional)",
-                false,
-                None,
-            ),
-        ],
+fn interactive_theme() -> ColorfulTheme {
+    ColorfulTheme::default()
+}
+
+fn prompt_optional_text(prompt: &str) -> Result<String> {
+    require_terminal_for_interactive()?;
+    Ok(Input::with_theme(&interactive_theme())
+        .with_prompt(prompt)
+        .allow_empty(true)
+        .interact_text()?)
+}
+
+fn prompt_required_text(prompt: &str) -> Result<String> {
+    require_terminal_for_interactive()?;
+    Ok(Input::with_theme(&interactive_theme())
+        .with_prompt(prompt)
+        .validate_with(|input: &String| -> Result<(), &str> {
+            if input.trim().is_empty() {
+                Err("required")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()?)
+}
+
+fn prompt_text_with_default(prompt: &str, default: &str) -> Result<String> {
+    require_terminal_for_interactive()?;
+    Ok(Input::with_theme(&interactive_theme())
+        .with_prompt(prompt)
+        .default(default.to_owned())
+        .interact_text()?)
+}
+
+/// Prompt for a (typically long-form) body via the user's `$VISUAL`/`$EDITOR`.
+fn prompt_body(initial: &str) -> Result<String> {
+    require_terminal_for_interactive()?;
+    let edited = InteractiveEditor::new()
+        .edit(initial)
+        .context("failed to launch editor")?
+        .context("cancelled: body was not saved")?;
+    let value = edited.trim_end_matches(['\r', '\n']).to_owned();
+    if value.trim().is_empty() {
+        bail!("body is required");
+    }
+    Ok(value)
+}
+
+fn prompt_status(current: Status) -> Result<Status> {
+    require_terminal_for_interactive()?;
+    let items = ["Open", "Closed"];
+    let default_index = match current {
+        Status::Open => 0,
+        Status::Closed => 1,
+    };
+    let choice = Select::with_theme(&interactive_theme())
+        .with_prompt("Status")
+        .items(&items)
+        .default(default_index)
+        .interact()?;
+    Ok(if choice == 0 {
+        Status::Open
+    } else {
+        Status::Closed
+    })
+}
+
+/// Pick zero or more values for a repeated field (labels, assignees, …). When
+/// `known` values exist (gathered from other entities already in the repo)
+/// they're offered as a multi-select picker; either way the user can also
+/// type in new, comma-separated values.
+fn prompt_multi_values(label: &str, known: &[String]) -> Result<Vec<String>> {
+    require_terminal_for_interactive()?;
+    let theme = interactive_theme();
+
+    let mut selected: Vec<String> = if known.is_empty() {
+        Vec::new()
+    } else {
+        MultiSelect::with_theme(&theme)
+            .with_prompt(format!("{label} (space to toggle, enter to confirm)"))
+            .items(known)
+            .interact()?
+            .into_iter()
+            .map(|index| known[index].clone())
+            .collect()
+    };
+
+    let extra: String = Input::with_theme(&theme)
+        .with_prompt(format!("Add {label} (comma-separated, optional)"))
+        .allow_empty(true)
+        .interact_text()?;
+    for value in parse_csv_input(&extra) {
+        if !selected.contains(&value) {
+            selected.push(value);
+        }
+    }
+    Ok(selected)
+}
+
+fn known_issue_values(
+    repo: &gix::Repository,
+    select: impl Fn(&Issue) -> &[String],
+) -> Result<Vec<String>> {
+    let mut values = std::collections::BTreeSet::new();
+    for id in Issue::list(repo)? {
+        if let Some(issue) = Issue::load_from_repo(repo, &id)? {
+            values.extend(select(&issue).iter().cloned());
+        }
+    }
+    Ok(values.into_iter().collect())
+}
+
+fn known_review_values(
+    repo: &gix::Repository,
+    select: impl Fn(&Review) -> &[String],
+) -> Result<Vec<String>> {
+    let mut values = std::collections::BTreeSet::new();
+    for id in Review::list(repo)? {
+        if let Some(review) = Review::load_from_repo(repo, &id)? {
+            values.extend(select(&review).iter().cloned());
+        }
+    }
+    Ok(values.into_iter().collect())
+}
+
+fn prompt_issue_fields(
+    repo: &gix::Repository,
+) -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
+    let title = prompt_optional_text("Title")?;
+    let body = prompt_body("")?;
+    let labels = prompt_multi_values("Labels", &known_issue_values(repo, |issue| &issue.labels)?)?;
+    let assignees = prompt_multi_values(
+        "Assignees",
+        &known_issue_values(repo, |issue| &issue.assignees)?,
     )?;
-    Ok((
-        values.get("TITLE").cloned().unwrap_or_default(),
-        values.get("BODY").cloned().unwrap_or_default(),
-        parse_csv_input(values.get("LABELS").map(String::as_str).unwrap_or_default()),
-        parse_csv_input(
-            values
-                .get("ASSIGNEES")
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ),
-        parse_csv_input(
-            values
-                .get("REPORTERS")
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ),
-    ))
+    let reporters = prompt_multi_values(
+        "Reporters",
+        &known_issue_values(repo, |issue| &issue.reporters)?,
+    )?;
+    Ok((title, body, labels, assignees, reporters))
 }
 
 fn prompt_issue_edit_fields(
     issue: &Issue,
 ) -> Result<(Option<String>, Option<String>, Option<String>)> {
-    let status = issue.status.as_str();
-    let fields = [
-        EditableField::line("TITLE", "Title", "title", &issue.title, true),
-        EditableField::editor("BODY", "Body", &issue.body, true),
-        EditableField::line("STATUS", "Status", "status (open|closed)", status, true),
-    ];
-    let selected = pick_edit_fields(&fields)?;
-    let values = collect_edit_field_values(&fields, &selected)?;
+    let fields = ["Title", "Body", "Status"];
+    let selected = MultiSelect::with_theme(&interactive_theme())
+        .with_prompt("What would you like to edit?")
+        .items(&fields)
+        .interact()?;
+    if selected.is_empty() {
+        bail!("select at least one field");
+    }
 
-    Ok((
-        selected
-            .contains(&"TITLE")
-            .then(|| values.get("TITLE").cloned().unwrap_or_default()),
-        selected
-            .contains(&"BODY")
-            .then(|| values.get("BODY").cloned().unwrap_or_default()),
-        if selected.contains(&"STATUS") {
-            Some(parse_status(
-                values.get("STATUS").map(String::as_str).unwrap_or_default(),
-            )?)
-        } else {
-            None
-        },
-    ))
+    let mut title = None;
+    let mut body = None;
+    let mut status = None;
+    for index in selected {
+        match index {
+            0 => title = Some(prompt_text_with_default("Title", &issue.title)?),
+            1 => body = Some(prompt_body(&issue.body)?),
+            2 => {
+                let current = Status::parse(&issue.status).unwrap_or(Status::Open);
+                status = Some(prompt_status(current)?.as_str().to_owned());
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok((title, body, status))
 }
 
-fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
-    let values = collect_interactive_form(
-        "Create review fields.",
-        &[
-            InteractiveField::new("BODY", "body", true, None),
-            InteractiveField::new(
-                "REVIEWERS",
-                "reviewers (comma-separated, optional)",
-                false,
-                None,
-            ),
-            InteractiveField::new(
-                "REQUESTERS",
-                "requesters (comma-separated, optional)",
-                false,
-                None,
-            ),
-            InteractiveField::new("TARGET", "target", true, None),
-        ],
+fn prompt_review_fields(
+    repo: &gix::Repository,
+) -> Result<(String, Vec<String>, Vec<String>, String)> {
+    let body = prompt_body("")?;
+    let reviewers = prompt_multi_values(
+        "Reviewers",
+        &known_review_values(repo, |review| &review.reviewers)?,
     )?;
-    Ok((
-        values.get("BODY").cloned().unwrap_or_default(),
-        parse_csv_input(
-            values
-                .get("REVIEWERS")
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ),
-        parse_csv_input(
-            values
-                .get("REQUESTERS")
-                .map(String::as_str)
-                .unwrap_or_default(),
-        ),
-        values.get("TARGET").cloned().unwrap_or_default(),
-    ))
+    let requesters = prompt_multi_values(
+        "Requesters",
+        &known_review_values(repo, |review| &review.requesters)?,
+    )?;
+    let target = prompt_required_text("Target (e.g. commit:<oid>, blob:<path>:<oid>)")?;
+    Ok((body, reviewers, requesters, target))
 }
 
 fn prompt_review_edit_fields(
     review: &Review,
 ) -> Result<(Option<String>, Option<String>, Option<String>)> {
-    let current_target = format_review_target(&review.target);
-    let status = review.status.as_str();
-    let fields = [
-        EditableField::editor("BODY", "Body", &review.body, true),
-        EditableField::line("TARGET", "Target", "target", &current_target, true),
-        EditableField::line("STATUS", "Status", "status (open|closed)", status, true),
-    ];
-    let selected = pick_edit_fields(&fields)?;
-    let values = collect_edit_field_values(&fields, &selected)?;
+    let fields = ["Body", "Target", "Status"];
+    let selected = MultiSelect::with_theme(&interactive_theme())
+        .with_prompt("What would you like to edit?")
+        .items(&fields)
+        .interact()?;
+    if selected.is_empty() {
+        bail!("select at least one field");
+    }
 
-    Ok((
-        selected
-            .contains(&"BODY")
-            .then(|| values.get("BODY").cloned().unwrap_or_default()),
-        selected
-            .contains(&"TARGET")
-            .then(|| values.get("TARGET").cloned().unwrap_or_default()),
-        if selected.contains(&"STATUS") {
-            Some(parse_status(
-                values.get("STATUS").map(String::as_str).unwrap_or_default(),
-            )?)
-        } else {
-            None
-        },
-    ))
+    let mut body = None;
+    let mut target = None;
+    let mut status = None;
+    for index in selected {
+        match index {
+            0 => body = Some(prompt_body(&review.body)?),
+            1 => {
+                let current = format_review_target(&review.target);
+                target = Some(prompt_text_with_default("Target", &current)?);
+            }
+            2 => {
+                let current = Status::parse(&review.status).unwrap_or(Status::Open);
+                status = Some(prompt_status(current)?.as_str().to_owned());
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok((body, target, status))
 }
 
 fn prompt_comment_edit_reason() -> Result<String> {
-    let values = collect_interactive_form(
-        "Edit comment fields.",
-        &[InteractiveField::new("EDIT", "edit reason", true, None)],
-    )?;
-    Ok(values.get("EDIT").cloned().unwrap_or_default())
-}
-
-fn preferred_editor() -> Option<String> {
-    std::env::var("VISUAL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("EDITOR")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        })
-}
-
-fn open_interactive_editor(template: &str) -> Result<String> {
-    let editor = preferred_editor().context("interactive editor requires $VISUAL or $EDITOR")?;
-    let path = make_editor_temp_path();
-    std::fs::write(&path, template)?;
-
-    let mut parts = editor.split_whitespace();
-    let program = parts
-        .next()
-        .context("interactive editor command is empty")?;
-    let mut cmd = ProcessCommand::new(program);
-    for arg in parts {
-        cmd.arg(arg);
-    }
-    let status = cmd
-        .arg(&path)
-        .status()
-        .with_context(|| format!("failed to launch editor `{editor}`"))?;
-    if !status.success() {
-        bail!("editor `{editor}` failed with status {status}");
-    }
-
-    let content = std::fs::read_to_string(&path)?;
-    let _ = std::fs::remove_file(&path);
-    Ok(content)
-}
-
-fn make_editor_temp_path() -> PathBuf {
-    let mut path = std::env::temp_dir();
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    path.push(format!("git-forge-edit-{pid}-{nanos}.txt"));
-    path
-}
-
-struct EditableField<'a> {
-    key: &'static str,
-    label: &'static str,
-    input: EditFieldInput<'a>,
-}
-
-impl<'a> EditableField<'a> {
-    const fn line(
-        key: &'static str,
-        label: &'static str,
-        prompt: &'static str,
-        initial: &'a str,
-        required: bool,
-    ) -> Self {
-        Self {
-            key,
-            label,
-            input: EditFieldInput::Line {
-                prompt,
-                initial,
-                required,
-            },
-        }
-    }
-
-    const fn editor(
-        key: &'static str,
-        label: &'static str,
-        initial: &'a str,
-        required: bool,
-    ) -> Self {
-        Self {
-            key,
-            label,
-            input: EditFieldInput::Editor { initial, required },
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum EditFieldInput<'a> {
-    Line {
-        prompt: &'static str,
-        initial: &'a str,
-        required: bool,
-    },
-    Editor {
-        initial: &'a str,
-        required: bool,
-    },
-}
-
-fn pick_edit_fields(fields: &[EditableField<'_>]) -> Result<Vec<&'static str>> {
-    require_terminal_for_interactive()?;
-    if fields.is_empty() {
-        bail!("no fields available to edit");
-    }
-
-    let _raw_mode = RawMode::enter()?;
-    let mut cursor_index = 0;
-    let mut selected = vec![false; fields.len()];
-    let mut rendered = false;
-    let mut error = None;
-
-    loop {
-        render_edit_field_picker(fields, &selected, cursor_index, error, rendered)?;
-        rendered = true;
-        error = None;
-
-        let Event::Key(KeyEvent {
-            code, modifiers, ..
-        }) = event::read()?
-        else {
-            continue;
-        };
-
-        match code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                cursor_index = cursor_index.checked_sub(1).unwrap_or(fields.len() - 1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                cursor_index = (cursor_index + 1) % fields.len();
-            }
-            KeyCode::Char(' ') => selected[cursor_index] = !selected[cursor_index],
-            KeyCode::Char('a') => {
-                let select = !selected.iter().all(|selected| *selected);
-                selected.fill(select);
-            }
-            KeyCode::Enter => {
-                if selected.iter().any(|selected| *selected) {
-                    return Ok(fields
-                        .iter()
-                        .zip(selected)
-                        .filter_map(|(field, selected)| selected.then_some(field.key))
-                        .collect());
-                }
-                error = Some("select at least one field");
-            }
-            KeyCode::Esc | KeyCode::Char('q') => bail!("cancelled"),
-            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => bail!("cancelled"),
-            _ => {}
-        }
-    }
-}
-
-fn collect_edit_field_values(
-    fields: &[EditableField<'_>],
-    selected: &[&'static str],
-) -> Result<std::collections::HashMap<String, String>> {
-    let mut values = std::collections::HashMap::new();
-    for field in fields {
-        if !selected.contains(&field.key) {
-            continue;
-        }
-
-        let value = match field.input {
-            EditFieldInput::Line {
-                prompt,
-                initial,
-                required,
-            } => prompt_line_with_default(prompt, initial, required)?,
-            EditFieldInput::Editor { initial, required } => {
-                let value = trim_editor_trailing_newlines(&open_interactive_editor(initial)?);
-                if required && value.trim().is_empty() {
-                    bail!("{} is required", field.key);
-                }
-                value
-            }
-        };
-        values.insert(field.key.to_owned(), value);
-    }
-    Ok(values)
-}
-
-fn trim_editor_trailing_newlines(value: &str) -> String {
-    value.trim_end_matches(['\r', '\n']).to_owned()
-}
-
-fn render_edit_field_picker(
-    fields: &[EditableField<'_>],
-    selected: &[bool],
-    cursor_index: usize,
-    error: Option<&str>,
-    redraw: bool,
-) -> Result<()> {
-    let mut stderr = std::io::stderr();
-    let line_count = fields.len() + 3;
-    if redraw {
-        execute!(stderr, cursor::MoveUp(line_count as u16))?;
-    }
-
-    execute!(
-        stderr,
-        cursor::MoveToColumn(0),
-        terminal::Clear(ClearType::CurrentLine)
-    )?;
-    writeln!(stderr, "What would you like to edit?")?;
-
-    for (i, field) in fields.iter().enumerate() {
-        let pointer = if i == cursor_index { ">" } else { " " };
-        let checkbox = if selected[i] { "x" } else { " " };
-        execute!(
-            stderr,
-            cursor::MoveToColumn(0),
-            terminal::Clear(ClearType::CurrentLine)
-        )?;
-        writeln!(stderr, "{pointer} [{checkbox}] {}", field.label)?;
-    }
-
-    execute!(
-        stderr,
-        cursor::MoveToColumn(0),
-        terminal::Clear(ClearType::CurrentLine)
-    )?;
-    writeln!(
-        stderr,
-        "{}",
-        "space: toggle • enter: submit • a: all • q: cancel".dimmed()
-    )?;
-
-    execute!(
-        stderr,
-        cursor::MoveToColumn(0),
-        terminal::Clear(ClearType::CurrentLine)
-    )?;
-    if let Some(error) = error {
-        writeln!(stderr, "{}", error.red())?;
-    } else {
-        writeln!(stderr)?;
-    }
-
-    stderr.flush()?;
-    Ok(())
-}
-
-struct RawMode;
-
-impl RawMode {
-    fn enter() -> Result<Self> {
-        terminal::enable_raw_mode()?;
-        execute!(std::io::stderr(), cursor::Hide)?;
-        Ok(Self)
-    }
-}
-
-impl Drop for RawMode {
-    fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(std::io::stderr(), cursor::Show);
-    }
-}
-
-struct InteractiveField<'a> {
-    key: &'a str,
-    prompt: &'a str,
-    required: bool,
-    initial: Option<&'a str>,
-}
-
-impl<'a> InteractiveField<'a> {
-    const fn new(key: &'a str, prompt: &'a str, required: bool, initial: Option<&'a str>) -> Self {
-        Self {
-            key,
-            prompt,
-            required,
-            initial,
-        }
-    }
-}
-
-fn collect_interactive_form(
-    title: &str,
-    fields: &[InteractiveField<'_>],
-) -> Result<std::collections::HashMap<String, String>> {
-    require_terminal_for_interactive()?;
-    if preferred_editor().is_some() {
-        let template = build_editor_template(title, fields);
-        let content = open_interactive_editor(&template)?;
-        let values = parse_editor_sections(&content);
-        for field in fields {
-            if field.required {
-                let value = values.get(field.key).cloned().unwrap_or_default();
-                if value.trim().is_empty() {
-                    bail!("{} is required", field.key);
-                }
-            }
-        }
-        return Ok(values);
-    }
-
-    let mut values = std::collections::HashMap::new();
-    for field in fields {
-        let value = if field.required {
-            prompt_required(field.prompt)?
-        } else {
-            prompt_line(field.prompt)?
-        };
-        values.insert(field.key.to_owned(), value);
-    }
-    Ok(values)
-}
-
-fn build_editor_template(title: &str, fields: &[InteractiveField<'_>]) -> String {
-    let mut out = format!("# {title}\n# Lines starting with # are ignored.\n");
-    for field in fields {
-        if field.required {
-            out.push_str(&format!("# Provide {}.\n", field.key));
-        }
-    }
-    for field in fields {
-        out.push_str(field.key);
-        out.push_str(":\n");
-        if let Some(initial) = field.initial {
-            out.push_str(initial);
-            if !initial.ends_with('\n') {
-                out.push('\n');
-            }
-        }
-        out.push('\n');
-    }
-    out
-}
-
-fn parse_editor_sections(content: &str) -> std::collections::HashMap<String, String> {
-    let mut sections = std::collections::HashMap::new();
-    let mut current: Option<String> = None;
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim_end();
-        if line.trim_start().starts_with('#') {
-            continue;
-        }
-
-        if let Some(key) = line.strip_suffix(':')
-            && key.chars().all(|c| c.is_ascii_uppercase() || c == '_')
-            && !key.is_empty()
-        {
-            current = Some(key.to_owned());
-            sections.entry(key.to_owned()).or_insert_with(String::new);
-            continue;
-        }
-
-        if let Some(key) = &current {
-            let entry = sections.entry(key.clone()).or_insert_with(String::new);
-            if !entry.is_empty() {
-                entry.push('\n');
-            }
-            entry.push_str(line);
-        }
-    }
-
-    sections
-        .into_iter()
-        .map(|(k, v)| (k, v.trim().to_owned()))
-        .collect()
+    prompt_required_text("Edit reason")
 }
 
 fn parse_csv_input(value: &str) -> Vec<String> {
@@ -938,55 +631,6 @@ fn require_terminal_for_interactive() -> Result<()> {
     } else {
         bail!("--interactive requires a terminal")
     }
-}
-
-fn prompt_required(field: &str) -> Result<String> {
-    loop {
-        let input = prompt_line(field)?;
-        if !input.trim().is_empty() {
-            return Ok(input);
-        }
-        eprintln!("{field} is required");
-    }
-}
-
-fn prompt_line_with_default(field: &str, initial: &str, required: bool) -> Result<String> {
-    loop {
-        if initial.is_empty() {
-            eprint!("{field}: ");
-        } else {
-            eprint!("{field} [{initial}]: ");
-        }
-        std::io::stderr().flush()?;
-
-        let mut input = String::new();
-        let read = std::io::stdin().read_line(&mut input)?;
-        if read == 0 {
-            bail!("unexpected end of input");
-        }
-
-        let value = input.trim().to_owned();
-        if value.is_empty() && !initial.is_empty() {
-            return Ok(initial.to_owned());
-        }
-        if !required || !value.is_empty() {
-            return Ok(value);
-        }
-        eprintln!("{field} is required");
-    }
-}
-
-fn prompt_line(field: &str) -> Result<String> {
-    eprint!("{field}: ");
-    std::io::stderr().flush()?;
-
-    let mut input = String::new();
-    let read = std::io::stdin().read_line(&mut input)?;
-    if read == 0 {
-        bail!("unexpected end of input");
-    }
-
-    Ok(input.trim().to_owned())
 }
 
 fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
@@ -1183,7 +827,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     && args.target.is_none(),
             )?;
             let (body, reviewers, requesters, target) = if interactive {
-                prompt_review_fields()?
+                prompt_review_fields(repo)?
             } else {
                 (
                     args.body
@@ -1327,14 +971,6 @@ fn format_review_target(target: &ReviewTarget) -> String {
         }
         ReviewTarget::CommitRange { start, end } => format!("commit-range:{start}:{end}"),
     }
-}
-
-fn parse_status(value: &str) -> Result<String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if Status::parse(&normalized).is_none() {
-        bail!("invalid status `{normalized}`; expected open or closed");
-    }
-    Ok(normalized)
 }
 
 fn format_status(status: &str) -> String {

@@ -9,7 +9,7 @@ source = "git+https://github.com/nlopes/acdc.git#2489f3bec8726c87cd4bcf289449326
 dependencies = [
  "acdc-parser",
  "bitflags 2.13.1",
- "thiserror",
+ "thiserror 2.0.19",
  "tracing",
 ]
 
@@ -23,7 +23,7 @@ dependencies = [
  "comfy-table",
  "crossterm",
  "syntect",
- "thiserror",
+ "thiserror 2.0.19",
  "tracing",
  "unicode-width 0.2.2",
 ]
@@ -43,7 +43,7 @@ dependencies = [
  "self_cell",
  "serde",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.19",
  "tracing",
  "url",
 ]
@@ -476,7 +476,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
 dependencies = [
  "ansi-str",
- "console",
+ "console 0.16.4",
  "crossterm",
  "unicode-segmentation",
  "unicode-width 0.2.2",
@@ -520,6 +520,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88d11d52c3d7ca2e6d0040212be9e4dbbcd78b6447f535b6b561f449427944cf"
 dependencies = [
  "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "console"
+version = "0.15.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ccb5b10f9f2cbf51eb355ca1d05c2d279ce1804688d0db74b4733a5aeafd8"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "unicode-width 0.2.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -722,7 +735,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -762,6 +775,19 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "dialoguer"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "658bce805d770f407bc62102fca7c2c64ceef2fbcb2b8bd19d2765ce093980de"
+dependencies = [
+ "console 0.15.11",
+ "shell-words",
+ "tempfile",
+ "thiserror 1.0.69",
+ "zeroize",
 ]
 
 [[package]]
@@ -929,7 +955,7 @@ dependencies = [
  "gix-hash",
  "gix-object",
  "gix-odb",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1260,7 +1286,7 @@ dependencies = [
  "chrono",
  "clap",
  "comfy-table",
- "crossterm",
+ "dialoguer",
  "gix",
  "gix-forge",
  "owo-colors",
@@ -1318,7 +1344,7 @@ dependencies = [
  "parking_lot",
  "signal-hook 0.4.4",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1341,7 +1367,7 @@ dependencies = [
  "facet-git-tree",
  "gix",
  "gix-object",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1357,7 +1383,7 @@ dependencies = [
  "gix-trace",
  "kstring",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
  "unicode-bom",
 ]
 
@@ -1399,7 +1425,7 @@ source = "git+https://github.com/git-ents/git-anchor.git#f244abe512915e5af345f0e
 dependencies = [
  "gix",
  "gix-anchor",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1430,7 +1456,7 @@ dependencies = [
  "gix-ref",
  "gix-sec",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
  "unicode-bom",
 ]
 
@@ -1444,7 +1470,7 @@ dependencies = [
  "bstr",
  "gix-path",
  "libc",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1477,7 +1503,7 @@ dependencies = [
  "gix-trace",
  "gix-traverse",
  "gix-worktree",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1492,7 +1518,7 @@ dependencies = [
  "gix-path",
  "gix-ref",
  "gix-sec",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1518,7 +1544,7 @@ dependencies = [
  "libc",
  "once_cell",
  "prodash",
- "thiserror",
+ "thiserror 2.0.19",
  "walkdir",
  "zlib-rs",
 ]
@@ -1541,7 +1567,7 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1556,7 +1582,7 @@ dependencies = [
  "gix-store",
  "tempfile",
  "test-support",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1570,7 +1596,7 @@ dependencies = [
  "gix-features",
  "gix-path",
  "gix-utils",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1594,7 +1620,7 @@ dependencies = [
  "faster-hex",
  "gix-features",
  "sha1-checked",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1656,7 +1682,7 @@ dependencies = [
  "memmap2",
  "rustix",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1667,7 +1693,7 @@ checksum = "65c9dedd9e90b0d47624d2ed241d394e09294118364e87b9b7e5f1fe755f3c2c"
 dependencies = [
  "gix-tempfile",
  "gix-utils",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1686,7 +1712,7 @@ dependencies = [
  "gix-validate",
  "itoa",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1707,7 +1733,7 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "tempfile",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1726,7 +1752,7 @@ dependencies = [
  "gix-path",
  "memmap2",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1738,7 +1764,7 @@ dependencies = [
  "bstr",
  "faster-hex",
  "gix-trace",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1750,7 +1776,7 @@ dependencies = [
  "bstr",
  "gix-trace",
  "gix-validate",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1765,7 +1791,7 @@ dependencies = [
  "gix-config-value",
  "gix-glob",
  "gix-path",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1784,7 +1810,7 @@ dependencies = [
  "gix-utils",
  "maybe-async",
  "nonempty",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1799,7 +1825,7 @@ dependencies = [
  "gix-query-ir",
  "gix-query-parse",
  "gix-query-rules",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1808,7 +1834,7 @@ version = "0.1.0"
 source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
 dependencies = [
  "gix-query-ir",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1820,7 +1846,7 @@ dependencies = [
  "gix-query-ir",
  "nemo",
  "nemo-physical",
- "thiserror",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
@@ -1833,7 +1859,7 @@ dependencies = [
  "gix-anchor",
  "gix-query-ir",
  "gix-store",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1841,7 +1867,7 @@ name = "gix-query-ir"
 version = "0.1.0"
 source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
 dependencies = [
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1850,7 +1876,7 @@ version = "0.1.0"
 source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
 dependencies = [
  "gix-query-ir",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1867,7 +1893,7 @@ dependencies = [
  "gix-query-ir",
  "gix-query-parse",
  "gix-store",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1898,7 +1924,7 @@ dependencies = [
  "gix-utils",
  "gix-validate",
  "memmap2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1914,7 +1940,7 @@ dependencies = [
  "gix-revision",
  "gix-validate",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1949,7 +1975,7 @@ dependencies = [
  "gix-hashtable",
  "gix-object",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1974,7 +2000,7 @@ dependencies = [
  "gix-hash",
  "gix-lock",
  "nonempty",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1985,7 +2011,7 @@ dependencies = [
  "facet-git-tree",
  "facet-value",
  "gix",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -2000,7 +2026,7 @@ dependencies = [
  "gix-pathspec",
  "gix-refspec",
  "gix-url",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -2037,7 +2063,7 @@ dependencies = [
  "gix-quote",
  "gix-sec",
  "gix-url",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -2054,7 +2080,7 @@ dependencies = [
  "gix-object",
  "gix-revwalk",
  "smallvec 1.15.2",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -2066,7 +2092,7 @@ dependencies = [
  "bstr",
  "gix-path",
  "percent-encoding",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -2817,7 +2843,7 @@ dependencies = [
  "spargebra",
  "strum",
  "strum_macros",
- "thiserror",
+ "thiserror 2.0.19",
  "tower-lsp",
  "unicode-ident",
  "urlencoding",
@@ -2850,7 +2876,7 @@ dependencies = [
  "serde",
  "serde_urlencoded",
  "streaming-iterator",
- "thiserror",
+ "thiserror 2.0.19",
  "unicode-segmentation",
  "urlencoding",
  "wasmtimer",
@@ -3170,7 +3196,7 @@ dependencies = [
  "json-event-parser",
  "oxiri",
  "oxrdf",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3182,7 +3208,7 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "rand 0.8.7",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3195,7 +3221,7 @@ dependencies = [
  "oxrdf",
  "oxrdfxml",
  "oxttl",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3208,7 +3234,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "quick-xml 0.37.5",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3221,7 +3247,7 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "oxrdf",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -3987,7 +4013,7 @@ dependencies = [
  "oxrdf",
  "peg",
  "rand 0.8.7",
- "thiserror",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4096,7 +4122,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "thiserror",
+ "thiserror 2.0.19",
  "walkdir",
  "yaml-rust",
 ]
@@ -4150,11 +4176,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.19",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4764,6 +4810,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]
