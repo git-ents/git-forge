@@ -377,94 +377,167 @@ fn resolve_interactive(explicit: bool, no_args_supplied: bool) -> Result<bool> {
 }
 
 fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
-    require_terminal_for_interactive()?;
-    let title = prompt_line("title (optional)")?;
-    let body = prompt_required("body")?;
-    let labels = prompt_csv("labels (comma-separated, optional)")?;
-    let assignees = prompt_csv("assignees (comma-separated, optional)")?;
-    let reporters = prompt_csv("reporters (comma-separated, optional)")?;
-    Ok((title, body, labels, assignees, reporters))
+    let values = collect_interactive_form(
+        "Create issue fields.",
+        &[
+            InteractiveField::new("TITLE", "title (optional)", false, None),
+            InteractiveField::new("BODY", "body", true, None),
+            InteractiveField::new("LABELS", "labels (comma-separated, optional)", false, None),
+            InteractiveField::new(
+                "ASSIGNEES",
+                "assignees (comma-separated, optional)",
+                false,
+                None,
+            ),
+            InteractiveField::new(
+                "REPORTERS",
+                "reporters (comma-separated, optional)",
+                false,
+                None,
+            ),
+        ],
+    )?;
+    Ok((
+        values.get("TITLE").cloned().unwrap_or_default(),
+        values.get("BODY").cloned().unwrap_or_default(),
+        parse_csv_input(values.get("LABELS").map(String::as_str).unwrap_or_default()),
+        parse_csv_input(
+            values
+                .get("ASSIGNEES")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+        parse_csv_input(
+            values
+                .get("REPORTERS")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+    ))
 }
 
 fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>, String)> {
-    require_terminal_for_interactive()?;
+    let values = collect_interactive_form(
+        "Edit issue fields.",
+        &[
+            InteractiveField::new(
+                "TITLE",
+                "title (leave blank to keep current)",
+                false,
+                Some(&issue.title),
+            ),
+            InteractiveField::new(
+                "BODY",
+                "body (leave blank to keep current)",
+                false,
+                Some(&issue.body),
+            ),
+            InteractiveField::new("EDIT", "edit reason", true, None),
+        ],
+    )?;
+    let title = values.get("TITLE").cloned().unwrap_or_default();
+    let body = values.get("BODY").cloned().unwrap_or_default();
+    let edit = values.get("EDIT").cloned().unwrap_or_default();
+
     if preferred_editor().is_some() {
-        let content = open_interactive_editor(&format!(
-            "# Edit issue fields. Lines starting with # are ignored.\n# Provide EDIT.\nTITLE:\n{}\n\nBODY:\n{}\n\nEDIT:\n",
-            issue.title, issue.body
-        ))?;
-        let parsed = parse_editor_sections(&content);
-        let title = parsed.get("TITLE").cloned().unwrap_or_default();
-        let body = parsed.get("BODY").cloned().unwrap_or_default();
-        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
-        let edit = required_editor_field("EDIT", edit)?;
-        return Ok((
+        Ok((
             (title != issue.title).then_some(title),
             (body != issue.body).then_some(body),
             edit,
-        ));
+        ))
+    } else {
+        Ok((
+            (!title.is_empty()).then_some(title),
+            (!body.is_empty()).then_some(body),
+            edit,
+        ))
     }
-
-    let title = prompt_line("title (leave blank to keep current)")?;
-    let body = prompt_line("body (leave blank to keep current)")?;
-    let edit = prompt_required("edit reason")?;
-    Ok((
-        (!title.is_empty()).then_some(title),
-        (!body.is_empty()).then_some(body),
-        edit,
-    ))
 }
 
 fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
-    require_terminal_for_interactive()?;
-    let body = prompt_required("body")?;
-    let reviewers = prompt_csv("reviewers (comma-separated, optional)")?;
-    let requesters = prompt_csv("requesters (comma-separated, optional)")?;
-    let target = prompt_required("target")?;
-    Ok((body, reviewers, requesters, target))
-}
-
-fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>, String)> {
-    require_terminal_for_interactive()?;
-    if preferred_editor().is_some() {
-        let current_target = format_review_target(&review.target);
-        let content = open_interactive_editor(&format!(
-            "# Edit review fields. Lines starting with # are ignored.\n# Provide EDIT.\nBODY:\n{}\n\nTARGET:\n{}\n\nEDIT:\n",
-            review.body, current_target
-        ))?;
-        let parsed = parse_editor_sections(&content);
-        let body = parsed.get("BODY").cloned().unwrap_or_default();
-        let target = parsed.get("TARGET").cloned().unwrap_or_default();
-        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
-        let edit = required_editor_field("EDIT", edit)?;
-        return Ok((
-            (body != review.body).then_some(body),
-            (target != current_target).then_some(target),
-            edit,
-        ));
-    }
-
-    let body = prompt_line("body (leave blank to keep current)")?;
-    let target = prompt_line("target (leave blank to keep current)")?;
-    let edit = prompt_required("edit reason")?;
+    let values = collect_interactive_form(
+        "Create review fields.",
+        &[
+            InteractiveField::new("BODY", "body", true, None),
+            InteractiveField::new(
+                "REVIEWERS",
+                "reviewers (comma-separated, optional)",
+                false,
+                None,
+            ),
+            InteractiveField::new(
+                "REQUESTERS",
+                "requesters (comma-separated, optional)",
+                false,
+                None,
+            ),
+            InteractiveField::new("TARGET", "target", true, None),
+        ],
+    )?;
     Ok((
-        (!body.is_empty()).then_some(body),
-        (!target.is_empty()).then_some(target),
-        edit,
+        values.get("BODY").cloned().unwrap_or_default(),
+        parse_csv_input(
+            values
+                .get("REVIEWERS")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+        parse_csv_input(
+            values
+                .get("REQUESTERS")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+        values.get("TARGET").cloned().unwrap_or_default(),
     ))
 }
 
-fn prompt_comment_edit_reason() -> Result<String> {
-    require_terminal_for_interactive()?;
+fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>, String)> {
+    let current_target = format_review_target(&review.target);
+    let values = collect_interactive_form(
+        "Edit review fields.",
+        &[
+            InteractiveField::new(
+                "BODY",
+                "body (leave blank to keep current)",
+                false,
+                Some(&review.body),
+            ),
+            InteractiveField::new(
+                "TARGET",
+                "target (leave blank to keep current)",
+                false,
+                Some(&current_target),
+            ),
+            InteractiveField::new("EDIT", "edit reason", true, None),
+        ],
+    )?;
+
+    let body = values.get("BODY").cloned().unwrap_or_default();
+    let target = values.get("TARGET").cloned().unwrap_or_default();
+    let edit = values.get("EDIT").cloned().unwrap_or_default();
+
     if preferred_editor().is_some() {
-        let content = open_interactive_editor(
-            "# Enter comment edit reason. Lines starting with # are ignored.\nEDIT:\n",
-        )?;
-        let parsed = parse_editor_sections(&content);
-        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
-        return required_editor_field("EDIT", edit);
+        Ok((
+            (body != review.body).then_some(body),
+            (target != current_target).then_some(target),
+            edit,
+        ))
+    } else {
+        Ok((
+            (!body.is_empty()).then_some(body),
+            (!target.is_empty()).then_some(target),
+            edit,
+        ))
     }
-    prompt_required("edit reason")
+}
+
+fn prompt_comment_edit_reason() -> Result<String> {
+    let values = collect_interactive_form(
+        "Edit comment fields.",
+        &[InteractiveField::new("EDIT", "edit reason", true, None)],
+    )?;
+    Ok(values.get("EDIT").cloned().unwrap_or_default())
 }
 
 fn preferred_editor() -> Option<String> {
@@ -515,6 +588,77 @@ fn make_editor_temp_path() -> PathBuf {
     path
 }
 
+struct InteractiveField<'a> {
+    key: &'a str,
+    prompt: &'a str,
+    required: bool,
+    initial: Option<&'a str>,
+}
+
+impl<'a> InteractiveField<'a> {
+    const fn new(key: &'a str, prompt: &'a str, required: bool, initial: Option<&'a str>) -> Self {
+        Self {
+            key,
+            prompt,
+            required,
+            initial,
+        }
+    }
+}
+
+fn collect_interactive_form(
+    title: &str,
+    fields: &[InteractiveField<'_>],
+) -> Result<std::collections::HashMap<String, String>> {
+    require_terminal_for_interactive()?;
+    if preferred_editor().is_some() {
+        let template = build_editor_template(title, fields);
+        let content = open_interactive_editor(&template)?;
+        let values = parse_editor_sections(&content);
+        for field in fields {
+            if field.required {
+                let value = values.get(field.key).cloned().unwrap_or_default();
+                if value.trim().is_empty() {
+                    bail!("{} is required", field.key);
+                }
+            }
+        }
+        return Ok(values);
+    }
+
+    let mut values = std::collections::HashMap::new();
+    for field in fields {
+        let value = if field.required {
+            prompt_required(field.prompt)?
+        } else {
+            prompt_line(field.prompt)?
+        };
+        values.insert(field.key.to_owned(), value);
+    }
+    Ok(values)
+}
+
+fn build_editor_template(title: &str, fields: &[InteractiveField<'_>]) -> String {
+    let mut out = format!("# {title}\n# Lines starting with # are ignored.\n");
+    for field in fields {
+        if field.required {
+            out.push_str(&format!("# Provide {}.\n", field.key));
+        }
+    }
+    for field in fields {
+        out.push_str(field.key);
+        out.push_str(":\n");
+        if let Some(initial) = field.initial {
+            out.push_str(initial);
+            if !initial.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn parse_editor_sections(content: &str) -> std::collections::HashMap<String, String> {
     let mut sections = std::collections::HashMap::new();
     let mut current: Option<String> = None;
@@ -549,11 +693,13 @@ fn parse_editor_sections(content: &str) -> std::collections::HashMap<String, Str
         .collect()
 }
 
-fn required_editor_field(field: &str, value: String) -> Result<String> {
-    if value.trim().is_empty() {
-        bail!("{field} is required")
-    }
-    Ok(value)
+fn parse_csv_input(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn require_terminal_for_interactive() -> Result<()> {
@@ -572,16 +718,6 @@ fn prompt_required(field: &str) -> Result<String> {
         }
         eprintln!("{field} is required");
     }
-}
-
-fn prompt_csv(field: &str) -> Result<Vec<String>> {
-    let input = prompt_line(field)?;
-    Ok(input
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
 }
 
 fn prompt_line(field: &str) -> Result<String> {
