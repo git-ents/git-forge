@@ -373,7 +373,7 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["issue", "edit", issue_id.as_str()],
-        Some(("Fields (", "2\n")),
+        Some(("What would you like to edit?", "\x1b[B \r")),
         &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive issue edit failed: {err}");
@@ -583,7 +583,7 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["review", "edit", review_id.as_str()],
-        Some(("Fields (", "1\n")),
+        Some(("What would you like to edit?", " \r")),
         &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive review edit failed: {err}");

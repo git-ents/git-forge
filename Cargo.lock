@@ -1260,6 +1260,7 @@ dependencies = [
  "chrono",
  "clap",
  "comfy-table",
+ "crossterm",
  "gix",
  "gix-forge",
  "owo-colors",

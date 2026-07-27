@@ -15,6 +15,12 @@ use comfy_table::{
     Attribute, Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
     presets::UTF8_FULL,
 };
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{self, ClearType},
+};
 use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget};
 use owo_colors::OwoColorize;
 
@@ -598,38 +604,130 @@ impl EditableField {
     }
 }
 
-/// Prompt the user to pick which fields to edit, gh-style, returning the
-/// selected field keys.
 fn pick_edit_fields(fields: &[EditableField]) -> Result<Vec<&'static str>> {
     require_terminal_for_interactive()?;
-    eprintln!("What would you like to edit?");
-    for (i, field) in fields.iter().enumerate() {
-        eprintln!("  {}) {}", i + 1, field.label);
+    if fields.is_empty() {
+        bail!("no fields available to edit");
     }
 
+    let _raw_mode = RawMode::enter()?;
+    let mut cursor_index = 0;
+    let mut selected = vec![false; fields.len()];
+    let mut rendered = false;
+    let mut error = None;
+
     loop {
-        let input = prompt_line("Fields (comma-separated numbers, or 'a' for all)")?;
-        let input = input.trim();
-        if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
-            return Ok(fields.iter().map(|f| f.key).collect());
-        }
+        render_edit_field_picker(fields, &selected, cursor_index, error, rendered)?;
+        rendered = true;
+        error = None;
 
-        let mut selected = Vec::new();
-        let mut valid = !input.is_empty();
-        for part in input.split(',') {
-            match part.trim().parse::<usize>() {
-                Ok(n) if n >= 1 && n <= fields.len() => selected.push(fields[n - 1].key),
-                _ => {
-                    valid = false;
-                    break;
-                }
+        let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        else {
+            continue;
+        };
+
+        match code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                cursor_index = cursor_index.checked_sub(1).unwrap_or(fields.len() - 1);
             }
+            KeyCode::Down | KeyCode::Char('j') => {
+                cursor_index = (cursor_index + 1) % fields.len();
+            }
+            KeyCode::Char(' ') => selected[cursor_index] = !selected[cursor_index],
+            KeyCode::Char('a') => {
+                let select = !selected.iter().all(|selected| *selected);
+                selected.fill(select);
+            }
+            KeyCode::Enter => {
+                if selected.iter().any(|selected| *selected) {
+                    return Ok(fields
+                        .iter()
+                        .zip(selected)
+                        .filter_map(|(field, selected)| selected.then_some(field.key))
+                        .collect());
+                }
+                error = Some("select at least one field");
+            }
+            KeyCode::Esc | KeyCode::Char('q') => bail!("cancelled"),
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => bail!("cancelled"),
+            _ => {}
         }
+    }
+}
 
-        if valid && !selected.is_empty() {
-            return Ok(selected);
-        }
-        eprintln!("please select at least one valid field number");
+fn render_edit_field_picker(
+    fields: &[EditableField],
+    selected: &[bool],
+    cursor_index: usize,
+    error: Option<&str>,
+    redraw: bool,
+) -> Result<()> {
+    let mut stderr = std::io::stderr();
+    let line_count = fields.len() + 3;
+    if redraw {
+        execute!(stderr, cursor::MoveUp(line_count as u16))?;
+    }
+
+    execute!(
+        stderr,
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::CurrentLine)
+    )?;
+    writeln!(stderr, "What would you like to edit?")?;
+
+    for (i, field) in fields.iter().enumerate() {
+        let pointer = if i == cursor_index { ">" } else { " " };
+        let checkbox = if selected[i] { "x" } else { " " };
+        execute!(
+            stderr,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine)
+        )?;
+        writeln!(stderr, "{pointer} [{checkbox}] {}", field.label)?;
+    }
+
+    execute!(
+        stderr,
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::CurrentLine)
+    )?;
+    writeln!(
+        stderr,
+        "{}",
+        "space: toggle • enter: submit • a: all • q: cancel".dimmed()
+    )?;
+
+    execute!(
+        stderr,
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::CurrentLine)
+    )?;
+    if let Some(error) = error {
+        writeln!(stderr, "{}", error.red())?;
+    } else {
+        writeln!(stderr)?;
+    }
+
+    stderr.flush()?;
+    Ok(())
+}
+
+struct RawMode;
+
+impl RawMode {
+    fn enter() -> Result<Self> {
+        terminal::enable_raw_mode()?;
+        execute!(std::io::stderr(), cursor::Hide)?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+        let _ = execute!(std::io::stderr(), cursor::Show);
     }
 }
 
