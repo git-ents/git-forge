@@ -149,8 +149,12 @@ fn issue_new_show_list_log_and_remove() {
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
-    assert!(out.contains("issues:"), "issue ls output: {out}");
-    assert_eq!(bulleted_items(&out), vec![issue_id.clone()]);
+    assert!(out.contains("ID"), "issue ls output: {out}");
+    assert!(out.contains("TITLE"), "issue ls output: {out}");
+    assert!(
+        out.contains(&format!("#{issue_id}")),
+        "issue ls output: {out}"
+    );
 
     let (_, err, ok) = run(
         path,

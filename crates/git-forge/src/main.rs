@@ -9,8 +9,14 @@ use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOption
 use acdc_converters_terminal::Processor as TerminalProcessor;
 use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
+use comfy_table::{
+    Attribute, Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
+    presets::UTF8_FULL,
+};
 use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget};
+use owo_colors::OwoColorize;
 
 #[derive(Parser)]
 #[command(name = "git-forge", about = "Forge software on Git", version)]
@@ -241,10 +247,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             print_issue(&issue);
         }
-        IssueCommand::List => {
-            let ids = Issue::list(repo)?;
-            print_id_list("issues", &ids);
-        }
+        IssueCommand::List => print_issue_list(repo)?,
         IssueCommand::Log { id } => print_log("issue", &id, repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
             if !Issue::delete(repo, &id)? {
@@ -756,6 +759,84 @@ fn print_id_list(title: &str, ids: &[String]) {
     print_bulleted_section(title, ids);
 }
 
+fn print_issue_list(repo: &gix::Repository) -> Result<()> {
+    let ids = Issue::list(repo)?;
+    if ids.is_empty() {
+        println!("No issues");
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("ID").add_attribute(Attribute::Bold),
+            Cell::new("TITLE").add_attribute(Attribute::Bold),
+            Cell::new("LABELS").add_attribute(Attribute::Bold),
+            Cell::new("UPDATED").add_attribute(Attribute::Bold),
+        ]);
+
+    for id in ids {
+        let Some(issue) = Issue::load_from_repo(repo, &id)? else {
+            continue;
+        };
+
+        let title = if issue.title.trim().is_empty() {
+            "(untitled)"
+        } else {
+            issue.title.as_str()
+        };
+
+        table.add_row(vec![
+            Cell::new(format!("#{id}")).set_alignment(CellAlignment::Left),
+            Cell::new(title).set_alignment(CellAlignment::Left),
+            Cell::new(join_values_or_none(&issue.labels)).set_alignment(CellAlignment::Left),
+            Cell::new(issue_updated_relative(repo, &id)?).set_alignment(CellAlignment::Left),
+        ]);
+    }
+
+    println!("{table}");
+    Ok(())
+}
+
+fn issue_updated_relative(repo: &gix::Repository, id: &str) -> Result<String> {
+    let history = Issue::history(repo, id)?;
+    let Some(oid) = history.first() else {
+        return Ok("(unknown)".to_owned());
+    };
+
+    let commit = repo.find_commit(*oid)?;
+    let when = commit.time()?.format(gix::date::time::format::ISO8601)?;
+    Ok(relative_time_from_iso8601(&when).unwrap_or(when))
+}
+
+fn relative_time_from_iso8601(value: &str) -> Option<String> {
+    let then = DateTime::parse_from_rfc3339(value)
+        .ok()?
+        .with_timezone(&Utc);
+    let now = Utc::now();
+    let delta = now.signed_duration_since(then);
+
+    let (value, unit) = if delta.num_seconds() < 60 {
+        return Some("just now".to_owned());
+    } else if delta.num_minutes() < 60 {
+        (delta.num_minutes(), "minute")
+    } else if delta.num_hours() < 24 {
+        (delta.num_hours(), "hour")
+    } else if delta.num_days() < 30 {
+        (delta.num_days(), "day")
+    } else if delta.num_days() < 365 {
+        (delta.num_days() / 30, "month")
+    } else {
+        (delta.num_days() / 365, "year")
+    };
+
+    let plural = if value == 1 { "" } else { "s" };
+    Some(format!("about {value} {unit}{plural} ago"))
+}
+
 fn print_bulleted_section(title: &str, items: &[String]) {
     println!("{}:", color_field_name(title));
     if items.is_empty() {
@@ -835,19 +916,38 @@ fn print_doc(doc: &Doc<'_>) {
 }
 
 fn print_issue(issue: &Issue) {
-    let doc = Doc {
-        kind: "issue",
-        id: &issue.id,
-        title: Some(&issue.title),
-        fields: vec![
-            ("labels", join_values_or_none(&issue.labels)),
-            ("assignees", join_values_or_none(&issue.assignees)),
-            ("reporters", join_values_or_none(&issue.reporters)),
-        ],
-        body: &issue.body,
-        edit: issue.edit.as_deref(),
+    let title = if issue.title.trim().is_empty() {
+        "(untitled)"
+    } else {
+        issue.title.as_str()
     };
-    print_doc(&doc);
+
+    println!("{} {}", title.bold(), format!("#{}", issue.id).yellow());
+
+    let mut meta = vec!["Open".green().bold().to_string()];
+    if !issue.labels.is_empty() {
+        meta.push(format!("labels: {}", issue.labels.join(", ")));
+    }
+    if !issue.assignees.is_empty() {
+        meta.push(format!("assignees: {}", issue.assignees.join(", ")));
+    }
+    if !issue.reporters.is_empty() {
+        meta.push(format!("reporters: {}", issue.reporters.join(", ")));
+    }
+    if let Some(edit) = &issue.edit {
+        meta.push(format!("edit: {edit}"));
+    }
+
+    let separator = format!(" {} ", "•".dimmed());
+    println!("{}", meta.join(&separator));
+    println!();
+
+    if issue.body.trim().is_empty() {
+        println!("{}", color_empty_marker("(none)"));
+        return;
+    }
+
+    print_rendered(&render_asciidoc_terminal(&issue.body));
 }
 
 fn print_review(review: &Review) {
