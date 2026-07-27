@@ -1,9 +1,6 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
-use std::{
-    fmt::Write as _,
-    io::{IsTerminal, Write as _},
-};
+use std::io::{IsTerminal, Write as _};
 
 use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
 use acdc_converters_terminal::Processor as TerminalProcessor;
@@ -626,10 +623,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
             print_review(&review);
         }
-        ReviewCommand::List => {
-            let ids = Review::list(repo)?;
-            print_id_list("reviews", &ids);
-        }
+        ReviewCommand::List => print_review_list(repo)?,
         ReviewCommand::Log { id } => print_log("review", &id, repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
             if !Review::delete(repo, &id)? {
@@ -761,9 +755,44 @@ fn print_id_list(title: &str, ids: &[String]) {
 
 fn print_issue_list(repo: &gix::Repository) -> Result<()> {
     let ids = Issue::list(repo)?;
-    if ids.is_empty() {
-        println!("No issues");
-        return Ok(());
+    let mut rows = Vec::new();
+    for id in ids {
+        let Some(issue) = Issue::load_from_repo(repo, &id)? else {
+            continue;
+        };
+        rows.push(vec![
+            format!("#{id}"),
+            title_or_untitled(&issue.title).to_owned(),
+            join_values_or_none(&issue.labels),
+            updated_relative(repo, Issue::history(repo, &id)?)?,
+        ]);
+    }
+    print_entity_table("issues", "TITLE", "LABELS", rows);
+    Ok(())
+}
+
+fn print_review_list(repo: &gix::Repository) -> Result<()> {
+    let ids = Review::list(repo)?;
+    let mut rows = Vec::new();
+    for id in ids {
+        let Some(review) = Review::load_from_repo(repo, &id)? else {
+            continue;
+        };
+        rows.push(vec![
+            format!("#{id}"),
+            format_target(&review.target),
+            join_values_or_none(&review.reviewers),
+            updated_relative(repo, Review::history(repo, &id)?)?,
+        ]);
+    }
+    print_entity_table("reviews", "TARGET", "REVIEWERS", rows);
+    Ok(())
+}
+
+fn print_entity_table(kind_plural: &str, col2: &str, col3: &str, rows: Vec<Vec<String>>) {
+    if rows.is_empty() {
+        println!("No {kind_plural}");
+        return;
     }
 
     let mut table = Table::new();
@@ -773,36 +802,24 @@ fn print_issue_list(repo: &gix::Repository) -> Result<()> {
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new("ID").add_attribute(Attribute::Bold),
-            Cell::new("TITLE").add_attribute(Attribute::Bold),
-            Cell::new("LABELS").add_attribute(Attribute::Bold),
+            Cell::new(col2).add_attribute(Attribute::Bold),
+            Cell::new(col3).add_attribute(Attribute::Bold),
             Cell::new("UPDATED").add_attribute(Attribute::Bold),
         ]);
 
-    for id in ids {
-        let Some(issue) = Issue::load_from_repo(repo, &id)? else {
-            continue;
-        };
-
-        let title = if issue.title.trim().is_empty() {
-            "(untitled)"
-        } else {
-            issue.title.as_str()
-        };
-
+    for row in rows {
         table.add_row(vec![
-            Cell::new(format!("#{id}")).set_alignment(CellAlignment::Left),
-            Cell::new(title).set_alignment(CellAlignment::Left),
-            Cell::new(join_values_or_none(&issue.labels)).set_alignment(CellAlignment::Left),
-            Cell::new(issue_updated_relative(repo, &id)?).set_alignment(CellAlignment::Left),
+            Cell::new(&row[0]).set_alignment(CellAlignment::Left),
+            Cell::new(&row[1]).set_alignment(CellAlignment::Left),
+            Cell::new(&row[2]).set_alignment(CellAlignment::Left),
+            Cell::new(&row[3]).set_alignment(CellAlignment::Left),
         ]);
     }
 
     println!("{table}");
-    Ok(())
 }
 
-fn issue_updated_relative(repo: &gix::Repository, id: &str) -> Result<String> {
-    let history = Issue::history(repo, id)?;
+fn updated_relative(repo: &gix::Repository, history: Vec<gix::ObjectId>) -> Result<String> {
     let Some(oid) = history.first() else {
         return Ok("(unknown)".to_owned());
     };
@@ -872,58 +889,7 @@ fn print_log(
     Ok(())
 }
 
-struct Doc<'a> {
-    kind: &'a str,
-    id: &'a str,
-    title: Option<&'a str>,
-    fields: Vec<(&'a str, String)>,
-    body: &'a str,
-    edit: Option<&'a str>,
-}
-
-fn render_doc(doc: &Doc<'_>) -> String {
-    let mut source = String::new();
-    if let Some(title) = doc.title {
-        let heading = if title.is_empty() {
-            "(untitled)"
-        } else {
-            title
-        };
-        let _ = writeln!(&mut source, "= {heading}");
-    } else {
-        let _ = writeln!(&mut source, "= {} {}", doc.kind, doc.id);
-    }
-    source.push_str(":!sectnums:\n\n");
-    source.push_str("[horizontal]\n");
-    let _ = writeln!(&mut source, "kind:: {}", doc.kind);
-    let _ = writeln!(&mut source, "id:: {}", doc.id);
-    for (name, value) in &doc.fields {
-        let _ = writeln!(&mut source, "{name}:: {value}");
-    }
-    let _ = writeln!(&mut source, "edit:: {}", doc.edit.unwrap_or("(none)"));
-    source.push_str("\n== body\n\n");
-    if doc.body.is_empty() {
-        source.push_str("(none)\n");
-    } else {
-        source.push_str(doc.body);
-        source.push('\n');
-    }
-    source
-}
-
-fn print_doc(doc: &Doc<'_>) {
-    print_rendered(&render_asciidoc_terminal(&render_doc(doc)));
-}
-
 fn print_issue(issue: &Issue) {
-    let title = if issue.title.trim().is_empty() {
-        "(untitled)"
-    } else {
-        issue.title.as_str()
-    };
-
-    println!("{} {}", title.bold(), format!("#{}", issue.id).yellow());
-
     let mut meta = vec!["Open".green().bold().to_string()];
     if !issue.labels.is_empty() {
         meta.push(format!("labels: {}", issue.labels.join(", ")));
@@ -938,32 +904,78 @@ fn print_issue(issue: &Issue) {
         meta.push(format!("edit: {edit}"));
     }
 
-    let separator = format!(" {} ", "•".dimmed());
-    println!("{}", meta.join(&separator));
-    println!();
+    print_show_doc(ShowDoc {
+        kind: "issue",
+        id: &issue.id,
+        title: Some(&issue.title),
+        meta,
+        body: &issue.body,
+    });
+}
 
-    if issue.body.trim().is_empty() {
+fn print_review(review: &Review) {
+    let mut meta = vec!["Open".green().bold().to_string()];
+    meta.push(format!(
+        "reviewers: {}",
+        join_values_or_none(&review.reviewers)
+    ));
+    meta.push(format!(
+        "requesters: {}",
+        join_values_or_none(&review.requesters)
+    ));
+    meta.push(format!("target: {}", format_target(&review.target)));
+    if let Some(edit) = &review.edit {
+        meta.push(format!("edit: {edit}"));
+    }
+
+    print_show_doc(ShowDoc {
+        kind: "review",
+        id: &review.id,
+        title: None,
+        meta,
+        body: &review.body,
+    });
+}
+
+struct ShowDoc<'a> {
+    kind: &'a str,
+    id: &'a str,
+    title: Option<&'a str>,
+    meta: Vec<String>,
+    body: &'a str,
+}
+
+fn print_show_doc(doc: ShowDoc<'_>) {
+    if let Some(title) = doc.title {
+        println!(
+            "{} {}",
+            title_or_untitled(title).bold(),
+            format!("#{}", doc.id).yellow()
+        );
+    } else {
+        println!("{} {}", doc.kind.bold(), doc.id.yellow());
+    }
+
+    if !doc.meta.is_empty() {
+        let separator = format!(" {} ", "•".dimmed());
+        println!("{}", doc.meta.join(&separator));
+        println!();
+    }
+
+    if doc.body.trim().is_empty() {
         println!("{}", color_empty_marker("(none)"));
         return;
     }
 
-    print_rendered(&render_asciidoc_terminal(&issue.body));
+    print_rendered(&render_asciidoc_terminal(doc.body));
 }
 
-fn print_review(review: &Review) {
-    let doc = Doc {
-        kind: "review",
-        id: &review.id,
-        title: None,
-        fields: vec![
-            ("reviewers", join_values_or_none(&review.reviewers)),
-            ("requesters", join_values_or_none(&review.requesters)),
-            ("target", format_target(&review.target)),
-        ],
-        body: &review.body,
-        edit: review.edit.as_deref(),
-    };
-    print_doc(&doc);
+fn title_or_untitled(title: &str) -> &str {
+    if title.trim().is_empty() {
+        "(untitled)"
+    } else {
+        title
+    }
 }
 
 fn render_asciidoc_terminal(value: &str) -> String {

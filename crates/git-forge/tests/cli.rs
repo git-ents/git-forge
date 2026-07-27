@@ -244,7 +244,9 @@ fn review_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
 
     let (out, err, ok) = run(path, &["review", "show", "def1"]);
     assert!(ok, "review show by unique prefix failed: {err}");
-    assert!(out.contains("review def11111"), "review show output: {out}");
+    assert!(out.contains("review"), "review show output: {out}");
+    assert!(out.contains("def11111"), "review show output: {out}");
+    assert!(out.contains("Open"), "review show output: {out}");
     assert!(out.contains("first review"), "review show output: {out}");
 
     let (_, err, ok) = run(path, &["review", "show", "def"]);
@@ -299,10 +301,9 @@ fn review_new_show_list_log_and_remove() {
     let show_args = vec!["review", "show", review_id.as_str()];
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "review show failed: {err}");
-    assert!(
-        out.contains(&format!("review {review_id}")),
-        "review show output: {out}"
-    );
+    assert!(out.contains("review"), "review show output: {out}");
+    assert!(out.contains(&review_id), "review show output: {out}");
+    assert!(out.contains("Open"), "review show output: {out}");
     assert!(out.contains("looks good"), "review show output: {out}");
     assert!(out.contains("carol"), "review show output: {out}");
     assert!(out.contains("dave"), "review show output: {out}");
@@ -310,8 +311,12 @@ fn review_new_show_list_log_and_remove() {
 
     let (out, err, ok) = run(path, &["review", "ls"]);
     assert!(ok, "review ls failed: {err}");
-    assert!(out.contains("reviews:"), "review ls output: {out}");
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+    assert!(out.contains("ID"), "review ls output: {out}");
+    assert!(out.contains("TARGET"), "review ls output: {out}");
+    assert!(
+        out.contains(&format!("#{review_id}")),
+        "review ls output: {out}"
+    );
 
     let (_, err, ok) = run(
         path,
