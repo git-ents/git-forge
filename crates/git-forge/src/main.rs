@@ -417,41 +417,41 @@ fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Ve
 }
 
 fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>, String)> {
-    let values = collect_interactive_form(
-        "Edit issue fields.",
-        &[
-            InteractiveField::new(
-                "TITLE",
-                "title (leave blank to keep current)",
-                false,
-                Some(&issue.title),
-            ),
-            InteractiveField::new(
-                "BODY",
-                "body (leave blank to keep current)",
-                false,
-                Some(&issue.body),
-            ),
-            InteractiveField::new("EDIT", "edit reason", true, None),
-        ],
-    )?;
-    let title = values.get("TITLE").cloned().unwrap_or_default();
-    let body = values.get("BODY").cloned().unwrap_or_default();
-    let edit = values.get("EDIT").cloned().unwrap_or_default();
+    let selected = pick_edit_fields(&[
+        EditableField::new("TITLE", "Title"),
+        EditableField::new("BODY", "Body"),
+    ])?;
 
-    if preferred_editor().is_some() {
-        Ok((
-            (title != issue.title).then_some(title),
-            (body != issue.body).then_some(body),
-            edit,
-        ))
-    } else {
-        Ok((
-            (!title.is_empty()).then_some(title),
-            (!body.is_empty()).then_some(body),
-            edit,
-        ))
+    let mut fields = Vec::new();
+    if selected.contains(&"TITLE") {
+        fields.push(InteractiveField::new(
+            "TITLE",
+            "title",
+            true,
+            Some(&issue.title),
+        ));
     }
+    if selected.contains(&"BODY") {
+        fields.push(InteractiveField::new(
+            "BODY",
+            "body",
+            true,
+            Some(&issue.body),
+        ));
+    }
+    fields.push(InteractiveField::new("EDIT", "edit reason", true, None));
+
+    let values = collect_interactive_form("Edit issue fields.", &fields)?;
+
+    Ok((
+        selected
+            .contains(&"TITLE")
+            .then(|| values.get("TITLE").cloned().unwrap_or_default()),
+        selected
+            .contains(&"BODY")
+            .then(|| values.get("BODY").cloned().unwrap_or_default()),
+        values.get("EDIT").cloned().unwrap_or_default(),
+    ))
 }
 
 fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
@@ -493,43 +493,42 @@ fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> 
 }
 
 fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>, String)> {
+    let selected = pick_edit_fields(&[
+        EditableField::new("BODY", "Body"),
+        EditableField::new("TARGET", "Target"),
+    ])?;
+
     let current_target = format_review_target(&review.target);
-    let values = collect_interactive_form(
-        "Edit review fields.",
-        &[
-            InteractiveField::new(
-                "BODY",
-                "body (leave blank to keep current)",
-                false,
-                Some(&review.body),
-            ),
-            InteractiveField::new(
-                "TARGET",
-                "target (leave blank to keep current)",
-                false,
-                Some(&current_target),
-            ),
-            InteractiveField::new("EDIT", "edit reason", true, None),
-        ],
-    )?;
-
-    let body = values.get("BODY").cloned().unwrap_or_default();
-    let target = values.get("TARGET").cloned().unwrap_or_default();
-    let edit = values.get("EDIT").cloned().unwrap_or_default();
-
-    if preferred_editor().is_some() {
-        Ok((
-            (body != review.body).then_some(body),
-            (target != current_target).then_some(target),
-            edit,
-        ))
-    } else {
-        Ok((
-            (!body.is_empty()).then_some(body),
-            (!target.is_empty()).then_some(target),
-            edit,
-        ))
+    let mut fields = Vec::new();
+    if selected.contains(&"BODY") {
+        fields.push(InteractiveField::new(
+            "BODY",
+            "body",
+            true,
+            Some(&review.body),
+        ));
     }
+    if selected.contains(&"TARGET") {
+        fields.push(InteractiveField::new(
+            "TARGET",
+            "target",
+            true,
+            Some(&current_target),
+        ));
+    }
+    fields.push(InteractiveField::new("EDIT", "edit reason", true, None));
+
+    let values = collect_interactive_form("Edit review fields.", &fields)?;
+
+    Ok((
+        selected
+            .contains(&"BODY")
+            .then(|| values.get("BODY").cloned().unwrap_or_default()),
+        selected
+            .contains(&"TARGET")
+            .then(|| values.get("TARGET").cloned().unwrap_or_default()),
+        values.get("EDIT").cloned().unwrap_or_default(),
+    ))
 }
 
 fn prompt_comment_edit_reason() -> Result<String> {
@@ -586,6 +585,52 @@ fn make_editor_temp_path() -> PathBuf {
         .unwrap_or_default();
     path.push(format!("git-forge-edit-{pid}-{nanos}.txt"));
     path
+}
+
+struct EditableField {
+    key: &'static str,
+    label: &'static str,
+}
+
+impl EditableField {
+    const fn new(key: &'static str, label: &'static str) -> Self {
+        Self { key, label }
+    }
+}
+
+/// Prompt the user to pick which fields to edit, gh-style, returning the
+/// selected field keys.
+fn pick_edit_fields(fields: &[EditableField]) -> Result<Vec<&'static str>> {
+    require_terminal_for_interactive()?;
+    eprintln!("What would you like to edit?");
+    for (i, field) in fields.iter().enumerate() {
+        eprintln!("  {}) {}", i + 1, field.label);
+    }
+
+    loop {
+        let input = prompt_line("Fields (comma-separated numbers, or 'a' for all)")?;
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
+            return Ok(fields.iter().map(|f| f.key).collect());
+        }
+
+        let mut selected = Vec::new();
+        let mut valid = !input.is_empty();
+        for part in input.split(',') {
+            match part.trim().parse::<usize>() {
+                Ok(n) if n >= 1 && n <= fields.len() => selected.push(fields[n - 1].key),
+                _ => {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if valid && !selected.is_empty() {
+            return Ok(selected);
+        }
+        eprintln!("please select at least one valid field number");
+    }
 }
 
 struct InteractiveField<'a> {
