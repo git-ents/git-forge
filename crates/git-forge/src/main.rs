@@ -1,6 +1,9 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
 use std::io::{IsTerminal, Write as _};
+use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
 use acdc_converters_terminal::Processor as TerminalProcessor;
@@ -248,7 +251,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 args.title.is_none() && args.body.is_none() && args.edit.is_none(),
             )?;
             if interactive {
-                let (title, body, edit) = prompt_issue_edit_fields()?;
+                let (title, body, edit) = prompt_issue_edit_fields(&issue)?;
                 if let Some(title) = title {
                     issue.title = title;
                 }
@@ -294,7 +297,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
             let edit = CommentEdit {
                 id: args.id,
                 edit: if interactive {
-                    prompt_required("edit reason")?
+                    prompt_comment_edit_reason()?
                 } else {
                     args.edit
                         .context("--edit is required unless running interactively")?
@@ -383,8 +386,25 @@ fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Ve
     Ok((title, body, labels, assignees, reporters))
 }
 
-fn prompt_issue_edit_fields() -> Result<(Option<String>, Option<String>, String)> {
+fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>, String)> {
     require_terminal_for_interactive()?;
+    if preferred_editor().is_some() {
+        let content = open_interactive_editor(&format!(
+            "# Edit issue fields. Lines starting with # are ignored.\n# Provide EDIT.\nTITLE:\n{}\n\nBODY:\n{}\n\nEDIT:\n",
+            issue.title, issue.body
+        ))?;
+        let parsed = parse_editor_sections(&content);
+        let title = parsed.get("TITLE").cloned().unwrap_or_default();
+        let body = parsed.get("BODY").cloned().unwrap_or_default();
+        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
+        let edit = required_editor_field("EDIT", edit)?;
+        return Ok((
+            (title != issue.title).then_some(title),
+            (body != issue.body).then_some(body),
+            edit,
+        ));
+    }
+
     let title = prompt_line("title (leave blank to keep current)")?;
     let body = prompt_line("body (leave blank to keep current)")?;
     let edit = prompt_required("edit reason")?;
@@ -404,8 +424,26 @@ fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> 
     Ok((body, reviewers, requesters, target))
 }
 
-fn prompt_review_edit_fields() -> Result<(Option<String>, Option<String>, String)> {
+fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>, String)> {
     require_terminal_for_interactive()?;
+    if preferred_editor().is_some() {
+        let current_target = format_review_target(&review.target);
+        let content = open_interactive_editor(&format!(
+            "# Edit review fields. Lines starting with # are ignored.\n# Provide EDIT.\nBODY:\n{}\n\nTARGET:\n{}\n\nEDIT:\n",
+            review.body, current_target
+        ))?;
+        let parsed = parse_editor_sections(&content);
+        let body = parsed.get("BODY").cloned().unwrap_or_default();
+        let target = parsed.get("TARGET").cloned().unwrap_or_default();
+        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
+        let edit = required_editor_field("EDIT", edit)?;
+        return Ok((
+            (body != review.body).then_some(body),
+            (target != current_target).then_some(target),
+            edit,
+        ));
+    }
+
     let body = prompt_line("body (leave blank to keep current)")?;
     let target = prompt_line("target (leave blank to keep current)")?;
     let edit = prompt_required("edit reason")?;
@@ -414,6 +452,108 @@ fn prompt_review_edit_fields() -> Result<(Option<String>, Option<String>, String
         (!target.is_empty()).then_some(target),
         edit,
     ))
+}
+
+fn prompt_comment_edit_reason() -> Result<String> {
+    require_terminal_for_interactive()?;
+    if preferred_editor().is_some() {
+        let content = open_interactive_editor(
+            "# Enter comment edit reason. Lines starting with # are ignored.\nEDIT:\n",
+        )?;
+        let parsed = parse_editor_sections(&content);
+        let edit = parsed.get("EDIT").cloned().unwrap_or_default();
+        return required_editor_field("EDIT", edit);
+    }
+    prompt_required("edit reason")
+}
+
+fn preferred_editor() -> Option<String> {
+    std::env::var("VISUAL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
+fn open_interactive_editor(template: &str) -> Result<String> {
+    let editor = preferred_editor().context("interactive editor requires $VISUAL or $EDITOR")?;
+    let path = make_editor_temp_path();
+    std::fs::write(&path, template)?;
+
+    let mut parts = editor.split_whitespace();
+    let program = parts
+        .next()
+        .context("interactive editor command is empty")?;
+    let mut cmd = ProcessCommand::new(program);
+    for arg in parts {
+        cmd.arg(arg);
+    }
+    let status = cmd
+        .arg(&path)
+        .status()
+        .with_context(|| format!("failed to launch editor `{editor}`"))?;
+    if !status.success() {
+        bail!("editor `{editor}` failed with status {status}");
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let _ = std::fs::remove_file(&path);
+    Ok(content)
+}
+
+fn make_editor_temp_path() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    path.push(format!("git-forge-edit-{pid}-{nanos}.txt"));
+    path
+}
+
+fn parse_editor_sections(content: &str) -> std::collections::HashMap<String, String> {
+    let mut sections = std::collections::HashMap::new();
+    let mut current: Option<String> = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim_end();
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+
+        if let Some(key) = line.strip_suffix(':')
+            && key.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            && !key.is_empty()
+        {
+            current = Some(key.to_owned());
+            sections.entry(key.to_owned()).or_insert_with(String::new);
+            continue;
+        }
+
+        if let Some(key) = &current {
+            let entry = sections.entry(key.clone()).or_insert_with(String::new);
+            if !entry.is_empty() {
+                entry.push('\n');
+            }
+            entry.push_str(line);
+        }
+    }
+
+    sections
+        .into_iter()
+        .map(|(k, v)| (k, v.trim().to_owned()))
+        .collect()
+}
+
+fn required_editor_field(field: &str, value: String) -> Result<String> {
+    if value.trim().is_empty() {
+        bail!("{field} is required")
+    }
+    Ok(value)
 }
 
 fn require_terminal_for_interactive() -> Result<()> {
@@ -689,7 +829,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 args.body.is_none() && args.target.is_none() && args.edit.is_none(),
             )?;
             if interactive {
-                let (body, target, edit) = prompt_review_edit_fields()?;
+                let (body, target, edit) = prompt_review_edit_fields(&review)?;
                 if let Some(body) = body {
                     review.body = body;
                 }
@@ -778,6 +918,19 @@ fn min_unique_prefix_len(id: &str, ids: &[String]) -> usize {
         }
     }
     id.len()
+}
+
+fn format_review_target(target: &ReviewTarget) -> String {
+    match target {
+        ReviewTarget::Commit { oid } => format!("commit:{oid}"),
+        ReviewTarget::Tree { oid } => format!("tree:{oid}"),
+        ReviewTarget::Blob { path, oid } => format!("blob:{path}:{oid}"),
+        ReviewTarget::BaseTipTreePair { base, tip } => format!("base-tip-tree:{base}:{tip}"),
+        ReviewTarget::BaseTipCommitPair { base, tip } => {
+            format!("base-tip-commit:{base}:{tip}")
+        }
+        ReviewTarget::CommitRange { start, end } => format!("commit-range:{start}:{end}"),
+    }
 }
 
 fn parse_review_target(target: &str) -> Result<ReviewTarget> {

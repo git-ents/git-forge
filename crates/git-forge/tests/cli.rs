@@ -31,7 +31,12 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
 
 /// Run the binary attached to a pseudo-terminal via `script`, optionally writing
 /// `input` to stdin. Returns `(stdout, stderr, ok)` of the `script` process.
-fn run_with_pty(dir: &Path, args: &[&str], input: Option<&str>) -> (String, String, bool) {
+fn run_with_pty_env(
+    dir: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    envs: &[(&str, &str)],
+) -> (String, String, bool) {
     let mut cmd = Command::new("script");
     cmd.current_dir(dir)
         .arg("-q")
@@ -41,6 +46,10 @@ fn run_with_pty(dir: &Path, args: &[&str], input: Option<&str>) -> (String, Stri
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
 
     let mut child = cmd.spawn().unwrap();
     if let Some(input) = input {
@@ -490,18 +499,29 @@ fn comment_edit_interactive_requires_terminal() {
 fn comment_edit_without_edit_defaults_to_interactive_with_pty() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
+    let path = dir.path();
 
-    let (out, err, ok) = run_with_pty(dir.path(), &["comment", "edit", "comment-1"], None);
-    assert!(!ok, "interactive comment edit should fail on EOF");
+    let editor_script = path.join("editor-write-comment.sh");
+    std::fs::write(
+        &editor_script,
+        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nEDIT:\neditor reason\nEOF\n",
+    )
+    .unwrap();
 
-    let combined = format!("{out}\n{err}");
-    assert!(
-        combined.contains("unexpected end of input"),
-        "interactive EOF stderr/stdout: {combined}"
+    let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
+    let (_out, err, ok) = run_with_pty_env(
+        path,
+        &["comment", "edit", "comment-1"],
+        None,
+        &[("EDITOR", editor_cmd.as_str())],
     );
+    assert!(ok, "interactive comment edit failed: {err}");
+
+    let (out, err, ok) = run(path, &["comment", "log", "comment-1"]);
+    assert!(ok, "comment log failed: {err}");
     assert!(
-        !combined.contains("--edit is required unless running interactively"),
-        "expected interactive path instead of non-interactive validation: {combined}"
+        out.contains("comment history comment-1:"),
+        "comment log output: {out}"
     );
 }
 
