@@ -10,7 +10,7 @@ use acdc_converters_terminal::Processor as TerminalProcessor;
 use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{
     Attribute, Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
     presets::UTF8_FULL,
@@ -21,7 +21,7 @@ use crossterm::{
     execute,
     terminal::{self, ClearType},
 };
-use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget};
+use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget, Status};
 use owo_colors::OwoColorize;
 
 #[derive(Parser)]
@@ -69,14 +69,31 @@ enum IssueCommand {
     },
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum StatusArg {
+    Open,
+    Closed,
+}
+
+impl StatusArg {
+    const fn as_status(self) -> Status {
+        match self {
+            StatusArg::Open => Status::Open,
+            StatusArg::Closed => Status::Closed,
+        }
+    }
+}
+
 #[derive(Args)]
 struct IssueNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "labels", "assignees", "reporters", "status"])]
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
     body: Option<String>,
+    #[arg(long, value_enum)]
+    status: Option<StatusArg>,
     #[arg(long = "label")]
     labels: Vec<String>,
     #[arg(long = "assignee")]
@@ -151,10 +168,12 @@ enum QueryCommand {
 
 #[derive(Args)]
 struct ReviewNewArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target", "status"])]
     interactive: bool,
     #[arg(long)]
     body: Option<String>,
+    #[arg(long, value_enum)]
+    status: Option<StatusArg>,
     #[arg(long = "reviewer")]
     reviewers: Vec<String>,
     #[arg(long = "requester")]
@@ -166,23 +185,27 @@ struct ReviewNewArgs {
 #[derive(Args)]
 struct IssueEditArgs {
     id: String,
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "status"])]
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
     body: Option<String>,
+    #[arg(long, value_enum)]
+    status: Option<StatusArg>,
 }
 
 #[derive(Args)]
 struct ReviewEditArgs {
     id: String,
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "target"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "target", "status"])]
     interactive: bool,
     #[arg(long)]
     body: Option<String>,
     #[arg(long)]
     target: Option<String>,
+    #[arg(long, value_enum)]
+    status: Option<StatusArg>,
 }
 
 #[derive(Args)]
@@ -216,6 +239,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 args.interactive,
                 args.title.is_none()
                     && args.body.is_none()
+                    && args.status.is_none()
                     && args.labels.is_empty()
                     && args.assignees.is_empty()
                     && args.reporters.is_empty(),
@@ -234,6 +258,12 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
             };
             let issue = Issue {
                 id: origin_commit_short_id(repo)?,
+                status: args
+                    .status
+                    .unwrap_or(StatusArg::Open)
+                    .as_status()
+                    .as_str()
+                    .to_owned(),
                 title,
                 body,
                 labels,
@@ -248,26 +278,33 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 .with_context(|| format!("no issue {}", args.id))?;
             let mut issue =
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
-            let no_args_supplied = args.title.is_none() && args.body.is_none();
+            let no_args_supplied =
+                args.title.is_none() && args.body.is_none() && args.status.is_none();
             let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
             if interactive {
-                let (title, body) = prompt_issue_edit_fields(&issue)?;
+                let (title, body, status) = prompt_issue_edit_fields(&issue)?;
                 if let Some(title) = title {
                     issue.title = title;
                 }
                 if let Some(body) = body {
                     issue.body = body;
                 }
+                if let Some(status) = status {
+                    issue.status = status;
+                }
                 issue.edit = None;
             } else {
                 if no_args_supplied {
-                    bail!("--title or --body is required unless running interactively");
+                    bail!("--title, --body, or --status is required unless running interactively");
                 }
                 if let Some(title) = args.title {
                     issue.title = title;
                 }
                 if let Some(body) = args.body {
                     issue.body = body;
+                }
+                if let Some(status) = args.status {
+                    issue.status = status.as_status().as_str().to_owned();
                 }
                 issue.edit = None;
             }
@@ -416,10 +453,14 @@ fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Ve
     ))
 }
 
-fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>)> {
+fn prompt_issue_edit_fields(
+    issue: &Issue,
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let status = issue.status.as_str();
     let fields = [
         EditableField::line("TITLE", "Title", "title", &issue.title, true),
         EditableField::editor("BODY", "Body", &issue.body, true),
+        EditableField::line("STATUS", "Status", "status (open|closed)", status, true),
     ];
     let selected = pick_edit_fields(&fields)?;
     let values = collect_edit_field_values(&fields, &selected)?;
@@ -431,6 +472,13 @@ fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<Str
         selected
             .contains(&"BODY")
             .then(|| values.get("BODY").cloned().unwrap_or_default()),
+        if selected.contains(&"STATUS") {
+            Some(parse_status(
+                values.get("STATUS").map(String::as_str).unwrap_or_default(),
+            )?)
+        } else {
+            None
+        },
     ))
 }
 
@@ -472,11 +520,15 @@ fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> 
     ))
 }
 
-fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>)> {
+fn prompt_review_edit_fields(
+    review: &Review,
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let current_target = format_review_target(&review.target);
+    let status = review.status.as_str();
     let fields = [
         EditableField::editor("BODY", "Body", &review.body, true),
         EditableField::line("TARGET", "Target", "target", &current_target, true),
+        EditableField::line("STATUS", "Status", "status (open|closed)", status, true),
     ];
     let selected = pick_edit_fields(&fields)?;
     let values = collect_edit_field_values(&fields, &selected)?;
@@ -488,6 +540,13 @@ fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<
         selected
             .contains(&"TARGET")
             .then(|| values.get("TARGET").cloned().unwrap_or_default()),
+        if selected.contains(&"STATUS") {
+            Some(parse_status(
+                values.get("STATUS").map(String::as_str).unwrap_or_default(),
+            )?)
+        } else {
+            None
+        },
     ))
 }
 
@@ -1126,6 +1185,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
             let interactive = resolve_interactive(
                 args.interactive,
                 args.body.is_none()
+                    && args.status.is_none()
                     && args.reviewers.is_empty()
                     && args.requesters.is_empty()
                     && args.target.is_none(),
@@ -1144,6 +1204,12 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
             };
             let review = Review {
                 id: origin_commit_short_id(repo)?,
+                status: args
+                    .status
+                    .unwrap_or(StatusArg::Open)
+                    .as_status()
+                    .as_str()
+                    .to_owned(),
                 body,
                 reviewers,
                 requesters,
@@ -1157,26 +1223,33 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 .with_context(|| format!("no review {}", args.id))?;
             let mut review =
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
-            let no_args_supplied = args.body.is_none() && args.target.is_none();
+            let no_args_supplied =
+                args.body.is_none() && args.target.is_none() && args.status.is_none();
             let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
             if interactive {
-                let (body, target) = prompt_review_edit_fields(&review)?;
+                let (body, target, status) = prompt_review_edit_fields(&review)?;
                 if let Some(body) = body {
                     review.body = body;
                 }
                 if let Some(target) = target {
                     review.target = parse_review_target(&target)?;
                 }
+                if let Some(status) = status {
+                    review.status = status;
+                }
                 review.edit = None;
             } else {
                 if no_args_supplied {
-                    bail!("--body or --target is required unless running interactively");
+                    bail!("--body, --target, or --status is required unless running interactively");
                 }
                 if let Some(body) = args.body {
                     review.body = body;
                 }
                 if let Some(target) = args.target {
                     review.target = parse_review_target(&target)?;
+                }
+                if let Some(status) = args.status {
+                    review.status = status.as_status().as_str().to_owned();
                 }
                 review.edit = None;
             }
@@ -1264,6 +1337,22 @@ fn format_review_target(target: &ReviewTarget) -> String {
     }
 }
 
+fn parse_status(value: &str) -> Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if Status::parse(&normalized).is_none() {
+        bail!("invalid status `{normalized}`; expected open or closed");
+    }
+    Ok(normalized)
+}
+
+fn format_status(status: &str) -> String {
+    match Status::parse(status) {
+        Some(Status::Open) => "Open".green().bold().to_string(),
+        Some(Status::Closed) => "Closed".dimmed().bold().to_string(),
+        None => status.to_owned(),
+    }
+}
+
 fn parse_review_target(target: &str) -> Result<ReviewTarget> {
     if let Some(rest) = target.strip_prefix("commit:") {
         return Ok(ReviewTarget::Commit {
@@ -1343,6 +1432,7 @@ fn print_issue_list(repo: &gix::Repository) -> Result<()> {
             format!("#{id}"),
             title_or_untitled(&issue.title).to_owned(),
             join_values_or_none(&issue.labels),
+            issue.status.clone(),
             updated_relative(repo, Issue::history(repo, &id)?)?,
         ]);
     }
@@ -1361,6 +1451,7 @@ fn print_review_list(repo: &gix::Repository) -> Result<()> {
             format!("#{id}"),
             format_target(&review.target),
             join_values_or_none(&review.reviewers),
+            review.status.clone(),
             updated_relative(repo, Review::history(repo, &id)?)?,
         ]);
     }
@@ -1383,6 +1474,7 @@ fn print_entity_table(kind_plural: &str, col2: &str, col3: &str, rows: Vec<Vec<S
             Cell::new("ID").add_attribute(Attribute::Bold),
             Cell::new(col2).add_attribute(Attribute::Bold),
             Cell::new(col3).add_attribute(Attribute::Bold),
+            Cell::new("STATUS").add_attribute(Attribute::Bold),
             Cell::new("UPDATED").add_attribute(Attribute::Bold),
         ]);
 
@@ -1392,6 +1484,7 @@ fn print_entity_table(kind_plural: &str, col2: &str, col3: &str, rows: Vec<Vec<S
             Cell::new(&row[1]).set_alignment(CellAlignment::Left),
             Cell::new(&row[2]).set_alignment(CellAlignment::Left),
             Cell::new(&row[3]).set_alignment(CellAlignment::Left),
+            Cell::new(&row[4]).set_alignment(CellAlignment::Left),
         ]);
     }
 
@@ -1469,7 +1562,7 @@ fn print_log(
 }
 
 fn print_issue(issue: &Issue) {
-    let mut meta = vec!["Open".green().bold().to_string()];
+    let mut meta = vec![format_status(&issue.status)];
     if !issue.labels.is_empty() {
         meta.push(format!("labels: {}", issue.labels.join(", ")));
     }
@@ -1493,7 +1586,7 @@ fn print_issue(issue: &Issue) {
 }
 
 fn print_review(review: &Review) {
-    let mut meta = vec!["Open".green().bold().to_string()];
+    let mut meta = vec![format_status(&review.status)];
     meta.push(format!(
         "reviewers: {}",
         join_values_or_none(&review.reviewers)

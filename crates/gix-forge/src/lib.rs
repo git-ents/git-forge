@@ -34,9 +34,33 @@ pub enum Error {
 // 1. Entities & Enums
 // =========================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Open,
+    Closed,
+}
+
+impl Status {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Status::Open => "open",
+            Status::Closed => "closed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "open" => Some(Status::Open),
+            "closed" => Some(Status::Closed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Facet)]
 pub struct Issue {
     pub id: String,
+    pub status: String,
     pub title: String,
     pub body: String,
     pub labels: Vec<String>,
@@ -105,6 +129,7 @@ impl Issue {
 #[derive(Debug, Facet)]
 pub struct Review {
     pub id: String,
+    pub status: String,
     pub body: String,
     pub reviewers: Vec<String>,
     pub requesters: Vec<String>,
@@ -402,6 +427,7 @@ mod tests {
     fn example_issue_creation() {
         let _issue = Issue {
             id: "123".to_string(),
+            status: "open".to_string(),
             title: "Cannot save issue".to_string(),
             body: "This is a bug report.".to_string(),
             labels: vec!["bug".to_string(), "high-priority".to_string()],
@@ -415,6 +441,7 @@ mod tests {
     fn example_review_creation() {
         let _review = Review {
             id: "456".to_string(),
+            status: "open".to_string(),
             body: "Please review the changes in this range.".to_string(),
             reviewers: vec!["bob".to_string()],
             requesters: vec!["alice".to_string()],
@@ -437,6 +464,7 @@ mod tests {
 
         let issue = Issue {
             id: "issue-1".to_string(),
+            status: "open".to_string(),
             title: "Round trip issue".to_string(),
             body: "round trip issue".to_string(),
             labels: vec!["bug".to_string(), "P1".to_string()],
@@ -451,6 +479,7 @@ mod tests {
             .expect("issue exists");
 
         assert_eq!(loaded.id, issue.id);
+        assert_eq!(loaded.status, issue.status);
         assert_eq!(loaded.title, issue.title);
         assert_eq!(loaded.body, issue.body);
         assert_eq!(loaded.labels, issue.labels);
@@ -470,6 +499,7 @@ mod tests {
 
         let review = Review {
             id: "review-1".to_string(),
+            status: "open".to_string(),
             body: "round trip review".to_string(),
             reviewers: vec!["carol".to_string()],
             requesters: vec!["dave".to_string()],
@@ -486,6 +516,7 @@ mod tests {
             .expect("review exists");
 
         assert_eq!(loaded.id, review.id);
+        assert_eq!(loaded.status, review.status);
         assert_eq!(loaded.body, review.body);
         assert_eq!(loaded.reviewers, review.reviewers);
         assert_eq!(loaded.requesters, review.requesters);

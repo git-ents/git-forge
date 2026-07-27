@@ -139,6 +139,7 @@ fn put_issue(dir: &Path, id: &str, body: &str) {
     let repo = gix::open(dir).unwrap();
     let issue = Issue {
         id: id.to_owned(),
+        status: "open".to_owned(),
         title: String::new(),
         body: body.to_owned(),
         labels: vec![],
@@ -153,6 +154,7 @@ fn put_review(dir: &Path, id: &str, body: &str) {
     let repo = gix::open(dir).unwrap();
     let review = Review {
         id: id.to_owned(),
+        status: "open".to_owned(),
         body: body.to_owned(),
         reviewers: vec![],
         requesters: vec![],
@@ -328,7 +330,7 @@ fn issue_edit_without_args_requires_field_without_terminal() {
     let (_, err, ok) = run(path, &["issue", "edit", issue_id.as_str()]);
     assert!(!ok, "issue edit should fail without args and terminal");
     assert!(
-        err.contains("--title or --body is required unless running interactively"),
+        err.contains("--title, --body, or --status is required unless running interactively"),
         "issue edit stderr: {err}"
     );
 }
@@ -489,7 +491,7 @@ fn review_edit_without_args_requires_field_without_terminal() {
     let (_, err, ok) = run(path, &["review", "edit", review_id.as_str()]);
     assert!(!ok, "review edit should fail without args and terminal");
     assert!(
-        err.contains("--body or --target is required unless running interactively"),
+        err.contains("--body, --target, or --status is required unless running interactively"),
         "review edit stderr: {err}"
     );
 }
@@ -838,6 +840,7 @@ proptest! {
         for (id, body, assignee) in &issue_rows {
             Issue {
                 id: (*id).to_owned(),
+                status: "open".to_owned(),
                 title: String::new(),
                 body: (*body).to_owned(),
                 labels: vec![],
@@ -856,6 +859,7 @@ proptest! {
         for (id, body, reviewer, requester, oid) in &review_rows {
             Review {
                 id: (*id).to_owned(),
+                status: "open".to_owned(),
                 body: (*body).to_owned(),
                 reviewers: vec![(*reviewer).to_owned()],
                 requesters: vec![(*requester).to_owned()],
