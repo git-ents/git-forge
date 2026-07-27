@@ -1,6 +1,7 @@
 //! Drive the built `git-forge` binary against a temp repo, exactly as
 //! `git forge …` would.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -21,6 +22,33 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
         .output()
         .unwrap();
 
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
+/// Run the binary attached to a pseudo-terminal via `script`, optionally writing
+/// `input` to stdin. Returns `(stdout, stderr, ok)` of the `script` process.
+fn run_with_pty(dir: &Path, args: &[&str], input: Option<&str>) -> (String, String, bool) {
+    let mut cmd = Command::new("script");
+    cmd.current_dir(dir)
+        .arg("-q")
+        .arg("/dev/null")
+        .arg(BIN)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().unwrap();
+    if let Some(input) = input {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).unwrap();
+    }
+
+    let out = child.wait_with_output().unwrap();
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -221,6 +249,19 @@ fn issue_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
 }
 
 #[test]
+fn issue_new_without_args_requires_body_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["issue", "new"]);
+    assert!(!ok, "issue new should fail without args and terminal");
+    assert!(
+        err.contains("--body is required unless running interactively"),
+        "issue new stderr: {err}"
+    );
+}
+
+#[test]
 fn issue_new_interactive_requires_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -230,6 +271,24 @@ fn issue_new_interactive_requires_terminal() {
     assert!(
         err.contains("--interactive requires a terminal"),
         "interactive issue put stderr: {err}"
+    );
+}
+
+#[test]
+fn issue_edit_without_args_requires_edit_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let issue_id = create_origin_commit(path);
+
+    let (_, err, ok) = run(path, &["issue", "new", "--body", "first body"]);
+    assert!(ok, "issue new failed: {err}");
+
+    let (_, err, ok) = run(path, &["issue", "edit", issue_id.as_str()]);
+    assert!(!ok, "issue edit should fail without args and terminal");
+    assert!(
+        err.contains("--edit is required unless running interactively"),
+        "issue edit stderr: {err}"
     );
 }
 
@@ -262,6 +321,19 @@ fn review_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
 }
 
 #[test]
+fn review_new_without_args_requires_body_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["review", "new"]);
+    assert!(!ok, "review new should fail without args and terminal");
+    assert!(
+        err.contains("--body is required unless running interactively"),
+        "review new stderr: {err}"
+    );
+}
+
+#[test]
 fn review_new_interactive_requires_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -271,6 +343,34 @@ fn review_new_interactive_requires_terminal() {
     assert!(
         err.contains("--interactive requires a terminal"),
         "interactive review put stderr: {err}"
+    );
+}
+
+#[test]
+fn review_edit_without_args_requires_edit_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let review_id = create_origin_commit(path);
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "review",
+            "new",
+            "--body",
+            "looks good",
+            "--target",
+            "commit:deadbeef",
+        ],
+    );
+    assert!(ok, "review new failed: {err}");
+
+    let (_, err, ok) = run(path, &["review", "edit", review_id.as_str()]);
+    assert!(!ok, "review edit should fail without args and terminal");
+    assert!(
+        err.contains("--edit is required unless running interactively"),
+        "review edit stderr: {err}"
     );
 }
 
@@ -358,6 +458,51 @@ fn review_new_show_list_log_and_remove() {
 
     let (_, _, ok) = run(path, &show_args);
     assert!(!ok, "review show after rm should fail");
+}
+
+#[test]
+fn comment_edit_without_args_requires_edit_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["comment", "edit", "comment-1"]);
+    assert!(!ok, "comment edit should fail without args and terminal");
+    assert!(
+        err.contains("--edit is required unless running interactively"),
+        "comment edit stderr: {err}"
+    );
+}
+
+#[test]
+fn comment_edit_interactive_requires_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["comment", "edit", "comment-1", "-i"]);
+    assert!(!ok, "interactive comment edit should fail without terminal");
+    assert!(
+        err.contains("--interactive requires a terminal"),
+        "interactive comment edit stderr: {err}"
+    );
+}
+
+#[test]
+fn comment_edit_without_edit_defaults_to_interactive_with_pty() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (out, err, ok) = run_with_pty(dir.path(), &["comment", "edit", "comment-1"], None);
+    assert!(!ok, "interactive comment edit should fail on EOF");
+
+    let combined = format!("{out}\n{err}");
+    assert!(
+        combined.contains("unexpected end of input"),
+        "interactive EOF stderr/stdout: {combined}"
+    );
+    assert!(
+        !combined.contains("--edit is required unless running interactively"),
+        "expected interactive path instead of non-interactive validation: {combined}"
+    );
 }
 
 #[test]

@@ -66,7 +66,7 @@ struct IssueNewArgs {
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
-    #[arg(long, required_unless_present = "interactive")]
+    #[arg(long)]
     body: Option<String>,
     #[arg(long = "label")]
     labels: Vec<String>,
@@ -144,43 +144,49 @@ enum QueryCommand {
 struct ReviewNewArgs {
     #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "reviewers", "requesters", "target"])]
     interactive: bool,
-    #[arg(long, required_unless_present = "interactive")]
+    #[arg(long)]
     body: Option<String>,
     #[arg(long = "reviewer")]
     reviewers: Vec<String>,
     #[arg(long = "requester")]
     requesters: Vec<String>,
-    #[arg(long, value_name = "TARGET", required_unless_present = "interactive")]
+    #[arg(long, value_name = "TARGET")]
     target: Option<String>,
 }
 
 #[derive(Args)]
 struct IssueEditArgs {
     id: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "edit"])]
+    interactive: bool,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
     body: Option<String>,
     #[arg(long)]
-    edit: String,
+    edit: Option<String>,
 }
 
 #[derive(Args)]
 struct ReviewEditArgs {
     id: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "target", "edit"])]
+    interactive: bool,
     #[arg(long)]
     body: Option<String>,
     #[arg(long)]
     target: Option<String>,
     #[arg(long)]
-    edit: String,
+    edit: Option<String>,
 }
 
 #[derive(Args)]
 struct CommentEditArgs {
     id: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["edit"])]
+    interactive: bool,
     #[arg(long)]
-    edit: String,
+    edit: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -201,13 +207,21 @@ fn main() -> Result<()> {
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
         IssueCommand::New(args) | IssueCommand::Put(args) => {
-            let (title, body, labels, assignees, reporters) = if args.interactive {
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.title.is_none()
+                    && args.body.is_none()
+                    && args.labels.is_empty()
+                    && args.assignees.is_empty()
+                    && args.reporters.is_empty(),
+            )?;
+            let (title, body, labels, assignees, reporters) = if interactive {
                 prompt_issue_fields()?
             } else {
                 (
                     args.title.unwrap_or_default(),
                     args.body
-                        .context("--body is required unless --interactive")?,
+                        .context("--body is required unless running interactively")?,
                     args.labels,
                     args.assignees,
                     args.reporters,
@@ -229,13 +243,31 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 .with_context(|| format!("no issue {}", args.id))?;
             let mut issue =
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
-            if let Some(title) = args.title {
-                issue.title = title;
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.title.is_none() && args.body.is_none() && args.edit.is_none(),
+            )?;
+            if interactive {
+                let (title, body, edit) = prompt_issue_edit_fields()?;
+                if let Some(title) = title {
+                    issue.title = title;
+                }
+                if let Some(body) = body {
+                    issue.body = body;
+                }
+                issue.edit = Some(edit);
+            } else {
+                if let Some(title) = args.title {
+                    issue.title = title;
+                }
+                if let Some(body) = args.body {
+                    issue.body = body;
+                }
+                issue.edit = Some(
+                    args.edit
+                        .context("--edit is required unless running interactively")?,
+                );
             }
-            if let Some(body) = args.body {
-                issue.body = body;
-            }
-            issue.edit = Some(args.edit);
             println!("{}", issue.save_in_repo(repo)?);
         }
         IssueCommand::Show { id } => {
@@ -258,9 +290,15 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
 fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
     match command {
         CommentCommand::Edit(args) => {
+            let interactive = resolve_interactive(args.interactive, args.edit.is_none())?;
             let edit = CommentEdit {
                 id: args.id,
-                edit: args.edit,
+                edit: if interactive {
+                    prompt_required("edit reason")?
+                } else {
+                    args.edit
+                        .context("--edit is required unless running interactively")?
+                },
             };
             println!("{}", edit.save_in_repo(repo)?);
         }
@@ -327,6 +365,14 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     }
 }
 
+fn resolve_interactive(explicit: bool, no_args_supplied: bool) -> Result<bool> {
+    if explicit {
+        require_terminal_for_interactive()?;
+        return Ok(true);
+    }
+    Ok(no_args_supplied && std::io::stdin().is_terminal())
+}
+
 fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
     require_terminal_for_interactive()?;
     let title = prompt_line("title (optional)")?;
@@ -337,6 +383,18 @@ fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Ve
     Ok((title, body, labels, assignees, reporters))
 }
 
+fn prompt_issue_edit_fields() -> Result<(Option<String>, Option<String>, String)> {
+    require_terminal_for_interactive()?;
+    let title = prompt_line("title (leave blank to keep current)")?;
+    let body = prompt_line("body (leave blank to keep current)")?;
+    let edit = prompt_required("edit reason")?;
+    Ok((
+        (!title.is_empty()).then_some(title),
+        (!body.is_empty()).then_some(body),
+        edit,
+    ))
+}
+
 fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> {
     require_terminal_for_interactive()?;
     let body = prompt_required("body")?;
@@ -344,6 +402,18 @@ fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> 
     let requesters = prompt_csv("requesters (comma-separated, optional)")?;
     let target = prompt_required("target")?;
     Ok((body, reviewers, requesters, target))
+}
+
+fn prompt_review_edit_fields() -> Result<(Option<String>, Option<String>, String)> {
+    require_terminal_for_interactive()?;
+    let body = prompt_line("body (leave blank to keep current)")?;
+    let target = prompt_line("target (leave blank to keep current)")?;
+    let edit = prompt_required("edit reason")?;
+    Ok((
+        (!body.is_empty()).then_some(body),
+        (!target.is_empty()).then_some(target),
+        edit,
+    ))
 }
 
 fn require_terminal_for_interactive() -> Result<()> {
@@ -580,16 +650,23 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
     match command {
         ReviewCommand::New(args) | ReviewCommand::Put(args) => {
-            let (body, reviewers, requesters, target) = if args.interactive {
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.body.is_none()
+                    && args.reviewers.is_empty()
+                    && args.requesters.is_empty()
+                    && args.target.is_none(),
+            )?;
+            let (body, reviewers, requesters, target) = if interactive {
                 prompt_review_fields()?
             } else {
                 (
                     args.body
-                        .context("--body is required unless --interactive")?,
+                        .context("--body is required unless running interactively")?,
                     args.reviewers,
                     args.requesters,
                     args.target
-                        .context("--target is required unless --interactive")?,
+                        .context("--target is required unless running interactively")?,
                 )
             };
             let review = Review {
@@ -607,13 +684,31 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 .with_context(|| format!("no review {}", args.id))?;
             let mut review =
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
-            if let Some(body) = args.body {
-                review.body = body;
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.body.is_none() && args.target.is_none() && args.edit.is_none(),
+            )?;
+            if interactive {
+                let (body, target, edit) = prompt_review_edit_fields()?;
+                if let Some(body) = body {
+                    review.body = body;
+                }
+                if let Some(target) = target {
+                    review.target = parse_review_target(&target)?;
+                }
+                review.edit = Some(edit);
+            } else {
+                if let Some(body) = args.body {
+                    review.body = body;
+                }
+                if let Some(target) = args.target {
+                    review.target = parse_review_target(&target)?;
+                }
+                review.edit = Some(
+                    args.edit
+                        .context("--edit is required unless running interactively")?,
+                );
             }
-            if let Some(target) = args.target {
-                review.target = parse_review_target(&target)?;
-            }
-            review.edit = Some(args.edit);
             println!("{}", review.save_in_repo(repo)?);
         }
         ReviewCommand::Show { id } => {
