@@ -1,9 +1,11 @@
 //! Drive the built `git-forge` binary against a temp repo, exactly as
 //! `git forge …` would.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use gix_forge::{Issue, Review, ReviewTarget};
 use proptest::prelude::*;
@@ -29,12 +31,14 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
-/// Run the binary attached to a pseudo-terminal via `script`, optionally writing
-/// `input` to stdin. Returns `(stdout, stderr, ok)` of the `script` process.
+/// Run the binary attached to a pseudo-terminal via `script`. If `input` is
+/// given as `(wait_for, text)`, waits until `wait_for` has appeared in the
+/// child's output before writing `text` to stdin, avoiding races with the
+/// pty setup. Returns `(stdout, stderr, ok)` of the `script` process.
 fn run_with_pty_env(
     dir: &Path,
     args: &[&str],
-    input: Option<&str>,
+    input: Option<(&str, &str)>,
     envs: &[(&str, &str)],
 ) -> (String, String, bool) {
     let mut cmd = Command::new("script");
@@ -52,16 +56,53 @@ fn run_with_pty_env(
     }
 
     let mut child = cmd.spawn().unwrap();
-    if let Some(input) = input {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(input.as_bytes()).unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stdout_reader = {
+        let stdout_buf = Arc::clone(&stdout_buf);
+        std::thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            while let Ok(1) = stdout.read(&mut byte) {
+                stdout_buf.lock().unwrap().push(byte[0]);
+            }
+        })
+    };
+
+    // Keep the write end of stdin open until the child has exited: `script`
+    // translates a closed pipe into a literal EOF byte written into the pty,
+    // which can race with (and get echoed ahead of) data we just wrote.
+    let mut stdin_handle = child.stdin.take();
+
+    if let Some((wait_for, text)) = input {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).contains(wait_for);
+            if seen || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        stdin_handle
+            .as_mut()
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
     }
 
-    let out = child.wait_with_output().unwrap();
+    let mut stderr_buf = Vec::new();
+    stderr.read_to_end(&mut stderr_buf).unwrap();
+
+    let status = child.wait().unwrap();
+    stdout_reader.join().unwrap();
+
+    drop(stdin_handle);
+
     (
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-        out.status.success(),
+        String::from_utf8_lossy(&stdout_buf.lock().unwrap()).into_owned(),
+        String::from_utf8_lossy(&stderr_buf).into_owned(),
+        status.success(),
     )
 }
 
@@ -302,6 +343,48 @@ fn issue_edit_without_args_requires_edit_without_terminal() {
 }
 
 #[test]
+fn issue_edit_picker_only_edits_selected_field_with_pty() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let issue_id = create_origin_commit(path);
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "issue",
+            "new",
+            "--title",
+            "first title",
+            "--body",
+            "first body",
+        ],
+    );
+    assert!(ok, "issue new failed: {err}");
+
+    let editor_script = path.join("editor-write-issue.sh");
+    std::fs::write(
+        &editor_script,
+        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nBODY:\nsecond body\n\nEDIT:\nupdated body only\nEOF\n",
+    )
+    .unwrap();
+
+    let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
+    let (_out, err, ok) = run_with_pty_env(
+        path,
+        &["issue", "edit", issue_id.as_str()],
+        Some(("Fields (", "2\n")),
+        &[("EDITOR", editor_cmd.as_str())],
+    );
+    assert!(ok, "interactive issue edit failed: {err}");
+
+    let (out, err, ok) = run(path, &["issue", "show", issue_id.as_str()]);
+    assert!(ok, "issue show after edit failed: {err}");
+    assert!(out.contains("first title"), "issue show output: {out}");
+    assert!(out.contains("second body"), "issue show output: {out}");
+}
+
+#[test]
 fn review_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -467,6 +550,48 @@ fn review_new_show_list_log_and_remove() {
 
     let (_, _, ok) = run(path, &show_args);
     assert!(!ok, "review show after rm should fail");
+}
+
+#[test]
+fn review_edit_picker_only_edits_selected_field_with_pty() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let review_id = create_origin_commit(path);
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "review",
+            "new",
+            "--body",
+            "looks good",
+            "--target",
+            "commit:deadbeef",
+        ],
+    );
+    assert!(ok, "review new failed: {err}");
+
+    let editor_script = path.join("editor-write-review.sh");
+    std::fs::write(
+        &editor_script,
+        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nBODY:\nneeds changes\n\nEDIT:\naddress feedback\nEOF\n",
+    )
+    .unwrap();
+
+    let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
+    let (_out, err, ok) = run_with_pty_env(
+        path,
+        &["review", "edit", review_id.as_str()],
+        Some(("Fields (", "1\n")),
+        &[("EDITOR", editor_cmd.as_str())],
+    );
+    assert!(ok, "interactive review edit failed: {err}");
+
+    let (out, err, ok) = run(path, &["review", "show", review_id.as_str()]);
+    assert!(ok, "review show after edit failed: {err}");
+    assert!(out.contains("needs changes"), "review show output: {out}");
+    assert!(out.contains("deadbeef"), "review show output: {out}");
 }
 
 #[test]
