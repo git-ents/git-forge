@@ -166,27 +166,23 @@ struct ReviewNewArgs {
 #[derive(Args)]
 struct IssueEditArgs {
     id: String,
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body", "edit"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["title", "body"])]
     interactive: bool,
     #[arg(long)]
     title: Option<String>,
     #[arg(long)]
     body: Option<String>,
-    #[arg(long)]
-    edit: Option<String>,
 }
 
 #[derive(Args)]
 struct ReviewEditArgs {
     id: String,
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "target", "edit"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body", "target"])]
     interactive: bool,
     #[arg(long)]
     body: Option<String>,
     #[arg(long)]
     target: Option<String>,
-    #[arg(long)]
-    edit: Option<String>,
 }
 
 #[derive(Args)]
@@ -252,30 +248,28 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 .with_context(|| format!("no issue {}", args.id))?;
             let mut issue =
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
-            let interactive = resolve_interactive(
-                args.interactive,
-                args.title.is_none() && args.body.is_none() && args.edit.is_none(),
-            )?;
+            let no_args_supplied = args.title.is_none() && args.body.is_none();
+            let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
             if interactive {
-                let (title, body, edit) = prompt_issue_edit_fields(&issue)?;
+                let (title, body) = prompt_issue_edit_fields(&issue)?;
                 if let Some(title) = title {
                     issue.title = title;
                 }
                 if let Some(body) = body {
                     issue.body = body;
                 }
-                issue.edit = Some(edit);
+                issue.edit = None;
             } else {
+                if no_args_supplied {
+                    bail!("--title or --body is required unless running interactively");
+                }
                 if let Some(title) = args.title {
                     issue.title = title;
                 }
                 if let Some(body) = args.body {
                     issue.body = body;
                 }
-                issue.edit = Some(
-                    args.edit
-                        .context("--edit is required unless running interactively")?,
-                );
+                issue.edit = None;
             }
             println!("{}", issue.save_in_repo(repo)?);
         }
@@ -422,32 +416,13 @@ fn prompt_issue_fields() -> Result<(String, String, Vec<String>, Vec<String>, Ve
     ))
 }
 
-fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>, String)> {
-    let selected = pick_edit_fields(&[
-        EditableField::new("TITLE", "Title"),
-        EditableField::new("BODY", "Body"),
-    ])?;
-
-    let mut fields = Vec::new();
-    if selected.contains(&"TITLE") {
-        fields.push(InteractiveField::new(
-            "TITLE",
-            "title",
-            true,
-            Some(&issue.title),
-        ));
-    }
-    if selected.contains(&"BODY") {
-        fields.push(InteractiveField::new(
-            "BODY",
-            "body",
-            true,
-            Some(&issue.body),
-        ));
-    }
-    fields.push(InteractiveField::new("EDIT", "edit reason", true, None));
-
-    let values = collect_interactive_form("Edit issue fields.", &fields)?;
+fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<String>)> {
+    let fields = [
+        EditableField::line("TITLE", "Title", "title", &issue.title, true),
+        EditableField::editor("BODY", "Body", &issue.body, true),
+    ];
+    let selected = pick_edit_fields(&fields)?;
+    let values = collect_edit_field_values(&fields, &selected)?;
 
     Ok((
         selected
@@ -456,7 +431,6 @@ fn prompt_issue_edit_fields(issue: &Issue) -> Result<(Option<String>, Option<Str
         selected
             .contains(&"BODY")
             .then(|| values.get("BODY").cloned().unwrap_or_default()),
-        values.get("EDIT").cloned().unwrap_or_default(),
     ))
 }
 
@@ -498,33 +472,14 @@ fn prompt_review_fields() -> Result<(String, Vec<String>, Vec<String>, String)> 
     ))
 }
 
-fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>, String)> {
-    let selected = pick_edit_fields(&[
-        EditableField::new("BODY", "Body"),
-        EditableField::new("TARGET", "Target"),
-    ])?;
-
+fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<String>)> {
     let current_target = format_review_target(&review.target);
-    let mut fields = Vec::new();
-    if selected.contains(&"BODY") {
-        fields.push(InteractiveField::new(
-            "BODY",
-            "body",
-            true,
-            Some(&review.body),
-        ));
-    }
-    if selected.contains(&"TARGET") {
-        fields.push(InteractiveField::new(
-            "TARGET",
-            "target",
-            true,
-            Some(&current_target),
-        ));
-    }
-    fields.push(InteractiveField::new("EDIT", "edit reason", true, None));
-
-    let values = collect_interactive_form("Edit review fields.", &fields)?;
+    let fields = [
+        EditableField::editor("BODY", "Body", &review.body, true),
+        EditableField::line("TARGET", "Target", "target", &current_target, true),
+    ];
+    let selected = pick_edit_fields(&fields)?;
+    let values = collect_edit_field_values(&fields, &selected)?;
 
     Ok((
         selected
@@ -533,7 +488,6 @@ fn prompt_review_edit_fields(review: &Review) -> Result<(Option<String>, Option<
         selected
             .contains(&"TARGET")
             .then(|| values.get("TARGET").cloned().unwrap_or_default()),
-        values.get("EDIT").cloned().unwrap_or_default(),
     ))
 }
 
@@ -593,18 +547,59 @@ fn make_editor_temp_path() -> PathBuf {
     path
 }
 
-struct EditableField {
+struct EditableField<'a> {
     key: &'static str,
     label: &'static str,
+    input: EditFieldInput<'a>,
 }
 
-impl EditableField {
-    const fn new(key: &'static str, label: &'static str) -> Self {
-        Self { key, label }
+impl<'a> EditableField<'a> {
+    const fn line(
+        key: &'static str,
+        label: &'static str,
+        prompt: &'static str,
+        initial: &'a str,
+        required: bool,
+    ) -> Self {
+        Self {
+            key,
+            label,
+            input: EditFieldInput::Line {
+                prompt,
+                initial,
+                required,
+            },
+        }
+    }
+
+    const fn editor(
+        key: &'static str,
+        label: &'static str,
+        initial: &'a str,
+        required: bool,
+    ) -> Self {
+        Self {
+            key,
+            label,
+            input: EditFieldInput::Editor { initial, required },
+        }
     }
 }
 
-fn pick_edit_fields(fields: &[EditableField]) -> Result<Vec<&'static str>> {
+#[derive(Clone, Copy)]
+enum EditFieldInput<'a> {
+    Line {
+        prompt: &'static str,
+        initial: &'a str,
+        required: bool,
+    },
+    Editor {
+        initial: &'a str,
+        required: bool,
+    },
+}
+
+fn pick_edit_fields(fields: &[EditableField<'_>]) -> Result<Vec<&'static str>> {
     require_terminal_for_interactive()?;
     if fields.is_empty() {
         bail!("no fields available to edit");
@@ -657,8 +652,41 @@ fn pick_edit_fields(fields: &[EditableField]) -> Result<Vec<&'static str>> {
     }
 }
 
+fn collect_edit_field_values(
+    fields: &[EditableField<'_>],
+    selected: &[&'static str],
+) -> Result<std::collections::HashMap<String, String>> {
+    let mut values = std::collections::HashMap::new();
+    for field in fields {
+        if !selected.contains(&field.key) {
+            continue;
+        }
+
+        let value = match field.input {
+            EditFieldInput::Line {
+                prompt,
+                initial,
+                required,
+            } => prompt_line_with_default(prompt, initial, required)?,
+            EditFieldInput::Editor { initial, required } => {
+                let value = trim_editor_trailing_newlines(&open_interactive_editor(initial)?);
+                if required && value.trim().is_empty() {
+                    bail!("{} is required", field.key);
+                }
+                value
+            }
+        };
+        values.insert(field.key.to_owned(), value);
+    }
+    Ok(values)
+}
+
+fn trim_editor_trailing_newlines(value: &str) -> String {
+    value.trim_end_matches(['\r', '\n']).to_owned()
+}
+
 fn render_edit_field_picker(
-    fields: &[EditableField],
+    fields: &[EditableField<'_>],
     selected: &[bool],
     cursor_index: usize,
     error: Option<&str>,
@@ -858,6 +886,32 @@ fn prompt_required(field: &str) -> Result<String> {
         let input = prompt_line(field)?;
         if !input.trim().is_empty() {
             return Ok(input);
+        }
+        eprintln!("{field} is required");
+    }
+}
+
+fn prompt_line_with_default(field: &str, initial: &str, required: bool) -> Result<String> {
+    loop {
+        if initial.is_empty() {
+            eprint!("{field}: ");
+        } else {
+            eprint!("{field} [{initial}]: ");
+        }
+        std::io::stderr().flush()?;
+
+        let mut input = String::new();
+        let read = std::io::stdin().read_line(&mut input)?;
+        if read == 0 {
+            bail!("unexpected end of input");
+        }
+
+        let value = input.trim().to_owned();
+        if value.is_empty() && !initial.is_empty() {
+            return Ok(initial.to_owned());
+        }
+        if !required || !value.is_empty() {
+            return Ok(value);
         }
         eprintln!("{field} is required");
     }
@@ -1103,30 +1157,28 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 .with_context(|| format!("no review {}", args.id))?;
             let mut review =
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
-            let interactive = resolve_interactive(
-                args.interactive,
-                args.body.is_none() && args.target.is_none() && args.edit.is_none(),
-            )?;
+            let no_args_supplied = args.body.is_none() && args.target.is_none();
+            let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
             if interactive {
-                let (body, target, edit) = prompt_review_edit_fields(&review)?;
+                let (body, target) = prompt_review_edit_fields(&review)?;
                 if let Some(body) = body {
                     review.body = body;
                 }
                 if let Some(target) = target {
                     review.target = parse_review_target(&target)?;
                 }
-                review.edit = Some(edit);
+                review.edit = None;
             } else {
+                if no_args_supplied {
+                    bail!("--body or --target is required unless running interactively");
+                }
                 if let Some(body) = args.body {
                     review.body = body;
                 }
                 if let Some(target) = args.target {
                     review.target = parse_review_target(&target)?;
                 }
-                review.edit = Some(
-                    args.edit
-                        .context("--edit is required unless running interactively")?,
-                );
+                review.edit = None;
             }
             println!("{}", review.save_in_repo(repo)?);
         }

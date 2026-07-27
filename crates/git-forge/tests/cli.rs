@@ -31,14 +31,14 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
-/// Run the binary attached to a pseudo-terminal via `script`. If `input` is
-/// given as `(wait_for, text)`, waits until `wait_for` has appeared in the
-/// child's output before writing `text` to stdin, avoiding races with the
-/// pty setup. Returns `(stdout, stderr, ok)` of the `script` process.
+/// Run the binary attached to a pseudo-terminal via `script`. Each input item
+/// waits until `wait_for` has appeared in the child's output before writing
+/// `text` to stdin, avoiding races with the pty setup. Returns `(stdout,
+/// stderr, ok)` of the `script` process.
 fn run_with_pty_env(
     dir: &Path,
     args: &[&str],
-    input: Option<(&str, &str)>,
+    inputs: &[(&str, &str)],
     envs: &[(&str, &str)],
 ) -> (String, String, bool) {
     let mut cmd = Command::new("script");
@@ -75,7 +75,7 @@ fn run_with_pty_env(
     // which can race with (and get echoed ahead of) data we just wrote.
     let mut stdin_handle = child.stdin.take();
 
-    if let Some((wait_for, text)) = input {
+    for (wait_for, text) in inputs {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let seen = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).contains(wait_for);
@@ -236,22 +236,13 @@ fn issue_new_show_list_log_and_remove() {
 
     let (_, err, ok) = run(
         path,
-        &[
-            "issue",
-            "edit",
-            issue_id.as_str(),
-            "--body",
-            "second body",
-            "--edit",
-            "typo fix",
-        ],
+        &["issue", "edit", issue_id.as_str(), "--body", "second body"],
     );
     assert!(ok, "issue edit failed: {err}");
 
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "issue show after edit failed: {err}");
     assert!(out.contains("second body"), "issue show output: {out}");
-    assert!(out.contains("typo fix"), "issue show output: {out}");
 
     let log_args = vec!["issue", "log", issue_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -325,7 +316,7 @@ fn issue_new_interactive_requires_terminal() {
 }
 
 #[test]
-fn issue_edit_without_args_requires_edit_without_terminal() {
+fn issue_edit_without_args_requires_field_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
@@ -337,7 +328,7 @@ fn issue_edit_without_args_requires_edit_without_terminal() {
     let (_, err, ok) = run(path, &["issue", "edit", issue_id.as_str()]);
     assert!(!ok, "issue edit should fail without args and terminal");
     assert!(
-        err.contains("--edit is required unless running interactively"),
+        err.contains("--title or --body is required unless running interactively"),
         "issue edit stderr: {err}"
     );
 }
@@ -365,7 +356,7 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     let editor_script = path.join("editor-write-issue.sh");
     std::fs::write(
         &editor_script,
-        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nBODY:\nsecond body\n\nEDIT:\nupdated body only\nEOF\n",
+        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nsecond body\nEOF\n",
     )
     .unwrap();
 
@@ -373,7 +364,7 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["issue", "edit", issue_id.as_str()],
-        Some(("What would you like to edit?", "\x1b[B \r")),
+        &[("What would you like to edit?", "\x1b[B \r")],
         &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive issue edit failed: {err}");
@@ -382,6 +373,43 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     assert!(ok, "issue show after edit failed: {err}");
     assert!(out.contains("first title"), "issue show output: {out}");
     assert!(out.contains("second body"), "issue show output: {out}");
+}
+
+#[test]
+fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let issue_id = create_origin_commit(path);
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "issue",
+            "new",
+            "--title",
+            "first title",
+            "--body",
+            "first body",
+        ],
+    );
+    assert!(ok, "issue new failed: {err}");
+
+    let (_out, err, ok) = run_with_pty_env(
+        path,
+        &["issue", "edit", issue_id.as_str()],
+        &[
+            ("What would you like to edit?", " \r"),
+            ("title [first title]:", "second title\n"),
+        ],
+        &[],
+    );
+    assert!(ok, "interactive issue edit failed: {err}");
+
+    let (out, err, ok) = run(path, &["issue", "show", issue_id.as_str()]);
+    assert!(ok, "issue show after edit failed: {err}");
+    assert!(out.contains("second title"), "issue show output: {out}");
+    assert!(out.contains("first body"), "issue show output: {out}");
 }
 
 #[test]
@@ -439,7 +467,7 @@ fn review_new_interactive_requires_terminal() {
 }
 
 #[test]
-fn review_edit_without_args_requires_edit_without_terminal() {
+fn review_edit_without_args_requires_field_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
@@ -461,7 +489,7 @@ fn review_edit_without_args_requires_edit_without_terminal() {
     let (_, err, ok) = run(path, &["review", "edit", review_id.as_str()]);
     assert!(!ok, "review edit should fail without args and terminal");
     assert!(
-        err.contains("--edit is required unless running interactively"),
+        err.contains("--body or --target is required unless running interactively"),
         "review edit stderr: {err}"
     );
 }
@@ -520,8 +548,6 @@ fn review_new_show_list_log_and_remove() {
             "needs changes",
             "--target",
             "commit:feedface",
-            "--edit",
-            "address feedback",
         ],
     );
     assert!(ok, "review edit failed: {err}");
@@ -529,10 +555,7 @@ fn review_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "review show after edit failed: {err}");
     assert!(out.contains("needs changes"), "review show output: {out}");
-    assert!(
-        out.contains("address feedback"),
-        "review show output: {out}"
-    );
+    assert!(out.contains("commit:feedface"), "review show output: {out}");
 
     let log_args = vec!["review", "log", review_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -575,7 +598,7 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     let editor_script = path.join("editor-write-review.sh");
     std::fs::write(
         &editor_script,
-        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nBODY:\nneeds changes\n\nEDIT:\naddress feedback\nEOF\n",
+        "#!/bin/sh\ncat > \"$1\" <<'EOF'\nneeds changes\nEOF\n",
     )
     .unwrap();
 
@@ -583,7 +606,7 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["review", "edit", review_id.as_str()],
-        Some(("What would you like to edit?", " \r")),
+        &[("What would you like to edit?", " \r")],
         &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive review edit failed: {err}");
@@ -637,7 +660,7 @@ fn comment_edit_without_edit_defaults_to_interactive_with_pty() {
     let (_out, err, ok) = run_with_pty_env(
         path,
         &["comment", "edit", "comment-1"],
-        None,
+        &[],
         &[("EDITOR", editor_cmd.as_str())],
     );
     assert!(ok, "interactive comment edit failed: {err}");
