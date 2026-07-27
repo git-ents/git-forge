@@ -141,17 +141,11 @@ fn issue_new_show_list_log_and_remove() {
     let show_args = vec!["issue", "show", issue_id.as_str()];
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "issue show failed: {err}");
-    assert!(
-        out.contains(&format!("#{issue_id}")),
-        "issue show output: {out}"
-    );
     assert!(out.contains("first title"), "issue show output: {out}");
     assert!(out.contains("first body"), "issue show output: {out}");
-    assert!(
-        out.contains("Assigned to alice"),
-        "issue show output: {out}"
-    );
-    assert!(out.contains("Reported by bob"), "issue show output: {out}");
+    assert!(out.contains("bug, p1"), "issue show output: {out}");
+    assert!(out.contains("alice"), "issue show output: {out}");
+    assert!(out.contains("bob"), "issue show output: {out}");
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
@@ -175,7 +169,7 @@ fn issue_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "issue show after edit failed: {err}");
     assert!(out.contains("second body"), "issue show output: {out}");
-    assert!(out.contains("Edit typo fix"), "issue show output: {out}");
+    assert!(out.contains("typo fix"), "issue show output: {out}");
 
     let log_args = vec!["issue", "log", issue_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -206,8 +200,9 @@ fn issue_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
 
     let (out, err, ok) = run(path, &["issue", "show", "abc1"]);
     assert!(ok, "issue show by unique prefix failed: {err}");
-    assert!(out.contains("#abc11111"), "issue show output: {out}");
+    assert!(out.contains("abc11111"), "issue show output: {out}");
     assert!(out.contains("first body"), "issue show output: {out}");
+    assert!(!out.contains("second body"), "issue show output: {out}");
 
     let (_, err, ok) = run(path, &["issue", "show", "abc"]);
     assert!(!ok, "issue show should fail on ambiguous prefix");

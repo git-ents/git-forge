@@ -791,58 +791,79 @@ fn print_log(
     Ok(())
 }
 
+struct Doc<'a> {
+    kind: &'a str,
+    id: &'a str,
+    title: Option<&'a str>,
+    fields: Vec<(&'a str, String)>,
+    body: &'a str,
+    edit: Option<&'a str>,
+}
+
+fn render_doc(doc: &Doc<'_>) -> String {
+    let mut source = String::new();
+    if let Some(title) = doc.title {
+        let heading = if title.is_empty() {
+            "(untitled)"
+        } else {
+            title
+        };
+        let _ = writeln!(&mut source, "= {heading}");
+    } else {
+        let _ = writeln!(&mut source, "= {} {}", doc.kind, doc.id);
+    }
+    source.push_str(":!sectnums:\n\n");
+    source.push_str("[horizontal]\n");
+    let _ = writeln!(&mut source, "kind:: {}", doc.kind);
+    let _ = writeln!(&mut source, "id:: {}", doc.id);
+    for (name, value) in &doc.fields {
+        let _ = writeln!(&mut source, "{name}:: {value}");
+    }
+    let _ = writeln!(&mut source, "edit:: {}", doc.edit.unwrap_or("(none)"));
+    source.push_str("\n== body\n\n");
+    if doc.body.is_empty() {
+        source.push_str("(none)\n");
+    } else {
+        source.push_str(doc.body);
+        source.push('\n');
+    }
+    source
+}
+
+fn print_doc(doc: &Doc<'_>) {
+    print_rendered(&render_asciidoc_terminal(&render_doc(doc)));
+}
+
 fn print_issue(issue: &Issue) {
-    println!("----");
-    println!("#{}", color_id(&issue.id));
-    if issue.title.is_empty() {
-        println!("{}", color_empty_marker("(untitled)"));
-    } else {
-        println!("{}", issue.title);
-    }
-    println!();
-
-    if issue.body.is_empty() {
-        println!("{}", color_empty_marker("(none)"));
-    } else {
-        print_rendered(&render_asciidoc_terminal(&issue.body));
-    }
-
-    if let Some(edit) = &issue.edit {
-        println!();
-        println!("Edit {}", edit);
-    }
-
-    println!();
-    println!("Assigned to {}", join_values_or_none(&issue.assignees));
-    println!("Reported by {}", join_values_or_none(&issue.reporters));
+    let doc = Doc {
+        kind: "issue",
+        id: &issue.id,
+        title: Some(&issue.title),
+        fields: vec![
+            ("labels", join_values_or_none(&issue.labels)),
+            ("assignees", join_values_or_none(&issue.assignees)),
+            ("reporters", join_values_or_none(&issue.reporters)),
+        ],
+        body: &issue.body,
+        edit: issue.edit.as_deref(),
+    };
+    print_doc(&doc);
 }
 
 fn print_review(review: &Review) {
-    let mut source = String::new();
-    let _ = writeln!(&mut source, "= review {}", review.id);
-    source.push_str(":!sectnums:\n\n");
-    source.push_str("[horizontal]\n");
-    let _ = writeln!(&mut source, "id:: {}", review.id);
-    let _ = writeln!(
-        &mut source,
-        "reviewers:: {}",
-        join_values_or_none(&review.reviewers)
-    );
-    let _ = writeln!(
-        &mut source,
-        "requesters:: {}",
-        join_values_or_none(&review.requesters)
-    );
-    let _ = writeln!(&mut source, "target:: {}", format_target(&review.target));
-    let _ = writeln!(
-        &mut source,
-        "edit:: {}",
-        review.edit.as_deref().unwrap_or("(none)")
-    );
-    source.push_str("\n== body\n\n");
-    source.push_str(&review.body);
-    source.push('\n');
-    print_rendered(&render_asciidoc_terminal(&source));
+    let doc = Doc {
+        kind: "review",
+        id: &review.id,
+        title: None,
+        fields: vec![
+            ("reviewers", join_values_or_none(&review.reviewers)),
+            ("requesters", join_values_or_none(&review.requesters)),
+            ("target", format_target(&review.target)),
+        ],
+        body: &review.body,
+        edit: review.edit.as_deref(),
+    };
+    print_doc(&doc);
 }
 
 fn render_asciidoc_terminal(value: &str) -> String {
