@@ -69,6 +69,17 @@ pub struct Issue {
     pub edit: Option<String>,
 }
 
+#[derive(Debug, Facet)]
+struct StoredIssue {
+    status: String,
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    reporters: Vec<String>,
+    edit: Option<String>,
+}
+
 impl Issue {
     /// The `gix-store` kind this entity is published under.
     pub const KIND: &'static str = "issue";
@@ -82,8 +93,19 @@ impl Issue {
 
     /// Store this issue at `refs/store/issue/<id>`.
     pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let value = facet_value::to_value(self).map_err(|e| Error::ToValue(e.to_string()))?;
+        let value = facet_value::to_value(&StoredIssue::from(self))
+            .map_err(|e| Error::ToValue(e.to_string()))?;
         Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    }
+
+    /// Create a new issue and return its stable store id.
+    pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::ensure_schema(&store)?;
+        let value = facet_value::to_value(&StoredIssue::from(self))
+            .map_err(|e| Error::ToValue(e.to_string()))?;
+        let (id, _) = store.store_anonymous(Self::KIND, &value, None)?;
+        Ok(id)
     }
 
     /// Load the issue named `id`, or `None` if it doesn't exist.
@@ -91,7 +113,12 @@ impl Issue {
         let Some(value) = store.retrieve(Self::KIND, id)? else {
             return Ok(None);
         };
-        Ok(Some(facet_value::from_value(value)?))
+        if let Ok(stored) = facet_value::from_value::<StoredIssue>(value.clone()) {
+            return Ok(Some(Issue::from_stored(id, stored)));
+        }
+        let mut issue: Issue = facet_value::from_value(value)?;
+        issue.id = id.to_owned();
+        Ok(Some(issue))
     }
 
     /// Ensure schema and save to the repository-backed store.
@@ -124,6 +151,33 @@ impl Issue {
         let store = gix_store::Store::open(repo);
         Ok(store.delete(Self::KIND, id)?)
     }
+
+    fn from_stored(id: &str, stored: StoredIssue) -> Self {
+        Self {
+            id: id.to_owned(),
+            status: stored.status,
+            title: stored.title,
+            body: stored.body,
+            labels: stored.labels,
+            assignees: stored.assignees,
+            reporters: stored.reporters,
+            edit: stored.edit,
+        }
+    }
+}
+
+impl From<&Issue> for StoredIssue {
+    fn from(value: &Issue) -> Self {
+        Self {
+            status: value.status.clone(),
+            title: value.title.clone(),
+            body: value.body.clone(),
+            labels: value.labels.clone(),
+            assignees: value.assignees.clone(),
+            reporters: value.reporters.clone(),
+            edit: value.edit.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Facet)]
@@ -135,6 +189,16 @@ pub struct Review {
     pub requesters: Vec<String>,
     pub target: ReviewTarget,
     pub edit: Option<String>,
+}
+
+#[derive(Debug, Facet)]
+struct StoredReview {
+    status: String,
+    body: String,
+    reviewers: Vec<String>,
+    requesters: Vec<String>,
+    target: ReviewTarget,
+    edit: Option<String>,
 }
 
 #[derive(Debug, Facet)]
@@ -249,8 +313,19 @@ impl Review {
 
     /// Store this review at `refs/store/review/<id>`.
     pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let value = facet_value::to_value(self).map_err(|e| Error::ToValue(e.to_string()))?;
+        let value = facet_value::to_value(&StoredReview::from(self))
+            .map_err(|e| Error::ToValue(e.to_string()))?;
         Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    }
+
+    /// Create a new review and return its stable store id.
+    pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
+        let store = gix_store::Store::open(repo);
+        Self::ensure_schema(&store)?;
+        let value = facet_value::to_value(&StoredReview::from(self))
+            .map_err(|e| Error::ToValue(e.to_string()))?;
+        let (id, _) = store.store_anonymous(Self::KIND, &value, None)?;
+        Ok(id)
     }
 
     /// Load the review named `id`, or `None` if it doesn't exist.
@@ -258,7 +333,12 @@ impl Review {
         let Some(value) = store.retrieve(Self::KIND, id)? else {
             return Ok(None);
         };
-        Ok(Some(facet_value::from_value(value)?))
+        if let Ok(stored) = facet_value::from_value::<StoredReview>(value.clone()) {
+            return Ok(Some(Review::from_stored(id, stored)));
+        }
+        let mut review: Review = facet_value::from_value(value)?;
+        review.id = id.to_owned();
+        Ok(Some(review))
     }
 
     /// Ensure schema and save to the repository-backed store.
@@ -290,6 +370,31 @@ impl Review {
     pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
         let store = gix_store::Store::open(repo);
         Ok(store.delete(Self::KIND, id)?)
+    }
+
+    fn from_stored(id: &str, stored: StoredReview) -> Self {
+        Self {
+            id: id.to_owned(),
+            status: stored.status,
+            body: stored.body,
+            reviewers: stored.reviewers,
+            requesters: stored.requesters,
+            target: stored.target,
+            edit: stored.edit,
+        }
+    }
+}
+
+impl From<&Review> for StoredReview {
+    fn from(value: &Review) -> Self {
+        Self {
+            status: value.status.clone(),
+            body: value.body.clone(),
+            reviewers: value.reviewers.clone(),
+            requesters: value.requesters.clone(),
+            target: value.target.clone(),
+            edit: value.edit.clone(),
+        }
     }
 }
 

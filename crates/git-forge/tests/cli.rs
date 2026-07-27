@@ -130,9 +130,12 @@ fn git_stdout(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-fn create_origin_commit(dir: &Path) -> String {
+fn create_origin_commit(dir: &Path) {
     let _ = git_stdout(dir, &["commit", "--allow-empty", "-m", "init"]);
-    git_stdout(dir, &["rev-parse", "--short=8", "HEAD"])
+}
+
+fn created_id(out: &str) -> String {
+    out.lines().next().unwrap_or_default().trim().to_owned()
 }
 
 fn put_issue(dir: &Path, id: &str, body: &str) {
@@ -195,9 +198,9 @@ fn issue_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let issue_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "issue",
@@ -217,6 +220,7 @@ fn issue_new_show_list_log_and_remove() {
         ],
     );
     assert!(ok, "issue new failed: {err}");
+    let issue_id = created_id(&out);
 
     let show_args = vec!["issue", "show", issue_id.as_str()];
     let (out, err, ok) = run(path, &show_args);
@@ -322,10 +326,11 @@ fn issue_edit_without_args_requires_field_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let issue_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(path, &["issue", "new", "--body", "first body"]);
+    let (out, err, ok) = run(path, &["issue", "new", "--body", "first body"]);
     assert!(ok, "issue new failed: {err}");
+    let issue_id = created_id(&out);
 
     let (_, err, ok) = run(path, &["issue", "edit", issue_id.as_str()]);
     assert!(!ok, "issue edit should fail without args and terminal");
@@ -340,9 +345,9 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let issue_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "issue",
@@ -354,6 +359,7 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
         ],
     );
     assert!(ok, "issue new failed: {err}");
+    let issue_id = created_id(&out);
 
     let editor_script = path.join("editor-write-issue.sh");
     std::fs::write(
@@ -382,9 +388,9 @@ fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let issue_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "issue",
@@ -396,6 +402,7 @@ fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
         ],
     );
     assert!(ok, "issue new failed: {err}");
+    let issue_id = created_id(&out);
 
     let (_out, err, ok) = run_with_pty_env(
         path,
@@ -473,9 +480,9 @@ fn review_edit_without_args_requires_field_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let review_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "review",
@@ -487,6 +494,7 @@ fn review_edit_without_args_requires_field_without_terminal() {
         ],
     );
     assert!(ok, "review new failed: {err}");
+    let review_id = created_id(&out);
 
     let (_, err, ok) = run(path, &["review", "edit", review_id.as_str()]);
     assert!(!ok, "review edit should fail without args and terminal");
@@ -501,9 +509,9 @@ fn review_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let review_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "review",
@@ -519,6 +527,7 @@ fn review_new_show_list_log_and_remove() {
         ],
     );
     assert!(ok, "review new failed: {err}");
+    let review_id = created_id(&out);
 
     let show_args = vec!["review", "show", review_id.as_str()];
     let (out, err, ok) = run(path, &show_args);
@@ -582,9 +591,9 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
-    let review_id = create_origin_commit(path);
+    create_origin_commit(path);
 
-    let (_, err, ok) = run(
+    let (out, err, ok) = run(
         path,
         &[
             "review",
@@ -596,6 +605,7 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
         ],
     );
     assert!(ok, "review new failed: {err}");
+    let review_id = created_id(&out);
 
     let editor_script = path.join("editor-write-review.sh");
     std::fs::write(
@@ -704,8 +714,8 @@ fn query_sugar_filters_by_people_and_keyword() {
     init_repo(dir.path());
     let path = dir.path();
 
-    let issue_id = create_origin_commit(path);
-    let (_, err, ok) = run(
+    create_origin_commit(path);
+    let (out, err, ok) = run(
         path,
         &[
             "issue",
@@ -719,9 +729,10 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "issue new failed: {err}");
+    let issue_id = created_id(&out);
 
-    let review_id = create_origin_commit(path);
-    let (_, err, ok) = run(
+    create_origin_commit(path);
+    let (out, err, ok) = run(
         path,
         &[
             "review",
@@ -737,6 +748,7 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "review new failed: {err}");
+    let review_id = created_id(&out);
 
     let (out, err, ok) = run(path, &["query", "assignee", "alice"]);
     assert!(ok, "query assignee failed: {err}");

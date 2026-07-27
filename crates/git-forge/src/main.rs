@@ -257,7 +257,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 )
             };
             let issue = Issue {
-                id: origin_commit_short_id(repo)?,
+                id: String::new(),
                 status: args
                     .status
                     .unwrap_or(StatusArg::Open)
@@ -271,7 +271,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 reporters,
                 edit: None,
             };
-            println!("{}", issue.save_in_repo(repo)?);
+            println!("{}", issue.create_in_repo(repo)?);
         }
         IssueCommand::Edit(args) => {
             let id = resolve_issue_show_id(repo, &args.id)?
@@ -989,14 +989,6 @@ fn prompt_line(field: &str) -> Result<String> {
     Ok(input.trim().to_owned())
 }
 
-fn origin_commit_short_id(repo: &gix::Repository) -> Result<String> {
-    let id = repo
-        .head_id()
-        .context("cannot create issue/review without a checked-out commit")?;
-    let full = id.to_string();
-    Ok(full.chars().take(8).collect())
-}
-
 fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
     match command {
         QueryCommand::Run {
@@ -1203,7 +1195,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 )
             };
             let review = Review {
-                id: origin_commit_short_id(repo)?,
+                id: String::new(),
                 status: args
                     .status
                     .unwrap_or(StatusArg::Open)
@@ -1216,7 +1208,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 target: parse_review_target(&target)?,
                 edit: None,
             };
-            println!("{}", review.save_in_repo(repo)?);
+            println!("{}", review.create_in_repo(repo)?);
         }
         ReviewCommand::Edit(args) => {
             let id = resolve_review_show_id(repo, &args.id)?
