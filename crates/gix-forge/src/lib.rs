@@ -7,6 +7,17 @@ use gix_comment::{Binding, Comments};
 pub use gix_comment::{Comment, State as CommentState};
 pub use gix_query::Value as QueryValue;
 
+const STORE_DATA_PREFIX: &str = "refs/forge";
+const STORE_SCHEMA_PREFIX: &str = "refs/schema";
+
+fn open_store(repo: &Repository) -> Result<gix_store::Store<'_>, Error> {
+    Ok(gix_store::Store::open_with_prefixes(
+        repo,
+        STORE_DATA_PREFIX,
+        STORE_SCHEMA_PREFIX,
+    )?)
+}
+
 /// Errors from `gix-forge`'s storage operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -91,7 +102,7 @@ impl Issue {
         Ok(store.put_schema(Self::KIND, &doc)?)
     }
 
-    /// Store this issue at `refs/store/issue/<id>`.
+    /// Store this issue at `refs/forge/issue/<id>`.
     pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
         let value = facet_value::to_value(&StoredIssue::from(self))
             .map_err(|e| Error::ToValue(e.to_string()))?;
@@ -100,7 +111,7 @@ impl Issue {
 
     /// Create a new issue and return its stable store id.
     pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::ensure_schema(&store)?;
         let value = facet_value::to_value(&StoredIssue::from(self))
             .map_err(|e| Error::ToValue(e.to_string()))?;
@@ -123,32 +134,32 @@ impl Issue {
 
     /// Ensure schema and save to the repository-backed store.
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     /// Load an issue from the repository-backed store.
     pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Issue>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::load(&store, id)
     }
 
     /// List issue ids in the repository-backed store.
     pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.list(Self::KIND)?)
     }
 
     /// List issue version history, newest first.
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.history(Self::KIND, id)?)
     }
 
     /// Delete an issue by id.
     pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.delete(Self::KIND, id)?)
     }
 
@@ -222,24 +233,24 @@ impl CommentEdit {
     }
 
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.history(Self::KIND, id)?)
     }
 }
 
 pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
-    let store = gix_store::Store::open(repo);
+    let store = open_store(repo)?;
     Issue::ensure_schema(&store)
 }
 
 pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
-    let store = gix_store::Store::open(repo);
+    let store = open_store(repo)?;
     Review::ensure_schema(&store)
 }
 
@@ -311,7 +322,7 @@ impl Review {
         Ok(store.put_schema(Self::KIND, &doc)?)
     }
 
-    /// Store this review at `refs/store/review/<id>`.
+    /// Store this review at `refs/forge/review/<id>`.
     pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
         let value = facet_value::to_value(&StoredReview::from(self))
             .map_err(|e| Error::ToValue(e.to_string()))?;
@@ -320,7 +331,7 @@ impl Review {
 
     /// Create a new review and return its stable store id.
     pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::ensure_schema(&store)?;
         let value = facet_value::to_value(&StoredReview::from(self))
             .map_err(|e| Error::ToValue(e.to_string()))?;
@@ -343,32 +354,32 @@ impl Review {
 
     /// Ensure schema and save to the repository-backed store.
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     /// Load a review from the repository-backed store.
     pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Review>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Self::load(&store, id)
     }
 
     /// List review ids in the repository-backed store.
     pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.list(Self::KIND)?)
     }
 
     /// List review version history, newest first.
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.history(Self::KIND, id)?)
     }
 
     /// Delete a review by id.
     pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
-        let store = gix_store::Store::open(repo);
+        let store = open_store(repo)?;
         Ok(store.delete(Self::KIND, id)?)
     }
 
@@ -563,7 +574,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         test_support::init_repo(dir.path());
         let repo = gix::open(dir.path()).expect("open repo");
-        let store = gix_store::Store::open(&repo);
+        let store = open_store(&repo).expect("open store");
 
         Issue::ensure_schema(&store).expect("publish issue schema");
 
@@ -598,7 +609,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         test_support::init_repo(dir.path());
         let repo = gix::open(dir.path()).expect("open repo");
-        let store = gix_store::Store::open(&repo);
+        let store = open_store(&repo).expect("open store");
 
         Review::ensure_schema(&store).expect("publish review schema");
 
