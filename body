@@ -1,0 +1,72 @@
+**What**
+
+`comment edit <id> --edit <text>` writes a `CommentEdit { id, edit }` to
+`refs/forge/comment/<id>`, keyed by the *issue* id, using the same
+commit-forward snapshot path as everything else. There is exactly one comment
+record per entity and the second one overwrites the first. There is no
+`comment new`, no `comment list`, no `comment show`; the only reader is
+`comment log`, which prints commit oids and timestamps but not the text.
+`issue show` never displays comments at all.
+
+The field is called `edit` and the interactive prompt for it is literally
+`Edit reason`, so this was never trying to be a comment -- it is an audit
+annotation that nothing reads.
+
+**Where**
+
+- `crates/git-forge/src/main.rs:118` -- `CommentCommand` has only `Edit` and `Log`
+- `crates/git-forge/src/main.rs:615` -- `prompt_comment_edit_reason`, prompt `Edit reason`
+- `crates/gix-forge/src/lib.rs:216` -- `CommentEdit { id, edit }`
+- `crates/gix-forge/src/lib.rs:454` and `:465` -- `Commentable::add_comment` and
+  `add_anchored_comment` are TODO stubs that return `ObjectId::null` and throw
+  away the `comments_ref()` they just computed
+- `crates/gix-forge/src/lib.rs:484` -- `get_comments` calls `Comments::open(repo).list(None)`
+  and ignores the entity entirely, so every entity returns every comment in the repo
+- `crates/gix-forge/src/lib.rs:524` -- `comments_ref` builds `refs/forge/issues/<id>/comments`,
+  plural, which does not match the `refs/forge/issue/<id>` the store actually uses
+
+**Also**
+
+    git-forge comment edit zzzznope --edit "orphan comment"
+    e68af9c8...      # exit 0
+
+No check that the entity exists. Orphan comment refs are creatable at will.
+
+**Why it matters**
+
+A forge is a place where people argue about code. Issues you cannot reply to
+are a bug tracker for one person. This is not an unimplemented feature -- the
+data model has nowhere to put a second comment, so it is a design gap, and it
+is the first thing anyone will notice in a demo.
+
+It is also the place where the family thesis is most obviously on the table and
+untaken. `gix-comment` and `gix-anchor` are already dependencies. The
+`Commentable` trait sketches exactly the right shape: a comment that anchors to
+a line range in a blob and survives the code moving. A review comment pinned to
+moving code is a thing GitHub does badly and `git-anchor` does well. The stubs
+are three functions away from being the best slide in the talk.
+
+**Options**
+
+- Option A -- Make comments an anonymous entity kind of their own
+  (`store_anonymous("comment", ...)` with a `parent` field), so each comment
+  gets its own ref and id. Threads are then a filter over the kind, and
+  concurrent commenting merges for free because ids never collide. Trade-off:
+  one ref per comment, and thread assembly is a scan.
+- Option B -- Store a thread as an append-only list in one ref per entity, so
+  `refs/forge/comment/<entity-id>` grows rather than being overwritten.
+  Trade-off: cheaper reads, but concurrent comments from two clones collide on
+  the same ref -- the same merge problem filed separately.
+- Option C -- Delegate to `gix-comment` and `gix-anchor` outright: implement
+  the `Commentable` stubs, bind comments to the entity tree oid for thread
+  comments and to a blob line range for inline ones, and let `git-anchor` do
+  the surviving-a-rebase work. Trade-off: a real dependency on a sibling that
+  is itself a sketch.
+
+**Recommendation**
+
+A for the plain thread, C for inline review comments, and delete the
+`edit` / `CommentEdit` concept entirely -- it is a third thing that is neither.
+High confidence. Of everything here this is the largest gap between what the
+tagline promises and what the binary does, and Option C is the highest-upside
+work in the repo.
