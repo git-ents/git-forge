@@ -1,0 +1,64 @@
+**What**
+
+Each entity is a snapshot on its own ref, advanced by `commit_forward`. Two
+people editing the same issue on two clones produce two divergent linear
+histories with no merge path. Git offers force or reject; the model offers
+nothing else.
+
+**Where**
+
+`crates/gix-forge/src/lib.rs:106` -- `Issue::save` calls `store.store`, which
+`commit_forward`s a whole new snapshot over the current tip.
+`git-store` `crates/gix-store/src/store.rs:300` -- `commit_forward`.
+
+**Reproduction**
+
+Bob clones, closes issue `1d655d1a`. Alice retitles the same issue on origin.
+
+    # Bob, natural refspec with the plus everyone writes
+    git fetch origin "+refs/forge/*:refs/forge/*"
+     + f95db98...7a2c424 refs/forge/issue/1d655d1a -> ... (forced update)
+    git-forge issue show 1d655d1a
+    Issue number 3 retitled by Alice #1d655d1a
+    Open
+
+Bob closed it. It is open. No conflict, no warning, exit 0. Without the plus:
+
+     ! [rejected] refs/forge/issue/46875dbb -> ... (non-fast-forward)
+
+So the only two outcomes are silent data loss and total sync failure.
+
+**Why it matters**
+
+This is the entire value proposition versus GitHub. A hosted forge serializes
+writes through one server, so lost updates are its problem to solve and it
+solves them. A distributed forge that cannot merge is strictly worse than the
+thing it replaces. If anyone in the audience asks how two contributors
+collaborate offline -- and someone will, it is the obvious question -- the
+honest answer today is that they cannot.
+
+Note that concurrent *creation* is fine: ids derive from distinct commit
+hashes, so two people filing issues merge cleanly. It is only mutation that
+breaks, and mutation is most of the traffic.
+
+**Options**
+
+- Option A -- Model each entity as an append-only event log (opened, retitled,
+  labeled, closed) and fold to a snapshot on read. Divergent histories merge as
+  a set union of events; last-writer-wins only inside a single field. Trade-off:
+  reads get more expensive and `retrieve` stops being a single tree read.
+- Option B -- Keep snapshots but make the merge explicit: a real merge commit
+  with two parents and per-field three-way resolution, since fields are already
+  separate blobs in the tree. Trade-off: needs a `git-forge sync` verb and a
+  conflict UX, but reuses the tree layout you already have.
+- Option C -- Per-field CRDTs (status as a lattice, labels as an OR-set).
+  Trade-off: merges without asking, at the cost of a model that is harder to
+  explain in a talk.
+
+**Recommendation**
+
+Option B for the conference, Option A as the honest long-term answer. Highest
+confidence of anything in this review: the field-per-blob tree layout is
+already almost a three-way-mergeable structure, and demonstrating a real merge
+of two divergent issue histories would be the single most persuasive thing you
+could put on screen. Option A is where this ends up, but it is a rewrite.

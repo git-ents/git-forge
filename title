@@ -1,0 +1,1 @@
+Concurrent edits on two clones cannot be merged: force-fetch silently loses one side, non-force fetch is rejected outright
