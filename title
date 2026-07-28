@@ -1,0 +1,1 @@
+query is two disconnected surfaces: ad-hoc in-process scans that duplicate a real Datalog engine, and a Datalog engine nobody can discover how to address
