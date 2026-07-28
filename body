@@ -1,0 +1,77 @@
+**What**
+
+`show` and `edit` resolve a minimal unique id prefix. `log`, `rm` and
+`comment edit` do not -- they pass the raw string straight through. So the same
+id string is valid for some verbs and invalid for others, and the failure modes
+differ: `rm` errors, but `log` succeeds and lies.
+
+**Where**
+
+- `crates/git-forge/src/main.rs:912` -- `resolve_issue_show_id`, the resolver
+- `crates/git-forge/src/main.rs:271` and `:308` -- `Edit` and `Show` call it
+- `crates/git-forge/src/main.rs:314` -- `Log` does not
+- `crates/git-forge/src/main.rs:315` -- `Rm` does not
+- `crates/git-forge/src/main.rs:326` -- `comment edit` does not
+- `crates/git-forge/src/main.rs:902` and `:903` -- same omissions on `review`
+
+**Reproduction**
+
+    git-forge issue show 4cd886
+    First issue (edited) #4cd8865f        # resolves
+
+    git-forge issue log 4cd886
+    issue history 4cd886:
+      (none)                              # exit 0
+
+    git-forge issue rm 4cd886
+    Error: no issue 4cd886                # exit 1
+
+The middle one is the dangerous one. It reports, with a successful exit code,
+that an issue which has three commits of history has no history. A user
+checking whether an edit landed would conclude it did not.
+
+**Also**
+
+The ambiguity error leaks literal markdown into plain terminal text:
+
+    Error: ambiguous issue id ; matches:
+      **1**d655d1a
+      **46**875dbb
+
+`emphasize_min_unique_prefix` at `crates/git-forge/src/main.rs:942` wraps the
+distinguishing prefix in asterisks. The intent is clearly to bold it, but this
+string goes to stderr as-is and is never rendered. The tool has a `colorize`
+helper eight lines away.
+
+Relatedly, the empty string is accepted as a prefix and matches everything,
+which is how the example above was produced.
+
+**Why it matters**
+
+Prefix ids are the right affordance and the resolver is good -- it even
+computes the minimum distinguishing length. The problem is that it is bolted on
+per-verb instead of being the single front door, so half the surface has it and
+half does not, and nothing in the type system notices. Users learn prefixes
+work, then hit a verb where they silently do not.
+
+The `log` case is the one that would embarrass a demo, because it produces a
+confident wrong answer rather than an error.
+
+**Options**
+
+- Option A -- Resolve every id at the argument-parsing boundary: make the id a
+  newtype whose parser does the lookup, so no command can forget. Trade-off:
+  needs repo access during parsing, which is awkward with `clap` derive.
+- Option B -- Route all five call sites through the existing resolver.
+  Trade-off: five lines, but the next command added forgets again.
+- Option C -- Push resolution down into `gix-forge`, so `Issue::load`,
+  `Issue::history` and `Issue::delete` all accept a prefix. Trade-off: the
+  library gets an opinion about id shape, which is arguably correct since it
+  also mints them.
+
+**Recommendation**
+
+Option C, because it puts resolution next to derivation and makes it impossible
+for a new verb to differ. Option B today if C is too much churn. Also reject
+the empty prefix, and either render the emphasis or drop the asterisks. High
+confidence -- there is no design tension here, only inconsistency.
