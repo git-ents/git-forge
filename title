@@ -1,0 +1,1 @@
+No machine-readable output: list is a box-drawing table even off a TTY, show panics on a closed pipe, and nothing sorts or filters
