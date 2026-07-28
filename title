@@ -1,0 +1,1 @@
+Forge data does not travel: a fresh clone reports zero issues, and fetching refs/forge without refs/schema corrupts reads

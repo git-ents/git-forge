@@ -1,0 +1,64 @@
+**What**
+
+`git-forge` writes to `refs/forge/*` and `refs/schema/*` and never configures a
+fetch or push refspec for either. Git default refspecs cover `refs/heads/*`
+only, so none of it clones, fetches, or pushes. Nothing in the tool mentions
+this, and there is no README to mention it in.
+
+**Where**
+
+`crates/gix-forge/src/lib.rs:10` -- `STORE_DATA_PREFIX` / `STORE_SCHEMA_PREFIX`.
+Grepping the workspace for `refspec`, `remote.` or `fetch` returns nothing --
+no code anywhere sets up transport.
+
+**Reproduction**
+
+Origin has eight issues, three reviews, comments and schemas.
+
+    git clone /tmp/forge-lab /tmp/forge-clone
+    git-forge issue list
+    No issues            # exit 0
+
+Indistinguishable from an empty forge. Then, having learned the magic refspec
+from the source code, fetch only the data:
+
+    git fetch origin "+refs/forge/*:refs/forge/*"
+    git-forge issue show 1d655d1a
+    Error: An object with id 23dde85c63abf10e4ef54d1680070d0e6ee6fd8a could not be found
+
+`23dde85c` is a *schema* commit. Every data commit carries a `Schema:` trailer
+naming the schema commit it validated against, so `refs/forge/*` is unreadable
+without the matching `refs/schema/*`. The two namespaces are one atomic unit
+and nothing says so. Fetching `refs/schema/*` as well fixes it.
+
+**Why it matters**
+
+A forge whose data does not travel is not a forge, it is a local notepad. The
+failure is also silent and confidently wrong: `No issues` with exit 0 is the
+worst possible output, because a newcomer concludes the project has no issues
+rather than that they are missing a refspec. If the talk includes a live clone,
+this is the moment it falls over.
+
+The dangling-schema-object error is the same fault with a nastier face: a raw
+gix object-not-found with no hint about schemas, refspecs, or what to do.
+
+**Options**
+
+- Option A -- A `git-forge init` (or the existing `install`) that writes
+  `remote.<name>.fetch` and a matching push refspec into `.git/config`.
+  Trade-off: per-clone setup, and it does nothing for the initial `git clone`.
+- Option B -- Publish forge data under a single namespace that a documented
+  one-line refspec covers, and print a loud hint from `list` when the ref
+  namespace is empty but `refs/remotes/*/forge/*` is not. Trade-off: still
+  manual, but at least self-diagnosing.
+- Option C -- Ship a `git-forge fetch` / `git-forge push` wrapper that always
+  moves data and schema together, so the atomicity requirement is encoded in a
+  verb rather than in prose. Trade-off: one more thing to explain, but it is
+  the only option that makes the coupling unbreakable.
+
+**Recommendation**
+
+Option C plus the hint from Option B, and document the raw refspec anyway so
+people know they are not locked in. High confidence. Whatever else changes, the
+data and schema namespaces must never be fetchable separately -- that pairing
+is a correctness invariant currently held only by luck.
