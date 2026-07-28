@@ -1,0 +1,75 @@
+**What**
+
+`--reporter`, `--assignee`, `--reviewer`, `--requester` and `--label` are all
+repeatable free-form strings with no validation, no enum, no per-repo
+declaration and no rename path. Meanwhile every write is a Git commit carrying
+a real author and committer identity. The tool has two identity systems and
+says nothing about which is authoritative.
+
+**Where**
+
+- `crates/git-forge/src/main.rs:91` -- `labels`, `assignees`, `reporters` as `Vec<String>`
+- `crates/gix-forge/src/lib.rs:77` -- the same on the entity
+- `crates/git-forge/src/main.rs:495` -- `known_issue_values`, which recovers a
+  de-facto vocabulary by scanning every existing entity
+
+**Evidence**
+
+The commit that records an issue is authored by the Git identity:
+
+    author=Tester <t@example.com>
+    committer=Tester <t@example.com>
+
+The `reporters` field on that same issue is whatever string was passed. Nothing
+connects them and nothing checks them. Any user can file an issue reported by
+anyone. Filing these issues, I was asked to pass
+`--reporter Claude:claude-opus-5`, a `Name:model` convention that also appears
+in `.rules` for the `Assisted-by` commit trailer -- so the convention is real
+and used, and it is documented only in a file about how to instruct agents.
+
+`known_issue_values` is the tell. It exists because there is no vocabulary to
+read, so the interactive picker reconstructs one by loading every issue in the
+repository and unioning the strings it finds. That is a repo-wide scan standing
+in for a config file, and it means a typo becomes a permanent menu entry.
+
+**Why it matters**
+
+Two consequences, one practical and one thematic.
+
+Practically: labels drift immediately (`bug`, `Bug`, `bugs` are three labels),
+assignees cannot be validated against anyone real, and there is no rename, so
+the taxonomy of a busy repository degrades and cannot be repaired.
+
+Thematically, this is the composition the family is set up to make and does not
+make. `git-store` has schemas. `git-query` has repo-stored rules and already
+defines `member` and `revoked` EDB predicates backed by `refs/meta/members/*`.
+The obvious shape is right there: labels are a schema, members are the existing
+member namespace, and policy about them -- which labels are legal, who may
+close, whether an assignee must be a member -- is a `git-query` rule. Instead
+each is an unvalidated string and the member namespace goes unused. A reviewer
+in the audience who knows the sibling projects will spot this immediately,
+because it is the join the four-project story implies.
+
+**Options**
+
+- Option A -- Declare the vocabulary as a stored entity kind of its own, so
+  labels are data in the repo with their own schema and history and renames are
+  ordinary edits. Trade-off: one more kind, and `new` has to validate against it.
+- Option B -- Make people first-class: resolve `--assignee` and `--reporter`
+  against `refs/meta/members/*`, the namespace `git-query` already reads, and
+  fall back to the Git committer identity when omitted. Trade-off: requires the
+  member namespace to be populated, which is currently nobody`s job.
+- Option C -- Leave the fields free-form but express the policy as `git-query`
+  rules that `git-forge` checks on write, so the taxonomy is advisory and
+  enforceable without being hardcoded. Trade-off: the most in keeping with the
+  thesis and the most moving parts.
+
+**Recommendation**
+
+B first, because defaulting the reporter to the Git identity removes the
+duplicate-identity question entirely and costs almost nothing -- and note that
+a free-form reporter is forgeable while a committer identity is at least
+signable. Then C, because a demo where a Datalog rule rejects an issue with an
+undeclared label would land the whole family thesis in about fifteen seconds.
+Medium-high confidence on B, and C is genuinely a judgement call about how much
+machinery a bug tracker should have.
