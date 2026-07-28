@@ -1,0 +1,63 @@
+ISSUE
+
+`git-forge install` publishes `BUILTIN_REVIEW_RULES` into the repo. Those rules
+define `reviewed/1`, `blocked/1` and `mergeable/1` entirely in terms of
+`claim`, `kind`, `target`, `signer`, `verdict` and `member`. In `git-query`
+those EDB predicates are sourced from `refs/meta/claims/*` and
+`refs/meta/members/*`. `git-forge` writes reviews to `refs/forge/review/<id>`
+and never writes a claim or a member. The two halves do not meet.
+
+Worse, `Review` has no verdict field at all. Its fields are status, body,
+reviewers, requesters, target, edit. There is no way to record approve or
+reject, which is the one thing every rule in the shipped program asks about.
+
+WHERE
+
+- `crates/gix-forge/src/lib.rs:282` -- `BUILTIN_REVIEW_RULES`
+- `crates/gix-forge/src/lib.rs:257` -- `install_builtin_query_rules`
+- `crates/gix-forge/src/lib.rs:195` -- `Review`, no verdict field
+- `git-query` `crates/gix-query-ir/src/registry.rs:536` -- `claims()` is `refs/meta/claims/*`
+
+REPRODUCTION
+
+In a scratch repo with three reviews filed by `git-forge review new`:
+
+    git-forge query run --goal "review.reviewed(B)" --select B
+    query results:
+      (none)
+
+    git-forge query run review.mergeable --bind 0=<head-oid>
+    query results:
+      (none)
+
+Every blob reads as unreviewed and every commit reads as blocked, no matter
+what `git-forge review new` has recorded.
+
+WHY IT MATTERS
+
+This is the cross-project story the family exists to tell: file a review, then
+ask the repo whether the tip is mergeable. It cannot be demonstrated, because
+the answer is hardwired to no. On stage this is the demo that dies. It also
+means the one place `git-forge` reaches for a sibling is a reach that does not
+connect -- so the current honest description of the project is a standalone
+issue tracker that happens to store data in Git.
+
+OPTIONS
+
+- Option A -- Add a `verdict` field to `Review` and teach `git-query` a host
+  predicate that reads `refs/forge/review/*` directly. Trade-off: `git-query`
+  grows a dependency on a forge-specific ref layout.
+- Option B -- Make `git-forge review new` emit a signed claim under
+  `refs/meta/claims/*` in addition to (or instead of) the forge ref, so the
+  existing vocabulary just works. Trade-off: two writes per review, and
+  `git-forge` has to learn signing.
+- Option C -- Ship rules written against the facts that actually exist today,
+  even if they are weaker, so `install` never publishes a vocabulary the tool
+  cannot satisfy. Trade-off: less impressive rules, but true ones.
+
+RECOMMENDATION
+
+Option B, with Option C as the two-month fallback. High confidence that the
+status quo must not ship: publishing rules that structurally cannot match your
+own data is worse than publishing none, because it looks like it works until
+somebody asks. If time is short, do C now and B for the talk.
