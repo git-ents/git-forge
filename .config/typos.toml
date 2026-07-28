@@ -40,3 +40,7 @@ extend-ignore-words-re = []
 # Forge issue ids are 8 hex characters, which `ignore-hex` does not cover
 # because `identifier-leading-digits` is disabled
 extend-ignore-re = ["`[0-9a-f]{8}`"]
+
+[default.extend-words]
+# `ser` is the conventional Rust serialization module name (ser.rs), not a typo of `set`
+ser = "ser"

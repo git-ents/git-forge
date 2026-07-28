@@ -1,11 +1,14 @@
 = Cross-Repository Design Review Triage
 Claude:claude-opus-5
+v1.1, 2026-07-28: Amended after a four-repository spot check by Claude:claude-fable-5
 
 [abstract]
 ****
 A design review of `git-store`, `git-anchor`, `git-query`, and `git-forge`, filed as 69 issues across the four repositories and scheduled here against a two-month runway to a conference talk.
 Each repository was read directly, built, and driven against scratch repositories; findings cite `file:line` and most are reproductions rather than readings.
 This document ranks the 69 by return on effort, records the ordering constraints between them, and names what should be answered on a slide instead of fixed.
+
+Amended 2026-07-28 after a spot check that cloned all four repositories: the family is reframed as five layers instead of four peers, schema binding moves from second parent to subtree, and the claims chain is promoted into Wave 2.
 ****
 
 == Scope
@@ -60,6 +63,27 @@ Effort is judged against the option each issue recommends, not the most thorough
 42 of 69 are `visible`, 25 are `question`, 2 are `invisible`.
 The talk is the binding constraint on this schedule, so `visible` outranks severity throughout.
 
+== Governing principle
+
+The family's contract is the on-disk format — published schemas, ref layout, claim trailers — never crate imports.
+The four repositories read better as five layers than as four peers:
+
+[cols="1,2,3", options="header"]
+|===
+| Layer | Lives in | Contract
+
+| Encoding | `facet-git-tree` | Values to trees and back, including verbatim oid passthrough: `RawTree` exists (`ser.rs:105-110`); its blob analogue `RawBlob` does not yet.
+| Typed state | `git-store` | Kinds, schema binding, ref layout, `put_schema`.
+| Attachment primitives | `git-anchor` and the claim format under `refs/meta/claims/*` | Positioned annotation and signed assertion.
+| Query | `git-query` | Datalog over the ref layout; the claims vocabulary is already implemented in `gix-query-host`.
+| Vocabulary | `git-forge` | Issues and reviews — the first product built on all the layers below it, not a fourth peer.
+|===
+
+The layering is closer to real than the review first credited.
+`git-anchor` already encodes through `facet_git_tree::serialize_into` (`store.rs:256`), so the encoding layer is genuinely shared; what it bypasses is `git-store`'s schema and ref layer, and no product except `git-forge` calls `put_schema`.
+The diagnosis is narrow: shared encoding, unpublished contracts.
+The rule that follows: every product publishes the schema of what it stores, and products compose by reading each other's published formats, never by importing each other's crates.
+
 == Cross-cutting findings
 
 Three patterns recur in all four repositories and account for most of the `visible` count.
@@ -90,22 +114,27 @@ Three of four fail at a repository boundary.
 
 For a talk arguing Git is a distributed datastore, this is the question in the room.
 
-=== The family does not compose
+=== The family does not compose — yet the receiving side is already built
 
-`git-forge` reviews cannot affect a `git-query` policy answer: the shipped rules read `refs/meta/claims/*`, which `git-forge` never writes, and `Review` has no verdict field.
-`git-anchor` pins comments to moving code and `git-forge` comments are a single overwritable edit-reason slot.
+`git-forge` reviews cannot affect a `git-query` policy answer today, but the gap is one write, not a missing subsystem.
+`gix-query-host/claim.rs` already implements `claim/1`, `kind/2`, `target/2`, `signer/2`, and `verdict/2` off commit trailers under `refs/meta/claims/*`, and the reference vocabulary already joins reviews to anchors to line spans through `anchor/1`, `bind/7`, and `reviewed_span`.
+`git-forge` simply never writes a claim.
+No `verdict` field on `Review` is needed or wanted — the claim trailer carries `Verdict:` and the predicates read only trailers.
+`git-anchor` pins comments to moving code while `git-forge` comments are a single overwritable edit-reason slot; the resolution is delegation, not parallel implementation (see After the conference).
 Four projects on one stage that do not touch each other is a weaker story than three that do.
 
 == Global unblocker
 
 `git-store` `0b4a9b27` sits on the critical path of two other repositories and should be done first, before anything else in this document.
 
-Making the schema commit a second parent of every data commit requires a parents argument on `commit_forward`, which is currently private and single-parent.
-That argument is exactly what `git-forge` `1f25493d` needs to write merge commits, and reachability is what shrinks `git-forge` `22b36108` from "ship transport that moves two namespaces in lockstep" to "ship transport".
-It also converts three separate weaknesses into strengths at once: data becomes self-contained under any refspec, `git gc` cannot orphan a schema, and `git log --graph` renders data-and-schema lineage as one picture.
+Bind the schema by subtree, not by second parent.
+The data commit's tree becomes `{value/, schema/}`: the value under `value/`, the schema content under `schema/`, and the `Schema:` trailer kept as provenance naming the schema commit.
+Reachability, gc-safety, and fetch-completeness all follow from tree reachability; `git diff` between two data commits shows schema changes inline; and the commit graph stays pure data history, so `git log`, bisect, and — critically — the merge-base computation `git-forge` `1f25493d` depends on never traverse schema commits.
+The second-parent design would have contaminated that merge-base, because schema binding today is a `Schema:` trailer naming a schema commit and the schema ref is itself a commit chain (`store.rs:97,144`).
 
-The code change is roughly 20 lines.
-All existing history walks are first-parent, so nothing breaks.
+This makes `0b4a9b27` format-breaking, so it lands in the Wave 1 window rather than Wave 2.
+Reachability is still what shrinks `git-forge` `22b36108` from "ship transport that moves two namespaces in lockstep" to "ship transport", and data still becomes self-contained under any refspec.
+The multi-parent `commit_forward` entry point the second-parent design required is still needed, but only for `1f25493d`'s merge commits.
 
 == Wave 1, weeks 1 to 2: format window and free wins
 
@@ -118,11 +147,12 @@ Tests are roundtrip-based rather than hardcoded oids, so the churn is smaller th
 |===
 | Repo | ID | Effort | Change
 
+| `git-store` | `0b4a9b27` | M | Bind the schema by subtree: the data commit tree becomes `{value/, schema/}`, with the `Schema:` trailer kept as provenance; add `Error::SchemaObjectMissing`. See Global unblocker.
 | `git-store` | `8d109650` | L | Encode a unit variant as a blob holding the variant name; give `None`, `Null`, and empty collections a marker blob.
 | `git-store` | `5b39f084` | M | Append one `\n` in `scalar_bytes`, strip exactly one on read.
 | `git-store` | `d4f8aaaf` | S | Add `version: u32` to `SchemaDoc` and refuse a version above the binary's.
 | `git-anchor` | `17ceddc9` | M | Write a `kind` entry into every binding tree and a `version` entry into `Note`; accept tag-or-sniff for one release.
-| `git-forge` | `d87da1ce` | M | Publish the schema of the type actually stored, and call `put_schema` only when the tree differs.
+| `git-forge` | `d87da1ce` | M | Publish `StoredIssue` and `StoredReview` schemas, and call `put_schema` only when the tree differs; `id` stays commit-derived and unstored.
 | `git-query` | `49e0324a` | S | Add `language_version: u32` to `RuleModuleRecord`.
 |===
 
@@ -132,6 +162,14 @@ The central pitch is that Git's own tools are the query language; today they can
 
 `git-query` `49e0324a` is `invisible` and cheap now, unaddable later without a migration.
 `git-forge` `d87da1ce` is also required for the merge demo: per-write republication makes `refs/schema/issue` diverge between clones.
+
+On `d87da1ce`: the `Issue`/`StoredIssue` split has a legitimate cause — `id` is derived from the genesis commit, so it cannot appear in that commit's own tree.
+The resolution is not to store the id but to name the layering: identity is the address.
+`StoredIssue` stays id-less; the entity's identity is the genesis commit oid and its address is `refs/forge/issue/<id>`, one source of truth that nothing stored can contradict.
+Publishing `StoredIssue`'s schema then makes the published contract exactly match the disk, which dissolves the mismatch rather than papering over it.
+`Issue { id, ..StoredIssue }` is hydration — `load` fills `id` from the ref, as the code already does; if the layering should be visible in the types, a wrapper such as `Loaded<T> { id, value }` generalizes it to `Review` and every future kind for free.
+This buys an invariant worth a slide: every commit on an entity ref is a complete, schema-valid value of its kind, and `git log -p` is a pure field-level audit trail with no synthetic revisions, ever.
+The precedent is git itself: a commit does not contain its own oid, and you never miss it, because everything that hands you the object also hands you its name.
 
 `git-anchor` `17ceddc9` has little value on its own; its value is being the migration window `0118e93d` and the `context` half of `7c0a7cfd` both need.
 
@@ -144,6 +182,7 @@ All `S`, all `visible`, no dependencies.
 | Repo | ID | Change
 
 | `git-store` | `a5eae21d` | Move the root `README.md` to `crates/facet-git-tree/README.md` and promote the `git-store` pitch to the root.
+| `git-store` | _(unfiled)_ | Add `RawBlob` to `facet-git-tree`, symmetric with `RawTree` (`ser.rs:105-110`): a verbatim blob-oid entry. Its absence is why `git-anchor` hand-rolls its `content` embedding.
 | `git-query` | `1071410b` | Render mode vectors and typed argument names in `predicates`, add a `builtins()` section, add `predicates <name>`.
 | `git-anchor` | `05477afe` | Replace the `MissingPath` error in `project_exact_onto` with a target-tree lookup plus `map_range`.
 | `git-forge` | `94c80ae5` | Require `--title`, default `--body` to empty, resolve `--target` through `rev_parse_single`.
@@ -176,13 +215,12 @@ Each repository has one sequence that has to work on stage.
 |===
 | ID | Effort | Blocked by | Change
 
-| `0b4a9b27` | M | none | Pass the schema commit as a second parent; read it from `parent_ids().nth(1)`; add `Error::SchemaObjectMissing`.
-| `7c97f623` | M | `0b4a9b27` | Add `git store schema of`, `git store diff` over two decoded values, and a global `--format`.
+| `7c97f623` | M | `0b4a9b27` (Wave 1) | Add `git store schema of`, `git store diff` over two decoded values, and a global `--format`.
 | `fde28f29` | M | none | Generate `git-store.1` with `clap_mangen`, install it on `MANPATH`, print a next-step hint when no kinds exist.
 | `4e2923ac` | S | none | Error with the field path when a non-`Optional` field is absent on write.
 | `24010918` | S | none | Add a `validate_doc` pass in `put_schema` resolving every `Ref`, rejecting cycles, bounding depth.
 | `ddaec54e` | S | none | Put `value` in `[features] default` and keep it as an opt-out.
-| `b73019c6` | M | `0b4a9b27` | Add a normative `=== Storage` section covering ref layout, schema binding, first-parent history, and missing-schema behavior.
+| `b73019c6` | M | `0b4a9b27` (Wave 1) | Add a normative `=== Storage` section covering ref layout, subtree schema binding, the provenance trailer, and missing-schema behavior.
 |===
 
 `git store --help` currently fails, because `git --help` execs `man git-store`; generating the page is not enough, it must be installed or `--help` intercepted in `main`.
@@ -192,7 +230,7 @@ A cargo feature that gates correctness rather than dependencies is the wrong sha
 Both in-repo consumers enable it unconditionally.
 `e1f29b33` is the docs half of the same change and should land with it.
 
-`7c97f623` needs a new `gix-store` accessor, because `retrieve_at` discards the schema commit.
+`7c97f623` needs a new `gix-store` accessor, because `retrieve_at` discards the schema; with subtree binding this becomes reading the `schema/` subtree of the data commit.
 `schema of` alone is a couple of hours and carries most of the value.
 
 === `git-anchor`: a comment that follows a rename, in the editor
@@ -210,6 +248,7 @@ Both in-repo consumers enable it unconditionally.
 | `dbffc16c` | M | none | Add a "Sharing anchors" README section with the refspec, then an `install` verb mirroring `git-forge`.
 | `a22590a7` | M | none | Extend `--json` to path, lines, body, state, and projection outcome.
 | `316fad99` | M | none | Add a CI check asserting every cited requirement id resolves in the spec, then write the missing `comment.*` section.
+| _(unfiled)_ | S | none | Publish a schema for `Note` via `put_schema`; the type already derives `Facet` and serializes through `facet-git-tree`, so this is the missing half of the published-contract rule.
 |===
 
 `b99d4bea` is the best value per hour in this repository: the README's first sentence fails on the exact surface being demoed, because the lens filters on exact `anchor.path` before projecting.
@@ -296,7 +335,7 @@ Minimum ordered set: `22b36108` → `d87da1ce` → `1f25493d`.
 The per-field tree layout is already almost exactly the right shape for a three-way merge.
 
 `22b36108` is new code rather than a repair; nothing in either crate touches transport.
-If `git-store` `0b4a9b27` lands first, the schema half of it disappears.
+`git-store` `0b4a9b27` now lands in Wave 1, so the schema half of it disappears.
 
 `bc5de31d` should be written after the transport verb ships, so the quickstart prints an incantation that exists.
 There is no README and no `long_about` on any subcommand, so the project is undiscoverable from both the repository and the binary.
@@ -304,8 +343,20 @@ There is no README and no `long_about` on any subcommand, so the project is undi
 `6872199e` has a five-line stopgap: route the five call sites through `resolve_show_id`.
 Today `issue log` reports an empty history for a prefix it failed to resolve.
 
+=== Across the family: a review that blocks a push
+
+Promoted from "not before the talk": the claims chain is the only sequence in the set that makes the four projects into one system, and the spot check found the receiving half already built.
+Five `git-query` predicates are fully implemented against `refs/meta/claims/*` (`gix-query-host/claim.rs`), so `git-query` requires zero changes.
+`Review` needs no `verdict` field — `review new` writes one claim commit to `refs/meta/claims/` with `Kind:`, `Target:`, `Signer:`, and `Verdict:` trailers, and the predicates read only trailers.
+`approved_by` additionally needs `member/1`, which stays empty until `456fee55` populates `refs/meta/members/*`.
+
+The chain is `94c80ae5` (Wave 1) → `456fee55` → `e25192e7` → `046b3ecf` → `47bc3643`.
+It ends with a `pre-receive` hook that refuses a push because a review stored in the repository has no approving verdict from a member declared in the repository, decided by Datalog rules that are themselves repository data.
+That is the talk.
+
 == Wave 3, weeks 6 to 7: family consistency
 
+Wave 3 is the explicit cut line: if the schedule tightens, everything below this heading is sacrificed before anything above it — including before the claims chain, which used to sit on the wrong side of this trade.
 Four projects on one stage should share one surface.
 Each of these is already scheduled above; this is the check that they were done the same way.
 
@@ -332,7 +383,7 @@ Each is a real design question with an expensive right answer and a cheap true s
 |===
 | Repo | ID | The sentence
 
-| `git-anchor` | `b1c4e009` | One ref per anchor does not scale; 50,000 comments is 6.8 MB of `packed-refs` advertised on every fetch. Put the measured numbers up.
+| `git-anchor` | `b1c4e009` | Verify what gix negotiates before conceding the point: under protocol v2, `ls-refs` ref-prefix filtering means a clone that does not request `refs/anchors/**` pays no advertisement cost, and reftable addresses the storage side. Present mechanism, not apology.
 | `git-query` | `d6f515a3` | `refs/meta/rules/*` needs an external trust root, `gix-query-kernel` is the intended one, and it is not wired.
 | `git-query` | `d1c29128` | The cache key does not exist. Add `ENGINE_VERSION` to the specified key and strike the claim from the README.
 | `git-query` | `ffd96170` | The seam is `FactSource` and `Builtin` facing the repository; Nemo is named concretely on purpose. `DEVPLAN.md` 2.11 rejects a seam and the README claims one.
@@ -345,9 +396,10 @@ Each is a real design question with an expensive right answer and a cheap true s
 | `git-store` | `e1f29b33` | Land with `ddaec54e`: the schema-driven read is the dynamic read, the heuristic is a debugging aid.
 | `git-anchor` | `0118e93d` | Narrow the README claim: three fields in the anchor record exist only for comments, so the primitive/consumer split does not fully hold.
 | `git-anchor` | `13439f72` | Reply ordering uses a nanosecond wall clock. Causal order is in the data and unused.
-| `git-forge` | `8990ad01` | Comments are one overwritable edit-reason slot, not a thread. Say so before someone asks.
-| `git-forge` | `456fee55` | `--reporter` duplicates the Git identity already on every commit, and there is no project vocabulary for labels or members.
+| `git-forge` | `8990ad01` | Comments are one overwritable edit-reason slot, not a thread. Say so before someone asks; the direction is delegation to `git-anchor` (see After the conference).
 |===
+
+`456fee55` left this table when the claims chain moved into Wave 2: `refs/meta/members/*` is now load-bearing for `approved_by`, not a slide.
 
 === Prepare these four questions
 
@@ -376,22 +428,21 @@ The fourth is answered by Wave 2.
 | `git-anchor` | `26b5a4d6` | M | The empty-id rejection is half an hour and worth taking; the long-form grammar is duplicated in two binaries and can wait.
 | `git-query` | `560bb11b` | M | Take the resolved-oid snapshot if the file is open, since the torn read is a correctness bug; skip the epoch CAS and `--provenance`.
 | `git-query` | `62fbac7d` | L | Recommendation is measure-first and the benchmark does not exist.
-| `git-forge` | `e25192e7` | L | The cross-project payoff is real and the prerequisites are not there. See below.
 |===
 
-=== On `e25192e7`
+`e25192e7` was deferred here in v1.0 and is now scheduled: the spot check confirmed the claims vocabulary is fully implemented in `gix-query-host`, which collapsed the chain's cost enough to promote it into Wave 2.
 
-This is the one deferred item worth reconsidering, because it is the only issue in the set that makes the four projects into one system.
+== After the conference
 
-Five `git-query` predicates are fully implemented against `refs/meta/claims/*` and no `git-query` change is needed.
-`git-forge` needs a `verdict` field on `Review` and a claims commit with `Kind:`, `Target:`, `Signer:`, and `Verdict:` trailers on every `review new`.
-`approved_by` additionally needs `member/1`, which stays empty until `456fee55` populates `refs/meta/members/*`.
+Two directions worth stating in the talk as roadmap, not building now.
 
-The chain is `94c80ae5` → `456fee55` → `e25192e7`, then `git-query` `046b3ecf` → `47bc3643`.
-That is one `S`, two `M`, and one `L` across two repositories, and it ends with a `pre-receive` hook that refuses a push because a review stored in the repository has no approving verdict from a member declared in the repository, decided by Datalog rules that are themselves repository data.
+*Schema-derived EDB.*
+A mechanical kind-to-relation mapping, so `git-query` reads any published `git-store` kind without a per-product adapter.
+This is what the published-contract rule buys: the moment `git-anchor` publishes `Note`, its anchors become queryable with no new host code.
 
-That is the talk.
-If any slack appears after Wave 2, spend it here rather than on Wave 3.
+*Comments become anchors.*
+Generalize the anchor target from a positioned blob to any object, then resolve `8990ad01` by delegation and delete `git-forge`'s `CommentEdit`.
+Stated honestly, this moves forge-discussion volume onto `b1c4e009`'s scaling answer, so that answer has to hold at forge scale, not just annotation scale.
 
 == Verdicts
 
@@ -416,3 +467,7 @@ Effort and impact estimates were produced in a second pass that re-read every fi
 
 Sub-agent delegation was requested for the exploration phase and was not available in the environment, so exploration was not parallelised.
 At 3,000 to 20,000 lines per repository this cost breadth in `gix-query-host` and in the `gix-query-eval` rewrite internals, and nowhere else that shows in the findings.
+
+Amended 2026-07-28 by a second reviewer (`claude-fable-5`) that cloned all four repositories and spot-checked the load-bearing claims.
+Three corrections were folded in: `facet-git-tree` already has `RawTree`, so the missing primitive is only `RawBlob`; the encoding layer is already shared through `facet_git_tree::serialize_into`, narrowing the composition diagnosis to unpublished contracts; and the `Issue`/`StoredIssue` split has a legitimate cause in the commit-derived `id`.
+Two confirmations reshaped the schedule: the claims vocabulary is fully implemented in `gix-query-host`, which promoted the `e25192e7` chain into Wave 2 and removed the `verdict` field from the `Review` design, and schema binding by trailer-plus-commit-chain confirmed the merge-base contamination risk that moved `0b4a9b27` from second-parent to subtree binding.
