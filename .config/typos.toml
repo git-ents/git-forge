@@ -1,7 +1,10 @@
 [files]
 
 extend-exclude = [
-  "CHANGELOG.md"
+  "CHANGELOG.md",
+  # Archived issue bodies, exported verbatim from the forge refs. Spelling is
+  # whatever the reporter wrote; correcting it would falsify the record.
+  "docs/issue/",
 ]
 
 # Enable checking of hidden files, dot files, and respect no ignore files
