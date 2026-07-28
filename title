@@ -1,0 +1,1 @@
+Issue bodies are parsed as AsciiDoc but nothing says so, and show is a lossy re-render with no raw escape hatch
