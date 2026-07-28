@@ -1,0 +1,418 @@
+= Cross-Repository Design Review Triage
+Claude:claude-opus-5
+
+[abstract]
+****
+A design review of `git-store`, `git-anchor`, `git-query`, and `git-forge`, filed as 69 issues across the four repositories and scheduled here against a two-month runway to a conference talk.
+Each repository was read directly, built, and driven against scratch repositories; findings cite `file:line` and most are reproductions rather than readings.
+This document ranks the 69 by return on effort, records the ordering constraints between them, and names what should be answered on a slide instead of fixed.
+****
+
+== Scope
+
+Four repositories, reviewed independently, then triaged together.
+Every issue carries reporter `Claude:claude-opus-5`, one category label, and one severity label.
+
+[cols="2,1,1,1,1,1", options="header"]
+|===
+| Repository | Issues | S | M | L | Format-breaking
+
+| `git-store`  | 18 | 9 | 6  | 3 | 5
+| `git-anchor` | 16 | 1 | 12 | 3 | 5
+| `git-query`  | 20 | 8 | 11 | 1 | 1
+| `git-forge`  | 15 | 4 | 8  | 3 | 4
+| *Total*      | *69* | *22* | *37* | *10* | *15*
+|===
+
+Read an issue with `git-forge issue show <id>` from the repository it was filed in.
+
+=== Legend
+
+Effort is judged against the option each issue recommends, not the most thorough option available.
+
+[cols="1,4", options="header"]
+|===
+| Effort | Meaning
+
+| `S` | Under half a day.
+| `M` | Half a day to two days.
+| `L` | Multi-day, or requires a design decision before code.
+|===
+
+[cols="1,4", options="header"]
+|===
+| Radius | Meaning
+
+| `contained` | One module or crate.
+| `crosscutting` | Multiple crates, or a sibling repository.
+| `format-breaking` | Changes the on-disk representation; stored data needs migration or becomes unreadable.
+|===
+
+[cols="1,4", options="header"]
+|===
+| Demo | Meaning
+
+| `visible` | An audience member watching the screen sees it, or it breaks a command typed live.
+| `question` | The answer to a likely hostile question, with nothing on screen showing it.
+| `invisible` | Real, with no bearing on the talk.
+|===
+
+42 of 69 are `visible`, 25 are `question`, 2 are `invisible`.
+The talk is the binding constraint on this schedule, so `visible` outranks severity throughout.
+
+== Cross-cutting findings
+
+Three patterns recur in all four repositories and account for most of the `visible` count.
+
+=== The last three feet are missing
+
+The hard half of each feature is built and unreachable.
+
+* `git-query` has spanned diagnostics from nine validation passes that are rendered with `to_string()`, a derivation tree with reconstructed negation witnesses and no `explain` subcommand, and an exit code 3 documented normatively in two places with no producer.
+* `git-anchor` has a `witnesses()` mechanism that makes the lossy fuzzy fallback unnecessary, with zero callers.
+* `git-store` pins the exact schema commit each value validated against, then binds it with a text trailer.
+* `git-forge` publishes a schema for `Issue` while storing `StoredIssue`.
+
+Wiring something already implemented is the cheapest visible work available, and there is a lot of it.
+
+=== Data does not travel
+
+Three of four fail at a repository boundary.
+
+[cols="1,3", options="header"]
+|===
+| Repository | Symptom
+
+| `git-store`  | Fetching a data ref yields `object could not be found`; the schema is not reachable from the data commit.
+| `git-forge`  | A fresh clone reports `No issues` with exit 0.
+| `git-anchor` | No refspec, no fetch or push porcelain, no documentation.
+|===
+
+For a talk arguing Git is a distributed datastore, this is the question in the room.
+
+=== The family does not compose
+
+`git-forge` reviews cannot affect a `git-query` policy answer: the shipped rules read `refs/meta/claims/*`, which `git-forge` never writes, and `Review` has no verdict field.
+`git-anchor` pins comments to moving code and `git-forge` comments are a single overwritable edit-reason slot.
+Four projects on one stage that do not touch each other is a weaker story than three that do.
+
+== Global unblocker
+
+`git-store` `0b4a9b27` sits on the critical path of two other repositories and should be done first, before anything else in this document.
+
+Making the schema commit a second parent of every data commit requires a parents argument on `commit_forward`, which is currently private and single-parent.
+That argument is exactly what `git-forge` `1f25493d` needs to write merge commits, and reachability is what shrinks `git-forge` `22b36108` from "ship transport that moves two namespaces in lockstep" to "ship transport".
+It also converts three separate weaknesses into strengths at once: data becomes self-contained under any refspec, `git gc` cannot orphan a schema, and `git log --graph` renders data-and-schema lineage as one picture.
+
+The code change is roughly 20 lines.
+All existing history walks are first-parent, so nothing breaks.
+
+== Wave 1, weeks 1 to 2: format window and free wins
+
+=== Format-breaking window
+
+Every `format-breaking` change should land in one window per repository so object ids churn once.
+Tests are roundtrip-based rather than hardcoded oids, so the churn is smaller than it appears.
+
+[cols="1,1,1,4", options="header"]
+|===
+| Repo | ID | Effort | Change
+
+| `git-store` | `8d109650` | L | Encode a unit variant as a blob holding the variant name; give `None`, `Null`, and empty collections a marker blob.
+| `git-store` | `5b39f084` | M | Append one `\n` in `scalar_bytes`, strip exactly one on read.
+| `git-store` | `d4f8aaaf` | S | Add `version: u32` to `SchemaDoc` and refuse a version above the binary's.
+| `git-anchor` | `17ceddc9` | M | Write a `kind` entry into every binding tree and a `version` entry into `Note`; accept tag-or-sniff for one release.
+| `git-forge` | `d87da1ce` | M | Publish the schema of the type actually stored, and call `put_schema` only when the tree differs.
+| `git-query` | `49e0324a` | S | Add `language_version: u32` to `RuleModuleRecord`.
+|===
+
+`git-store` `8d109650` is the largest item here and the reason the window exists.
+Changing a task's `priority` from `Low` to `High` currently produces an empty `git diff`, an empty `git log --stat`, and no entry in `git ls-tree -r`, because unit-like values encode as empty trees and Git's tooling is blob-oriented.
+The central pitch is that Git's own tools are the query language; today they cannot see enums, options, or nulls at all.
+
+`git-query` `49e0324a` is `invisible` and cheap now, unaddable later without a migration.
+`git-forge` `d87da1ce` is also required for the merge demo: per-write republication makes `refs/schema/issue` diverge between clones.
+
+`git-anchor` `17ceddc9` has little value on its own; its value is being the migration window `0118e93d` and the `context` half of `7c0a7cfd` both need.
+
+=== One-sitting wins
+
+All `S`, all `visible`, no dependencies.
+
+[cols="1,1,4", options="header"]
+|===
+| Repo | ID | Change
+
+| `git-store` | `a5eae21d` | Move the root `README.md` to `crates/facet-git-tree/README.md` and promote the `git-store` pitch to the root.
+| `git-query` | `1071410b` | Render mode vectors and typed argument names in `predicates`, add a `builtins()` section, add `predicates <name>`.
+| `git-anchor` | `05477afe` | Replace the `MissingPath` error in `project_exact_onto` with a target-tree lookup plus `map_range`.
+| `git-forge` | `94c80ae5` | Require `--title`, default `--body` to empty, resolve `--target` through `rev_parse_single`.
+| `git-forge` | `5f152df4` | Thread `-m/--message` through `new` and `edit` with a generated changed-field summary.
+| `git-forge` | `02b94000` | Add `--raw` to `issue show` and default to raw when stdout is not a TTY.
+|===
+
+`git-store` `a5eae21d` has the highest return in the whole set.
+The repository landing page is `facet-git-tree` crate documentation opening with a Cargo feature table; the pitch is already written at `crates/git-store/README.md`.
+This is a file move and a `readme =` key.
+
+`git-query` `1071410b` is an afternoon in one function: every input exists and `ModeSet` already implements `Display`.
+
+`git-anchor` `05477afe` is roughly 15 lines and fires on `git comment show <id>@main` typed live, because every LSP-created comment is a worktree anchor.
+
+`git-forge` `5f152df4` is cheaper than it looks: the `message: Option<&str>` parameter already exists at all five call sites and is passed `None`.
+
+=== SIGPIPE
+
+The same defect in two repositories, three lines each: `git-anchor` `a22590a7` and `git-forge` `3a235525` both panic with exit 101 when their list output is piped to `head`.
+Split the SIGPIPE reset from the format work in both and land it here.
+
+== Wave 2, weeks 3 to 5: make the demos run
+
+Each repository has one sequence that has to work on stage.
+
+=== `git-store`: fetch and read in another repository
+
+[cols="1,1,1,4", options="header"]
+|===
+| ID | Effort | Blocked by | Change
+
+| `0b4a9b27` | M | none | Pass the schema commit as a second parent; read it from `parent_ids().nth(1)`; add `Error::SchemaObjectMissing`.
+| `7c97f623` | M | `0b4a9b27` | Add `git store schema of`, `git store diff` over two decoded values, and a global `--format`.
+| `fde28f29` | M | none | Generate `git-store.1` with `clap_mangen`, install it on `MANPATH`, print a next-step hint when no kinds exist.
+| `4e2923ac` | S | none | Error with the field path when a non-`Optional` field is absent on write.
+| `24010918` | S | none | Add a `validate_doc` pass in `put_schema` resolving every `Ref`, rejecting cycles, bounding depth.
+| `ddaec54e` | S | none | Put `value` in `[features] default` and keep it as an opt-out.
+| `b73019c6` | M | `0b4a9b27` | Add a normative `=== Storage` section covering ref layout, schema binding, first-parent history, and missing-schema behavior.
+|===
+
+`git store --help` currently fails, because `git --help` execs `man git-store`; generating the page is not enough, it must be installed or `--help` intercepted in `main`.
+
+`ddaec54e` is one line plus a README table edit.
+A cargo feature that gates correctness rather than dependencies is the wrong shape: the default build can generate a schema but not use one, so the only out-of-the-box dynamic read is the documented-lossy heuristic.
+Both in-repo consumers enable it unconditionally.
+`e1f29b33` is the docs half of the same change and should land with it.
+
+`7c97f623` needs a new `gix-store` accessor, because `retrieve_at` discards the schema commit.
+`schema of` alone is a couple of hours and carries most of the value.
+
+=== `git-anchor`: a comment that follows a rename, in the editor
+
+[cols="1,1,1,4", options="header"]
+|===
+| ID | Effort | Blocked by | Change
+
+| `b99d4bea` | M | none | Compute one rename map per document request in `document_comments`, filter on the projected path, render `Outdated` at line 0.
+| `741e9fec` | M | none | Rename the template to `.git/COMMENT_EDITMSG`, add `Git Commit` to `extension.toml`, refuse concurrent compose, notify on success.
+| `f5f2764d` | L | none | Read author and time from the genesis commit in `hydrate` via the existing `Store::history`.
+| `7c0a7cfd` | M | none | Replace `project_from_context` with a `map_range` diff of `anchor.content` against the target-tree blob.
+| `6684400a` | M | none | Point `git anchor add` at `Store::create` and expose the binding-keyed upsert as a separate `attach` verb.
+| `07a4fef8` | M | none | Add a header-only note decode that skips the embedded `content` blob; route `Store::list` through it; debounce `didChange`.
+| `dbffc16c` | M | none | Add a "Sharing anchors" README section with the refspec, then an `install` verb mirroring `git-forge`.
+| `a22590a7` | M | none | Extend `--json` to path, lines, body, state, and projection outcome.
+| `316fad99` | M | none | Add a CI check asserting every cited requirement id resolves in the spec, then write the missing `comment.*` section.
+|===
+
+`b99d4bea` is the best value per hour in this repository: the README's first sentence fails on the exact surface being demoed, because the lens filters on exact `anchor.path` before projecting.
+The CLI gets this right and the editor does not.
+
+`741e9fec` matters more than it reads: `extension.toml` lists 26 languages and none is `Git Commit`, so the `didSave` that commits a composed comment almost certainly never reaches the server in Zed today.
+
+`f5f2764d` is marked `L` for the event-log rewrite, but the recommended option is a few hours and needs no format change.
+Bob resolving Ada's comment currently reassigns its authorship, because identity is read from a mutable ref tip.
+
+`7c0a7cfd` splits: the projection half is `S` and contained, and only deleting the `context` field breaks the format.
+Measured, exact projection says line 14 where the fuzzy scan says line 6, a different function.
+Defer the field deletion behind `17ceddc9`.
+
+`07a4fef8` at 400 anchors makes `git anchor show <one id>` take 1.95s, identical to `list`, and the LSP pays that per keystroke.
+Option B removes the dominant term with no format change; the real index is correctly blocked on `b1c4e009`, which is not happening before the talk.
+
+`dbffc16c` Option C alone is an hour and turns the demo into a two-clone demo.
+
+=== `git-query`: the four README demo lines
+
+Three of four use `HEAD`, which fails with `A hash sized 4 hexadecimal characters is invalid`.
+
+Minimum ordered set: `046b3ecf` → `7178f702` → `feabf985`, plus an in-tree example `.dl` module.
+No rule module ships today, so the demo has no vocabulary even once the flags work.
+
+[cols="1,1,1,4", options="header"]
+|===
+| ID | Effort | Blocked by | Change
+
+| `046b3ecf` | M | none | Resolve `Rev` and `Oid` arguments through `repo.rev_parse_single` in the `gix-query` facade, keeping host providers oid-only.
+| `16b85bb6` | M | none | Add `assemble_with_pending`, validate through it before `store.put`, surface `RuleStore::delete` as `rules rm`.
+| `feabf985` | M | none | Re-export `explain` through the facade, return `LoopResult` from `run_checked_goal`, add `git query explain <goal>`.
+| `7178f702` | M | `046b3ecf` | Wire `--with` and `--without` through `goal_from_subject` and resolve the subject position from the registry signature.
+| `cde2b225` | M | none | Sort rows lexicographically in `print_rows`, add `--format` with registry column names, print nothing for a nullary answer.
+| `08d48d0a` | M | none | Rewrite `UnsupportedEdbMode`'s `Display` to print supported mode vectors, name unbound arguments, show a concrete `--bind`.
+| `a6238508` | M | none | Count each eager relation before round 1, refuse above a configurable ceiling, correct the README and spec.
+| `a3124179` | M | none | Add a byte-span-to-caret renderer in `gix-query-parse` and carry per-module source into `CheckedProgram`.
+| `a95c9bbc` | M | none | Add `run --plan` printing per-literal adornments and EDB ref globs; print a `CallLog` summary after a run.
+| `47bc3643` | M | `046b3ecf` | Ship a tested `pre-receive` script and an Actions step that run a named policy predicate and branch on the exit code.
+| `3fbf1987` | S | none | Vendor onto the demo machine with a `.cargo/config.toml` and stage a prebuilt binary.
+|===
+
+`16b85bb6` is the demo-killer: `rules add` stores before validating and there is no `rules rm`, so one bad module bricks every query in the repository and recovery requires `git update-ref -d`.
+The doc comment at `main.rs:61` claims the opposite.
+The reorder is not one line, because `assemble` reads only from the store.
+
+`feabf985` is a subcommand and a printer.
+`explain`, `DerivationTree`, and `NegationWitness` are already `pub` and `LoopResult.tables` is already the right input.
+
+`a6238508` is one keystroke from live disproof: `echo $?` is in the README demo block, the README and the normative spec both state exit code 3, and `main.rs` returns only 0, 1, and 2.
+`DEVPLAN.md:1050` already says not to fake it.
+Implement the refusal and reserve 3, or correct both documents.
+
+`cde2b225`: the sort alone is one line and converts an accident into a contract.
+The tests currently sort before asserting, which is the tell.
+
+`a95c9bbc` is the cheapest large opportunity in the family.
+Author order is the sideways-information-passing strategy, which is honest and gives the author control, but nothing tells them that swapping two literals would be a thousand times faster.
+The facade discards `LoopResult` except `.answer`; exposing `log` is the only plumbing change.
+
+`a3124179`'s expensive half is `r0` becoming `module:line`, which needs source text threaded through `assemble` and every error join site.
+Nine validation passes compute a span each and every renderer throws it away.
+
+=== `git-forge`: two clones, offline, merged
+
+Minimum ordered set: `22b36108` → `d87da1ce` → `1f25493d`.
+
+[cols="1,1,1,4", options="header"]
+|===
+| ID | Effort | Blocked by | Change
+
+| `22b36108` | M | none | Ship `fetch` and `push` that always move `refs/forge/*` and `refs/schema/*` together, write both refspecs into `.git/config`, warn when remote forge refs exist unfetched.
+| `1f25493d` | L | `22b36108` | Add a multi-parent commit entry point to `gix-store`, then a `sync` verb doing per-field three-way merge over the entity tree.
+| `a5a99ef1` | S | `22b36108` | Rename `install` to `init`, give it the refspec configuration, print what it did.
+| `3a235525` | M | none | Add `--format` with table, json, and tsv, plus `--status`, `--label`, `--sort`, and `--limit` on `list`.
+| `6872199e` | M | none | Move prefix resolution into `gix-forge` so `load`, `history`, and `delete` accept prefixes; reject the empty prefix.
+| `cc2cec6f` | M | none | Add `close` and `reopen` over `--status`, convert `rm` into a tombstone that `list` filters out.
+| `bc5de31d` | M | `22b36108` | Fill in every clap `about` and `long_about`, then write a README with pitch, quickstart, refspecs, and ref layout.
+| `2a27866f` | M | none | Make `query keyword` search titles, delete the hardcoded kind skips in `find`, add `query predicates`.
+|===
+
+`1f25493d` is the whole value proposition versus a hosted forge, and it does not hold today: force-fetch silently discards one side, non-force fetch is rejected, and there is no third option.
+The per-field tree layout is already almost exactly the right shape for a three-way merge.
+
+`22b36108` is new code rather than a repair; nothing in either crate touches transport.
+If `git-store` `0b4a9b27` lands first, the schema half of it disappears.
+
+`bc5de31d` should be written after the transport verb ships, so the quickstart prints an incantation that exists.
+There is no README and no `long_about` on any subcommand, so the project is undiscoverable from both the repository and the binary.
+
+`6872199e` has a five-line stopgap: route the five call sites through `resolve_show_id`.
+Today `issue log` reports an empty history for a prefix it failed to resolve.
+
+== Wave 3, weeks 6 to 7: family consistency
+
+Four projects on one stage should share one surface.
+Each of these is already scheduled above; this is the check that they were done the same way.
+
+[cols="2,4", options="header"]
+|===
+| Convention | Issues
+
+| One `--format` flag, same values, same behavior off a TTY | `7c97f623`, `a22590a7`, `cde2b225`, `3a235525`
+| Grep exit-code discipline: 0 rows, 1 none, 2 error | `a6238508`, and `git-forge` has no discipline at all
+| SIGPIPE reset in every binary | `a22590a7`, `3a235525`
+| Deterministic output ordering | `cde2b225`, `3a235525`
+| An `install` or `init` verb that configures refspecs | `dbffc16c`, `a5a99ef1`, `22b36108`
+| Working `--help` and `long_about` on every subcommand | `fde28f29`, `bc5de31d`, `1071410b`
+|===
+
+`git-forge` is the least consistent of the four and the most UX-exposed.
+
+== Wave 4, week 8: answer on a slide
+
+Fourteen issues where honest acknowledgement beats the code change.
+Each is a real design question with an expensive right answer and a cheap true sentence.
+
+[cols="1,1,4", options="header"]
+|===
+| Repo | ID | The sentence
+
+| `git-anchor` | `b1c4e009` | One ref per anchor does not scale; 50,000 comments is 6.8 MB of `packed-refs` advertised on every fetch. Put the measured numbers up.
+| `git-query` | `d6f515a3` | `refs/meta/rules/*` needs an external trust root, `gix-query-kernel` is the intended one, and it is not wired.
+| `git-query` | `d1c29128` | The cache key does not exist. Add `ENGINE_VERSION` to the specified key and strike the claim from the README.
+| `git-query` | `ffd96170` | The seam is `FactSource` and `Builtin` facing the repository; Nemo is named concretely on purpose. `DEVPLAN.md` 2.11 rejects a seam and the README claims one.
+| `git-query` | `786a9937` | Say what each crate boundary forbids; drop the unbuilt footprint and acyclicity credit.
+| `git-query` | `d0309410` | Document the EDB `ModeSet` versus IDB `ArgSet` asymmetry: there is no mode polymorphism above the base layer.
+| `git-store` | `e5a9305e` | Positional ordinal keys make one list insertion look like a rewrite of the whole list. Keyed entries are post-conference work.
+| `git-store` | `cddc2bb1` | State the intended scale envelope; one loose object per scalar is the measured cost.
+| `git-store` | `ad5a33d7` | Present `examples/schemas.rs` and `-i` as the authoring paths and the JSON as interchange only.
+| `git-store` | `3f0fd510` | Entity naming is unmodelled. Delete `store_anonymous`, which is dead code, and say naming is unfinished.
+| `git-store` | `e1f29b33` | Land with `ddaec54e`: the schema-driven read is the dynamic read, the heuristic is a debugging aid.
+| `git-anchor` | `0118e93d` | Narrow the README claim: three fields in the anchor record exist only for comments, so the primitive/consumer split does not fully hold.
+| `git-anchor` | `13439f72` | Reply ordering uses a nanosecond wall clock. Causal order is in the data and unused.
+| `git-forge` | `8990ad01` | Comments are one overwritable edit-reason slot, not a thread. Say so before someone asks.
+| `git-forge` | `456fee55` | `--reporter` duplicates the Git identity already on every commit, and there is no project vocabulary for labels or members.
+|===
+
+=== Prepare these four questions
+
+[cols="1,4", options="header"]
+|===
+| Repo | Question
+
+| `git-anchor` | What happens at 50,000 comments?
+| `git-query`  | What stops me pushing a rule that approves my own commit?
+| `git-store`  | I fetched your data ref and cannot read it. Is this really distributed?
+| `git-forge`  | Two people file issues offline. What happens?
+|===
+
+The first three have good answers that are not currently wired or written.
+The fourth is answered by Wave 2.
+
+== Not before the talk
+
+[cols="1,1,1,4", options="header"]
+|===
+| Repo | ID | Effort | Why not
+
+| `git-store` | `cf20051d` | S | `invisible`; fold the `ObjectMissing` variant into the `0b4a9b27` error pass instead.
+| `git-store` | `5e77f97d` | M | A full pass over `read.rs` to thread a path through every arm, for a `question`-level gain.
+| `git-anchor` | `1e191df7` | M | `Outdated` as a catch-all is real and coarse; the whitespace flag is the valuable part and it can wait. Flipping `copy: false` in the same function is a freebie if the file is open.
+| `git-anchor` | `26b5a4d6` | M | The empty-id rejection is half an hour and worth taking; the long-form grammar is duplicated in two binaries and can wait.
+| `git-query` | `560bb11b` | M | Take the resolved-oid snapshot if the file is open, since the torn read is a correctness bug; skip the epoch CAS and `--provenance`.
+| `git-query` | `62fbac7d` | L | Recommendation is measure-first and the benchmark does not exist.
+| `git-forge` | `e25192e7` | L | The cross-project payoff is real and the prerequisites are not there. See below.
+|===
+
+=== On `e25192e7`
+
+This is the one deferred item worth reconsidering, because it is the only issue in the set that makes the four projects into one system.
+
+Five `git-query` predicates are fully implemented against `refs/meta/claims/*` and no `git-query` change is needed.
+`git-forge` needs a `verdict` field on `Review` and a claims commit with `Kind:`, `Target:`, `Signer:`, and `Verdict:` trailers on every `review new`.
+`approved_by` additionally needs `member/1`, which stays empty until `456fee55` populates `refs/meta/members/*`.
+
+The chain is `94c80ae5` → `456fee55` → `e25192e7`, then `git-query` `046b3ecf` → `47bc3643`.
+That is one `S`, two `M`, and one `L` across two repositories, and it ends with a `pre-receive` hook that refuses a push because a review stored in the repository has no approving verdict from a member declared in the repository, decided by Datalog rules that are themselves repository data.
+
+That is the talk.
+If any slack appears after Wave 2, spend it here rather than on Wave 3.
+
+== Verdicts
+
+All four core ideas are sound.
+Each review found one decision that is better than it is currently presented.
+
+[cols="1,4", options="header"]
+|===
+| Repository | The decision that is undersold
+
+| `git-store` | Every data commit pins the exact schema commit it validated against, so old data stays readable after a kind evolves. This is the answer to the hardest question in schema-on-a-datastore and it is a README bullet.
+| `git-anchor` | Embedding the anchored blob under its own oid makes retention free by content addressing, and projection as a two-point tree diff rather than a blame walk works backwards and across unrelated history.
+| `git-query` | The dependency policy behind the nine crates is enforced structurally: `gix-query-eval` and `gix-query-check` genuinely have no git dependency. That is stronger and more checkable than the "frozen seam" language used for it.
+| `git-forge` | Ids derived from the creation commit are stable across edits while the tip advances, so cross-references do not rot and resolution is one ref read. With the field-per-blob layout, `git log -p refs/forge/issue/<id>` is a field-level audit trail from stock Git.
+|===
+
+== Method
+
+Four repository orchestrators, one per repository, each reading the code directly, building it, and driving it against scratch repositories under `/tmp`.
+No repository under review was modified.
+Effort and impact estimates were produced in a second pass that re-read every filed issue and checked the cited code to judge how contained each recommended fix is.
+
+Sub-agent delegation was requested for the exploration phase and was not available in the environment, so exploration was not parallelised.
+At 3,000 to 20,000 lines per repository this cost breadth in `gix-query-host` and in the `gix-query-eval` rewrite internals, and nowhere else that shows in the findings.

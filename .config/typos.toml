@@ -37,4 +37,6 @@ locale = "en-us"
 # Keep these empty to not ignore anything by default
 extend-ignore-identifiers-re = []
 extend-ignore-words-re = []
-extend-ignore-re = []
+# Forge issue ids are 8 hex characters, which `ignore-hex` does not cover
+# because `identifier-leading-digits` is disabled
+extend-ignore-re = ["`[0-9a-f]{8}`"]
