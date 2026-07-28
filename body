@@ -1,0 +1,78 @@
+**What**
+
+`gix_store::store` and `store_anonymous` both take `message: Option<&str>`.
+`gix-forge` passes `None` at every call site, so every commit in the forge
+history reads `store issue/<id>`. No reason, no what-changed, no why. There is
+no `-m` flag anywhere in the CLI.
+
+Separately, `issue log` prints full object ids and ISO timestamps and nothing
+else -- no author, no summary, no diff. Raw `git log -p` on the same ref is
+dramatically more informative.
+
+**Where**
+
+- `crates/gix-forge/src/lib.rs:109` -- `store.store(KIND, &self.id, &value, None)`
+- `crates/gix-forge/src/lib.rs:118`, `:232`, `:329`, `:338` -- same `None`
+- `crates/git-forge/src/main.rs:1168` -- `print_log`
+
+**Evidence**
+
+What `issue log` gives you:
+
+    issue history 4cd8865f:
+      - 75ac16491fea7180442ef08774b723e68081bf1b  2026-07-28 10:34:02 +0900
+      - 64a25ccbdf989805f7598d96e42e3a1295f91703  2026-07-28 10:34:02 +0900
+      - 4cd8865fc977ec51cddb5ee1cad820a9fed244d8  2026-07-28 10:32:24 +0900
+
+What `git log -p` on the identical ref gives you:
+
+    commit 75ac164 store issue/4cd8865f
+    --- a/status
+    +++ b/status
+    -open
+    +closed
+    commit 64a25cc store issue/4cd8865f
+    --- a/title
+    +++ b/title
+    -First issue
+    +First issue (edited)
+
+**Why it matters**
+
+The second block is the best thing in this repository. One field per blob means
+an ordinary `git diff` produces a perfect field-level audit trail of an issue,
+for free, with no forge-specific tooling. That is the argument for the whole
+project, rendered by a command the audience already trusts. Being able to say
+here is the issue history, and I am reading it with plain `git`, no server, no
+API is worth more than any bespoke output could be.
+
+And the tool`s own `log` command throws it away. It shows the two least useful
+columns and omits the one that matters. A newcomer will use `issue log`,
+conclude the history is opaque, and never discover that `git log -p` works.
+
+The discarded commit message compounds it. Git`s central affordance for
+recording intent is available on every write and used on none, so even the good
+view cannot answer why an issue was closed. GitHub cannot do this at all; you
+can, and you are not.
+
+**Options**
+
+- Option A -- Plumb `-m/--message` through `new` and `edit`, default to a
+  generated summary naming the changed fields (`close issue`,
+  `retitle issue`). Trade-off: none, the parameter already exists and is being
+  passed `None`.
+- Option B -- Make `issue log` show author, relative date, summary, and a
+  `--patch` flag rendering the per-field diff. Trade-off: reimplements a slice
+  of `git log`, which is arguably not your job.
+- Option C -- Make `issue log` a thin wrapper that shells out to or reuses the
+  `git log` machinery on `refs/forge/issue/<id>`, so it is exactly as good as
+  `git log` by construction and stays that way. Trade-off: less control over
+  presentation.
+
+**Recommendation**
+
+A and C. High confidence on A -- it is a parameter already threaded to the
+right place and currently nulled out. C over B because the point being made is
+that this is just Git, and the most persuasive way to make that point is for
+the forge`s history command to visibly be Git. Also worth putting `git log -p
+refs/forge/issue/<id>` on a slide verbatim, whatever else you do.

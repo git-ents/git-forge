@@ -1,0 +1,1 @@
+Every write discards the commit message, and issue log is strictly worse than git log -p on the same ref
