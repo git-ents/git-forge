@@ -16,9 +16,9 @@ chrono = "0.4"
 comfy-table = "7"
 owo-colors = "4"
 dialoguer = "0.11"
-acdc-parser = { git = "https://github.com/nlopes/acdc.git", package = "acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
-acdc-converters-core = { git = "https://github.com/nlopes/acdc.git", package = "acdc-converters-core", default-features = false }
-acdc-converters-terminal = { git = "https://github.com/nlopes/acdc.git", package = "acdc-converters-terminal", default-features = false, features = ["pre-spec-subs", "highlighting"] }
+acdc-parser = { path = "../../vendor/acdc/acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
+acdc-converters-core = { path = "../../vendor/acdc/converters/core", default-features = false }
+acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", default-features = false, features = ["pre-spec-subs", "highlighting"] }
 
 [dev-dependencies]
 proptest = "1"
