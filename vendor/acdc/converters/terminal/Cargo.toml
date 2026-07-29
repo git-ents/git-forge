@@ -1,7 +1,7 @@
 [package]
 name = "acdc-converters-terminal"
 version = "0.1.0"
-edition.workspace = true
+edition = "2024"
 description = "`cat` like converter for `AsciiDoc` documents"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -15,29 +15,20 @@ highlighting = ["dep:syntect"]
 emulator = ["dep:libghostty-vt", "dep:asciicast-rs", "dep:serde", "dep:serde_json"]
 
 [dependencies]
-acdc-converters-core.workspace = true
-acdc-parser.workspace = true
+acdc-converters-core = { path = "../core", default-features = false }
+acdc-parser = { path = "../../acdc-parser", default-features = false }
 comfy-table = { version = "7.2", features = ["custom_styling"] }
-crossterm.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
-unicode-width.workspace = true
+crossterm = "0.29"
+thiserror = "2"
+tracing = "0.1"
+unicode-width = "0.2"
 libghostty-vt = { version = "0.2.0", optional = true }
 # asciicast (.cast) replay parsing (optional - only needed with emulator)
 asciicast-rs = { version = "0.3", optional = true }
 # peek the asciicast version before picking a streaming reader (emulator only)
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
 # syntax highlighting (optional - saves ~7s compile time when disabled)
 syntect = { version = "5.3", optional = true }
 # images on the terminal (optional - saves ~16s compile time when disabled)
 viuer = { version = "0.11", features = ["print-file"], optional = true }
-
-[dev-dependencies]
-acdc-converters-dev.workspace = true
-bumpalo = "3.20"
-pretty_assertions.workspace = true
-libghostty-vt = "0.2.0"
-
-[lints]
-workspace = true

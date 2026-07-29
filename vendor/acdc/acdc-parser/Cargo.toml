@@ -2,22 +2,13 @@
 name = "acdc-parser"
 description = "`AsciiDoc` parser using PEG grammars"
 version = "0.9.0"
-edition.workspace = true
+edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nlopes/acdc"
 documentation = "https://docs.rs/acdc-parser"
 keywords = ["asciidoc", "parser", "markup"]
 categories = ["parsing", "text-processing"]
-exclude = [
-    "AGENTS.md",
-    "README.adoc",
-    "benches/",
-    "examples/",
-    "fixtures/",
-    "proptest-regressions/",
-    "tests/",
-]
 
 [features]
 default = ["pre-spec-subs"]
@@ -34,49 +25,12 @@ csv = "1.4"
 encoding_rs = "0.8"
 evalexpr = "13"
 peg = "0.8.6"
-rustc-hash.workspace = true
+rustc-hash = "2"
 self_cell = "1"
-serde.workspace = true
-serde_json.workspace = true
-tracing.workspace = true
-thiserror.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+thiserror = "2"
 url = "2.5"
 # Network support for remote includes (optional - saves ~8s compile time when disabled)
 ureq = { version = "3.1", optional = true }
-
-[dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
-crossterm = "0.29"
-pretty_assertions.workspace = true
-proptest = "1.9"
-rstest.workspace = true
-# Tiny tracking global allocator for the `no_leak` integration test. Encapsulates
-# its own `unsafe impl GlobalAlloc` so the workspace `forbid(unsafe_code)` lint
-# stays untouched.
-stats_alloc = "0.1"
-tracing-test.workspace = true
-
-[[bench]]
-name = "parser_bench"
-harness = false
-
-# Include / partial-include perf bench. Disabled by default (`bench`/`test` = false)
-# so `cargo bench`, `cargo test`, and CI never run it — it generates temp fixtures
-# and takes minutes. Run on demand: `cargo bench --bench f1_include_bench`.
-[[bench]]
-name = "f1_include_bench"
-harness = false
-bench = false
-test = false
-
-# Active/inactive block-conditional benchmark. Disabled by default so ordinary
-# workspace bench/test commands skip the longer Criterion run. Run on demand:
-# `cargo bench --bench conditional_bench`.
-[[bench]]
-name = "conditional_bench"
-harness = false
-bench = false
-test = false
-
-[lints]
-workspace = true
