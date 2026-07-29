@@ -60,8 +60,28 @@ impl<W: Write> TerminalVisitor<'_, '_, W> {
 
         // Regular paragraph rendering
         self.visit_inline_nodes(&para.title)?;
-        self.visit_inline_nodes(&para.content)?;
+
+        // Render content to a temporary buffer so the soft-wrapped source
+        // lines (one sentence per line, per AsciiDoc convention) can be
+        // reflowed to the terminal width instead of printed verbatim.
+        let buffer = Vec::new();
+        let inner = BufWriter::new(buffer);
+        let mut temp_visitor =
+            TerminalVisitor::new(inner, self.processor.clone(), self.diagnostics.reborrow());
+        temp_visitor.visit_inline_nodes(&para.content)?;
+        let buffer = temp_visitor
+            .into_writer()
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)?;
+        // Source soft-wraps (one sentence per line) show up here as literal
+        // newlines; explicit hard breaks are separate `LineBreak` nodes, not
+        // part of this text. Collapse them to spaces so the paragraph reflows
+        // as a single logical line before wrapping to the terminal width.
+        let content = String::from_utf8_lossy(&buffer).replace('\n', " ");
+        let wrapped = crate::wrap::wrap_ansi_text(&content, self.processor.terminal_width);
+
         let w = self.writer_mut();
+        write!(w, "{wrapped}")?;
         writeln!(w)?;
         Ok(())
     }
