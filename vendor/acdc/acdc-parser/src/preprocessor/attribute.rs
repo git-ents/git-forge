@@ -1,0 +1,117 @@
+use crate::{
+    AttributeValue, DocumentAttributes,
+    model::{HEADER, substitute},
+};
+
+peg::parser! {
+    grammar attribute_parser() for str {
+        pub(crate) rule document_attribute() -> (bool, String, Option<String>)
+            = ":" unset:unset() name:name() ":" { (true, name, None) }
+            / ":" name:name() unset:unset() ":" { (true, name, None) }
+            / ":" name:name() ":" whitespace()? value:value()? { (false, name, value) }
+
+        rule unset() -> bool
+            = "!" { true }
+
+        rule name() -> String
+            = n:$((['a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_']+)) { n.to_string() }
+
+        rule value() -> String
+            = v:$([^'\n']*) { v.to_string() }
+
+        rule whitespace() = quiet!{[' ' | '\t']+}
+    }
+}
+
+#[tracing::instrument(level = "trace")]
+pub(crate) fn parse_line(attributes: &mut DocumentAttributes, line: &str) {
+    match attribute_parser::document_attribute(line) {
+        Ok((unset, name, value)) => {
+            // Only the caller sets trusted attributes; document content cannot.
+            if crate::constants::is_trusted_attribute(&name) {
+                return;
+            }
+            if unset {
+                attributes.insert(name.into(), AttributeValue::Bool(false));
+            } else {
+                let value = match value {
+                    Some(v) => substitute(&v, HEADER, attributes).into_owned(),
+                    None => String::new(),
+                };
+                attributes.insert(name.into(), AttributeValue::String(value.into()));
+            }
+        }
+        Err(e) => {
+            tracing::warn!(?e, "Failed to parse attribute line");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple_attribute() {
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":name: value");
+        assert_eq!(
+            attributes.get("name"),
+            Some(&AttributeValue::String("value".into()))
+        );
+    }
+
+    #[test]
+    fn test_parse_unset_attribute() {
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":!name:");
+        assert_eq!(attributes.get("name"), Some(&AttributeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_parse_empty_value() {
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":name:");
+        assert_eq!(
+            attributes.get("name"),
+            Some(&AttributeValue::String(std::borrow::Cow::Borrowed("")))
+        );
+    }
+
+    #[test]
+    fn test_parse_complex_name() {
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":complex-name_123: value");
+        assert_eq!(
+            attributes.get("complex-name_123"),
+            Some(&AttributeValue::String("value".into()))
+        );
+    }
+
+    #[test]
+    fn test_definition_time_attribute_expansion() {
+        // When bar is defined before foo, {bar} in foo's value should be expanded
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":bar: resolved-bar");
+        parse_line(&mut attributes, ":foo: {bar}");
+
+        // foo should have bar's value expanded at definition time
+        assert_eq!(
+            attributes.get("foo"),
+            Some(&AttributeValue::String("resolved-bar".into()))
+        );
+    }
+
+    #[test]
+    fn test_undefined_attribute_kept_literal() {
+        // When bar is NOT defined when foo is parsed, {bar} should stay literal
+        let mut attributes = DocumentAttributes::default();
+        parse_line(&mut attributes, ":foo: {bar}");
+
+        // foo should keep {bar} as literal since bar wasn't defined
+        assert_eq!(
+            attributes.get("foo"),
+            Some(&AttributeValue::String("{bar}".into()))
+        );
+    }
+}

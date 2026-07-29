@@ -1,0 +1,495 @@
+use bumpalo::Bump;
+
+use crate::{
+    InlineNode, Location, ParseInlineResult, Pass, PassthroughKind, Plain, ProcessedContent, Raw,
+    Substitution, parsed::OwnedInput,
+};
+
+use super::{
+    ParserState,
+    inlines::inline_parser,
+    location_mapping::{clamp_inline_node_locations, remap_inline_node_location},
+};
+
+/// Process passthrough content that contains quote substitutions, parsing nested markup
+pub(crate) fn process_passthrough_with_quotes<'a>(
+    arena: &'a Bump,
+    content: &'a str,
+    passthrough: &Pass,
+) -> Vec<InlineNode<'a>> {
+    let has_quotes = passthrough.substitutions.contains(&Substitution::Quotes);
+
+    // If no quotes processing needed
+    if !has_quotes {
+        // If SpecialChars substitution is enabled, escape HTML (return PlainText)
+        // This applies to: +text+ (Single), ++text++ (Double), pass:c[] (Macro with SpecialChars)
+        // Otherwise output raw HTML (return RawText)
+        // This applies to: +++text+++ (Triple), pass:[] (Macro without SpecialChars)
+        // Use RawText for all passthroughs without Quotes to avoid merging with
+        // adjacent PlainText nodes (which would lose the passthrough's substitution info).
+        // Carry the passthrough's own subs (minus Quotes, already handled) so the
+        // converter applies exactly those instead of the block's subs.
+        // Compute content-only location by stripping the delimiter prefix/suffix
+        // from the full passthrough macro location. For attribute-ref passthroughs,
+        // the location spans the `{attr}` reference with no delimiters to strip.
+        let suffix_len = match passthrough.kind {
+            PassthroughKind::Macro | PassthroughKind::Single => Some(1), // ] or +
+            PassthroughKind::Double => Some(2),                          // ++
+            PassthroughKind::Triple => Some(3),                          // +++
+            PassthroughKind::AttributeRef => None,
+        };
+
+        let content_location = if let Some(suffix_len) = suffix_len {
+            let total_span =
+                passthrough.location.absolute_end - passthrough.location.absolute_start;
+            let prefix_len = total_span - content.len() - suffix_len;
+
+            let content_abs_start = passthrough.location.absolute_start + prefix_len;
+            let content_col_start =
+                passthrough.location.start.column + u32::try_from(prefix_len).unwrap_or(u32::MAX);
+            let content_line = passthrough.location.start.line;
+
+            Location {
+                absolute_start: content_abs_start,
+                absolute_end: content_abs_start + content.len(),
+                start: crate::Position::new(content_line, content_col_start),
+                end: crate::Position::new(
+                    content_line,
+                    content_col_start + u32::try_from(content.len()).unwrap_or(u32::MAX),
+                ),
+            }
+        } else {
+            passthrough.location.clone()
+        };
+
+        return vec![InlineNode::RawText(Raw {
+            content,
+            location: content_location,
+            subs: passthrough
+                .substitutions
+                .iter()
+                .filter(|s| **s != Substitution::Quotes)
+                .cloned()
+                .collect(),
+        })];
+    }
+
+    tracing::debug!(content = ?content, "Parsing passthrough content with quotes");
+
+    parse_text_for_quotes_in(arena, content)
+}
+
+/// Parse text for inline formatting markup (bold, italic, monospace, etc.).
+///
+/// Public entry point — returns a `ParseInlineResult` that owns the arena
+/// the resulting `InlineNode`s borrow from. Callers reach the nodes via
+/// `.inlines()`. Each call allocates a fresh arena; memory is reclaimed
+/// when the returned value is dropped (no leaks). The returned
+/// `ParseInlineResult::warnings()` slice is always empty for this entry
+/// point — the quotes-only grammar never raises warnings.
+///
+/// # Supported Patterns
+///
+/// - `*bold*` and `**bold**` (constrained/unconstrained)
+/// - `_italic_` and `__italic__`
+/// - `` `monospace` `` and ``` ``monospace`` ```
+/// - `^superscript^` and `~subscript~`
+/// - `#highlight#` and `##highlight##`
+/// - `` "`curved quotes`" `` and `` '`curved apostrophe`' ``
+///
+/// # Example
+///
+/// ```
+/// use acdc_parser::parse_text_for_quotes;
+///
+/// let parsed = parse_text_for_quotes("This has *bold* text.");
+/// assert_eq!(parsed.inlines().len(), 3); // "This has ", Bold("bold"), " text."
+/// ```
+pub fn parse_text_for_quotes(content: &str) -> ParseInlineResult {
+    let owner = OwnedInput::new(content.into());
+    ParseInlineResult::from_infallible(owner, |owner| {
+        parse_text_for_quotes_in(&owner.arena, &owner.source)
+    })
+}
+
+/// Arena-parameterised variant for internal callers that already have an
+/// arena threaded through `ParserState`. Avoids the per-call `Bump`
+/// allocation that the public entry point does.
+pub(crate) fn parse_text_for_quotes_in<'a>(
+    arena: &'a Bump,
+    content: &'a str,
+) -> Vec<InlineNode<'a>> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    // Fast path: if content has no formatting markers, return as plain text
+    // without creating a ParserState or invoking the PEG parser.
+    // Covers ~87% of calls in typical documents.
+    if !content
+        .bytes()
+        .any(|b| matches!(b, b'*' | b'_' | b'`' | b'#' | b'^' | b'~' | b'"' | b'\''))
+    {
+        return vec![InlineNode::PlainText(Plain {
+            content,
+            location: Location::default(),
+            escaped: false,
+        })];
+    }
+
+    let mut state = ParserState::new_quotes_only(content, arena);
+    match inline_parser::quotes_only_inlines(content, &mut state) {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                ?content,
+                "quotes-only PEG parse failed, falling back to plain text"
+            );
+            vec![InlineNode::PlainText(Plain {
+                content,
+                location: Location::default(),
+                escaped: false,
+            })]
+        }
+    }
+}
+
+/// Build an `InlineNode::PlainText` at `text`, located at
+/// `base_location.start + offset` and extending over `text.len()` columns on
+/// the same line.
+fn plain_text_at<'a>(text: &'a str, base_location: &Location, offset: usize) -> InlineNode<'a> {
+    let abs_start = base_location.absolute_start + offset;
+    let col_start = base_location.start.column + u32::try_from(offset).unwrap_or(u32::MAX);
+    let line = base_location.start.line;
+    InlineNode::PlainText(Plain {
+        content: text,
+        location: Location {
+            absolute_start: abs_start,
+            absolute_end: abs_start + text.len(),
+            start: crate::Position::new(line, col_start),
+            end: crate::Position::new(
+                line,
+                col_start + u32::try_from(text.len()).unwrap_or(u32::MAX),
+            ),
+        },
+        escaped: false,
+    })
+}
+
+/// Process passthrough placeholders in content, returning expanded `InlineNode`s.
+///
+/// This function handles the multi-pass parsing needed for passthroughs with quote substitutions.
+/// It splits the content around placeholders and processes each passthrough according to its
+/// substitution settings.
+pub(crate) fn process_passthrough_placeholders<'a>(
+    content: &'a str,
+    processed: &'a ProcessedContent<'a>,
+    state: &ParserState<'a>,
+    base_location: &Location,
+) -> Vec<InlineNode<'a>> {
+    // Each passthrough produces at most (placeholder-count × small factor) +
+    // one trailing-plain. Upper-bound at 2 × placeholders + 1 so a paragraph
+    // full of passthroughs doesn't trigger log-N reallocs.
+    let mut result = Vec::with_capacity(processed.passthroughs.len() * 2 + 1);
+    let mut remaining = content;
+    let mut processed_offset = 0; // Position in the processed content (with placeholders)
+
+    // Process each passthrough placeholder in order
+    for (index, passthrough) in processed.passthroughs.iter().enumerate() {
+        let placeholder = format!("���{index}���");
+
+        if let Some(placeholder_pos) = remaining.find(&placeholder) {
+            let before_content = if placeholder_pos > 0 {
+                Some(&remaining[..placeholder_pos])
+            } else {
+                None
+            };
+
+            // Add content before the placeholder if any, using original string positions
+            if let Some(before) = before_content
+                && !before.is_empty()
+            {
+                result.push(plain_text_at(before, base_location, processed_offset));
+                processed_offset += before.len();
+            }
+
+            // Process the passthrough content using original string positions from passthrough.location
+            if let Some(passthrough_content) = &passthrough.text {
+                let processed_nodes =
+                    process_passthrough_with_quotes(state.arena, passthrough_content, passthrough);
+
+                // Remap locations of processed nodes to use original string coordinates
+                // The passthrough content starts after "pass:q[" so we need to account for that offset
+                let macro_prefix_len = "pass:q[".len(); // 7 characters
+                let has_quotes = passthrough.substitutions.contains(&Substitution::Quotes);
+                let remaining_subs: Vec<Substitution> = passthrough
+                    .substitutions
+                    .iter()
+                    .filter(|s| **s != Substitution::Quotes)
+                    .cloned()
+                    .collect();
+                for mut node in processed_nodes {
+                    remap_inline_node_location(
+                        &mut node,
+                        passthrough.location.absolute_start + macro_prefix_len,
+                    );
+                    // For passthroughs with quotes, convert PlainText to RawText so
+                    // HTML content passes through unescaped. Must happen AFTER
+                    // remapping since remap_inline_node_location handles PlainText
+                    // but not RawText (RawText from non-quotes path already has
+                    // correct locations from passthrough.location).
+                    if has_quotes {
+                        if let InlineNode::PlainText(p) = node {
+                            node = InlineNode::RawText(Raw {
+                                content: p.content,
+                                location: p.location,
+                                subs: remaining_subs.clone(),
+                            });
+                        }
+                    }
+                    result.push(node);
+                }
+            }
+
+            // Move past the placeholder in the processed content
+            let skip_len = placeholder_pos + placeholder.len();
+            remaining = &remaining[skip_len..];
+            // Update processed_offset to account for the original passthrough macro length
+            processed_offset +=
+                passthrough.location.absolute_end - passthrough.location.absolute_start;
+        }
+    }
+
+    // Add any remaining content as plain text
+    if !remaining.is_empty() {
+        // Check if the last node is PlainText and merge if so
+        if let Some(InlineNode::PlainText(last_plain)) = result.last_mut() {
+            // Merge remaining content with the last plain text node
+            last_plain.content =
+                state.intern_fmt(format_args!("{}{remaining}", last_plain.content));
+            // Extend the location to include the remaining content
+            last_plain.location.absolute_end = base_location.absolute_end;
+            last_plain.location.end = base_location.end.clone();
+        } else {
+            // Add as separate node if last node is not plain text. Extend
+            // the end to cover `base_location.end` (this is the final
+            // trailing segment).
+            let mut node = plain_text_at(remaining, base_location, processed_offset);
+            if let InlineNode::PlainText(ref mut p) = node {
+                p.location.absolute_end = base_location.absolute_end;
+                p.location.end = base_location.end.clone();
+            }
+            result.push(node);
+        }
+    }
+
+    // If no placeholders were found, return the original content as plain text
+    if result.is_empty() {
+        result.push(InlineNode::PlainText(Plain {
+            content,
+            location: base_location.clone(),
+            escaped: false,
+        }));
+    }
+
+    // Clamp all locations to valid bounds within the input string
+    for node in &mut result {
+        clamp_inline_node_locations(node, state.input);
+    }
+
+    // Merge adjacent plain text nodes
+    merge_adjacent_plain_text_nodes(state, result)
+}
+
+/// Merge adjacent plain text nodes into single nodes to simplify the output.
+/// Arena-interns the concatenated content so the merged node keeps lifetime `'a`.
+pub(crate) fn merge_adjacent_plain_text_nodes<'a>(
+    state: &ParserState<'a>,
+    nodes: Vec<InlineNode<'a>>,
+) -> Vec<InlineNode<'a>> {
+    // Worst case: no merges possible, so the output matches the input length.
+    let mut result: Vec<InlineNode<'a>> = Vec::with_capacity(nodes.len());
+
+    for node in nodes {
+        match (result.last_mut(), node) {
+            (Some(InlineNode::PlainText(last_plain)), InlineNode::PlainText(current_plain)) => {
+                // Merge current plain text with the last one
+                last_plain.content = state.intern_fmt(format_args!(
+                    "{}{}",
+                    last_plain.content, current_plain.content
+                ));
+                // Extend the location to cover both nodes
+                last_plain.location.absolute_end = current_plain.location.absolute_end;
+                last_plain.location.end = current_plain.location.end;
+            }
+            (_, node) => {
+                // Not adjacent plain text nodes, add as separate node
+                result.push(node);
+            }
+        }
+    }
+
+    result
+}
+
+pub(crate) fn replace_passthrough_placeholders(
+    content: &str,
+    processed: &ProcessedContent,
+) -> String {
+    let mut result: String = content.into();
+
+    // Replace each passthrough placeholder with its content
+    for (index, passthrough) in processed.passthroughs.iter().enumerate() {
+        let placeholder = format!("���{index}���");
+        if let Some(text) = &passthrough.text {
+            result = result.replace(&placeholder, text);
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing)] // Tests verify length before indexing
+mod tests {
+    use super::*;
+
+    // === Divergence Prevention Tests ===
+    //
+    // These tests verify that parse_text_for_quotes produces the same structural
+    // output as the main PEG parser for common inline formatting patterns.
+    // If these tests fail after grammar changes, update parse_text_for_quotes.
+
+    #[test]
+    fn test_constrained_bold_pattern() {
+        let parsed = parse_text_for_quotes("This is *bold* text.");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(matches!(nodes[0], InlineNode::PlainText(_)));
+        assert!(
+            matches!(&nodes[1], InlineNode::BoldText(b) if matches!(b.content.first(), Some(InlineNode::PlainText(p)) if p.content == "bold"))
+        );
+        assert!(matches!(nodes[2], InlineNode::PlainText(_)));
+    }
+
+    #[test]
+    fn test_unconstrained_bold_pattern() {
+        let parsed = parse_text_for_quotes("This**bold**word");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::BoldText(b) if matches!(b.content.first(), Some(InlineNode::PlainText(p)) if p.content == "bold"))
+        );
+    }
+
+    #[test]
+    fn test_constrained_italic_pattern() {
+        let parsed = parse_text_for_quotes("This is _italic_ text.");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::ItalicText(i) if matches!(i.content.first(), Some(InlineNode::PlainText(p)) if p.content == "italic"))
+        );
+    }
+
+    #[test]
+    fn test_unconstrained_italic_pattern() {
+        let parsed = parse_text_for_quotes("This__italic__word");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::ItalicText(i) if matches!(i.content.first(), Some(InlineNode::PlainText(p)) if p.content == "italic"))
+        );
+    }
+
+    #[test]
+    fn test_constrained_monospace_pattern() {
+        let parsed = parse_text_for_quotes("Use `code` here.");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::MonospaceText(m) if matches!(m.content.first(), Some(InlineNode::PlainText(p)) if p.content == "code"))
+        );
+    }
+
+    #[test]
+    fn test_superscript_pattern() {
+        let parsed = parse_text_for_quotes("E=mc^2^");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 2);
+        assert!(
+            matches!(&nodes[1], InlineNode::SuperscriptText(s) if matches!(s.content.first(), Some(InlineNode::PlainText(p)) if p.content == "2"))
+        );
+    }
+
+    #[test]
+    fn test_subscript_pattern() {
+        let parsed = parse_text_for_quotes("H~2~O");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::SubscriptText(s) if matches!(s.content.first(), Some(InlineNode::PlainText(p)) if p.content == "2"))
+        );
+    }
+
+    #[test]
+    fn test_highlight_pattern() {
+        let parsed = parse_text_for_quotes("This is #highlighted# text.");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 3);
+        assert!(
+            matches!(&nodes[1], InlineNode::HighlightText(h) if matches!(h.content.first(), Some(InlineNode::PlainText(p)) if p.content == "highlighted"))
+        );
+    }
+
+    #[test]
+    fn test_escaped_superscript_not_parsed() {
+        // Backslash-escaped markers should not be parsed as formatting
+        let parsed = parse_text_for_quotes(r"E=mc\^2^");
+        let nodes = parsed.inlines();
+        // Should remain as plain text (escape prevents parsing)
+        assert!(
+            nodes.iter().all(|n| matches!(n, InlineNode::PlainText(_))),
+            "Escaped superscript should not be parsed"
+        );
+    }
+
+    #[test]
+    fn test_escaped_subscript_not_parsed() {
+        let parsed = parse_text_for_quotes(r"H\~2~O");
+        let nodes = parsed.inlines();
+        assert!(
+            nodes.iter().all(|n| matches!(n, InlineNode::PlainText(_))),
+            "Escaped subscript should not be parsed"
+        );
+    }
+
+    #[test]
+    fn test_multiple_formats_in_sequence() {
+        let parsed = parse_text_for_quotes("*bold* and _italic_ and `code`");
+        let nodes = parsed.inlines();
+        assert!(nodes.iter().any(|n| matches!(n, InlineNode::BoldText(_))));
+        assert!(nodes.iter().any(|n| matches!(n, InlineNode::ItalicText(_))));
+        assert!(
+            nodes
+                .iter()
+                .any(|n| matches!(n, InlineNode::MonospaceText(_)))
+        );
+    }
+
+    #[test]
+    fn test_plain_text_only() {
+        let parsed = parse_text_for_quotes("Just plain text here.");
+        let nodes = parsed.inlines();
+        assert_eq!(nodes.len(), 1);
+        assert!(matches!(nodes[0], InlineNode::PlainText(_)));
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let parsed = parse_text_for_quotes("");
+        let nodes = parsed.inlines();
+        assert!(nodes.is_empty());
+    }
+}

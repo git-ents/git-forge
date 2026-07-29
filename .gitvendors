@@ -1,0 +1,10 @@
+[vendor "acdc"]
+	url = https://github.com/nlopes/acdc.git
+	base = 1117fb70ece80782435c0dfad5d37367786c0e92
+	pattern = acdc-parser/src/**:vendor/acdc/acdc-parser/src/
+	pattern = acdc-parser/Cargo.toml:vendor/acdc/acdc-parser/Cargo.toml
+	pattern = converters/core/src/**:vendor/acdc/converters/core/src/
+	pattern = converters/core/Cargo.toml:vendor/acdc/converters/core/Cargo.toml
+	pattern = converters/terminal/src/**:vendor/acdc/converters/terminal/src/
+	pattern = converters/terminal/Cargo.toml:vendor/acdc/converters/terminal/Cargo.toml
+	pattern = LICENSE:vendor/acdc/LICENSE

@@ -1,0 +1,34 @@
+[package]
+name = "acdc-converters-core"
+version = "0.1.0"
+edition.workspace = true
+description = "Core traits and utilities for acdc document converters"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["pre-spec-subs"]
+# Asciidoctor-compatible subs= attribute. Experimental - may be removed when AsciiDoc spec finalizes.
+pre-spec-subs = ["acdc-parser/pre-spec-subs", "dep:bitflags"]
+
+[dependencies]
+acdc-parser.workspace = true
+bitflags = { version = "2.11", optional = true }
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+wildcard_enum_match_arm = "deny"
+indexing_slicing = "deny"
+fallible_impl_from = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+pedantic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
