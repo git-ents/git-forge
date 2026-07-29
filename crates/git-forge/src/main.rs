@@ -8,10 +8,7 @@ use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use comfy_table::{
-    Attribute, Cell, CellAlignment, ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS,
-    presets::UTF8_FULL,
-};
+use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use dialoguer::{
     Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select, theme::ColorfulTheme,
 };
@@ -1108,8 +1105,7 @@ fn print_entity_table(kind_plural: &str, col2: &str, col3: &str, rows: Vec<Vec<S
 
     let mut table = Table::new();
     table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
+        .load_preset(NOTHING)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new("ID").add_attribute(Attribute::Bold),
@@ -1121,7 +1117,7 @@ fn print_entity_table(kind_plural: &str, col2: &str, col3: &str, rows: Vec<Vec<S
 
     for row in rows {
         table.add_row(vec![
-            Cell::new(&row[0]).set_alignment(CellAlignment::Left),
+            Cell::new(color_id(&row[0])).set_alignment(CellAlignment::Left),
             Cell::new(&row[1]).set_alignment(CellAlignment::Left),
             Cell::new(&row[2]).set_alignment(CellAlignment::Left),
             Cell::new(&row[3]).set_alignment(CellAlignment::Left),
@@ -1138,14 +1134,13 @@ fn updated_relative(repo: &gix::Repository, history: Vec<gix::ObjectId>) -> Resu
     };
 
     let commit = repo.find_commit(*oid)?;
-    let when = commit.time()?.format(gix::date::time::format::ISO8601)?;
-    Ok(relative_time_from_iso8601(&when).unwrap_or(when))
+    let time = commit.time()?;
+    let when = time.format(gix::date::time::format::ISO8601)?;
+    Ok(relative_time_from_unix_seconds(time.seconds).unwrap_or(when))
 }
 
-fn relative_time_from_iso8601(value: &str) -> Option<String> {
-    let then = DateTime::parse_from_rfc3339(value)
-        .ok()?
-        .with_timezone(&Utc);
+fn relative_time_from_unix_seconds(seconds: i64) -> Option<String> {
+    let then = DateTime::from_timestamp(seconds, 0)?;
     let now = Utc::now();
     let delta = now.signed_duration_since(then);
 
