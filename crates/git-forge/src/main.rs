@@ -238,17 +238,18 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                     && args.assignees.is_empty()
                     && args.reporters.is_empty(),
             )?;
-            let (title, body, labels, assignees, reporters) = if interactive {
+            let fields = if interactive {
                 prompt_issue_fields(repo)?
             } else {
-                (
-                    args.title.unwrap_or_default(),
-                    args.body
+                IssueFields {
+                    title: args.title.unwrap_or_default(),
+                    body: args
+                        .body
                         .context("--body is required unless running interactively")?,
-                    args.labels,
-                    args.assignees,
-                    args.reporters,
-                )
+                    labels: args.labels,
+                    assignees: args.assignees,
+                    reporters: args.reporters,
+                }
             };
             let issue = Issue {
                 id: String::new(),
@@ -258,11 +259,11 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                     .as_status()
                     .as_str()
                     .to_owned(),
-                title,
-                body,
-                labels,
-                assignees,
-                reporters,
+                title: fields.title,
+                body: fields.body,
+                labels: fields.labels,
+                assignees: fields.assignees,
+                reporters: fields.reporters,
                 edit: None,
             };
             println!("{}", issue.create_in_repo(repo)?);
@@ -518,9 +519,15 @@ fn known_review_values(
     Ok(values.into_iter().collect())
 }
 
-fn prompt_issue_fields(
-    repo: &gix::Repository,
-) -> Result<(String, String, Vec<String>, Vec<String>, Vec<String>)> {
+struct IssueFields {
+    title: String,
+    body: String,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    reporters: Vec<String>,
+}
+
+fn prompt_issue_fields(repo: &gix::Repository) -> Result<IssueFields> {
     let title = prompt_optional_text("Title")?;
     let body = prompt_body("")?;
     let labels = prompt_multi_values("Labels", &known_issue_values(repo, |issue| &issue.labels)?)?;
@@ -532,7 +539,13 @@ fn prompt_issue_fields(
         "Reporters",
         &known_issue_values(repo, |issue| &issue.reporters)?,
     )?;
-    Ok((title, body, labels, assignees, reporters))
+    Ok(IssueFields {
+        title,
+        body,
+        labels,
+        assignees,
+        reporters,
+    })
 }
 
 fn prompt_issue_edit_fields(

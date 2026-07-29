@@ -9,7 +9,6 @@ gix-comment.workspace = true
 gix-store.workspace = true
 gix-query.workspace = true
 facet.workspace = true
-facet-value.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

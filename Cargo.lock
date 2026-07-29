@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "acdc-converters-core"
 version = "0.1.0"
-source = "git+https://github.com/nlopes/acdc.git#2489f3bec8726c87cd4bcf289449326c576c0071"
+source = "git+https://github.com/nlopes/acdc.git#1117fb70ece80782435c0dfad5d37367786c0e92"
 dependencies = [
  "acdc-parser",
  "bitflags 2.13.1",
@@ -16,7 +16,7 @@ dependencies = [
 [[package]]
 name = "acdc-converters-terminal"
 version = "0.1.0"
-source = "git+https://github.com/nlopes/acdc.git#2489f3bec8726c87cd4bcf289449326c576c0071"
+source = "git+https://github.com/nlopes/acdc.git#1117fb70ece80782435c0dfad5d37367786c0e92"
 dependencies = [
  "acdc-converters-core",
  "acdc-parser",
@@ -31,7 +31,7 @@ dependencies = [
 [[package]]
 name = "acdc-parser"
 version = "0.9.0"
-source = "git+https://github.com/nlopes/acdc.git#2489f3bec8726c87cd4bcf289449326c576c0071"
+source = "git+https://github.com/nlopes/acdc.git#1117fb70ece80782435c0dfad5d37367786c0e92"
 dependencies = [
  "bitflags 2.13.1",
  "bumpalo",
@@ -802,13 +802,13 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -948,7 +948,7 @@ dependencies = [
 [[package]]
 name = "facet-git-tree"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store.git#506875ccfa8e20349f32b0e9427c67980341fb40"
+source = "git+https://github.com/git-ents/git-store.git#345901c6a5260bc06868c42cd7481dc815a560f6"
 dependencies = [
  "facet",
  "facet-value",
@@ -1361,7 +1361,7 @@ dependencies = [
 [[package]]
 name = "gix-anchor"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-anchor.git#f244abe512915e5af345f0e0b843673cfeff48dc"
+source = "git+https://github.com/git-ents/git-anchor.git#50dee00bc4f88a7d7bc03a72fdef3cb2f44e6e44"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -1421,7 +1421,7 @@ dependencies = [
 [[package]]
 name = "gix-comment"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-anchor.git#f244abe512915e5af345f0e0b843673cfeff48dc"
+source = "git+https://github.com/git-ents/git-anchor.git#50dee00bc4f88a7d7bc03a72fdef3cb2f44e6e44"
 dependencies = [
  "gix",
  "gix-anchor",
@@ -1575,7 +1575,6 @@ name = "gix-forge"
 version = "0.1.0"
 dependencies = [
  "facet",
- "facet-value",
  "gix",
  "gix-comment",
  "gix-query",
@@ -1816,7 +1815,7 @@ dependencies = [
 [[package]]
 name = "gix-query"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "gix",
  "gix-query-check",
@@ -1831,7 +1830,7 @@ dependencies = [
 [[package]]
 name = "gix-query-check"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "gix-query-ir",
  "thiserror 2.0.19",
@@ -1840,7 +1839,7 @@ dependencies = [
 [[package]]
 name = "gix-query-eval"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "async-trait",
  "gix-query-ir",
@@ -1853,7 +1852,7 @@ dependencies = [
 [[package]]
 name = "gix-query-host"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "gix",
  "gix-anchor",
@@ -1865,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "gix-query-ir"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "thiserror 2.0.19",
 ]
@@ -1873,7 +1872,7 @@ dependencies = [
 [[package]]
 name = "gix-query-parse"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "gix-query-ir",
  "thiserror 2.0.19",
@@ -1882,7 +1881,7 @@ dependencies = [
 [[package]]
 name = "gix-query-rules"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#76dfc836379099a6574c64e319ca27630da48a87"
+source = "git+https://github.com/git-ents/git-query.git#574f3c036d87c8d2f73ba29ebedfba6ea0c56488"
 dependencies = [
  "facet",
  "facet-format",
@@ -1940,6 +1939,16 @@ dependencies = [
  "gix-revision",
  "gix-validate",
  "smallvec 1.15.2",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "gix-refstore"
+version = "0.1.0"
+source = "git+https://github.com/git-ents/git-store.git#345901c6a5260bc06868c42cd7481dc815a560f6"
+dependencies = [
+ "gix",
+ "gix-hash",
  "thiserror 2.0.19",
 ]
 
@@ -2006,11 +2015,13 @@ dependencies = [
 [[package]]
 name = "gix-store"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store.git#506875ccfa8e20349f32b0e9427c67980341fb40"
+source = "git+https://github.com/git-ents/git-store.git#345901c6a5260bc06868c42cd7481dc815a560f6"
 dependencies = [
+ "facet",
  "facet-git-tree",
  "facet-value",
  "gix",
+ "gix-refstore",
  "thiserror 2.0.19",
 ]
 

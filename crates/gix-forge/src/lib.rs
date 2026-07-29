@@ -3,19 +3,20 @@
 use facet::Facet;
 use gix::{ObjectId, Repository};
 use gix_comment::{Binding, Comments};
+use gix_store::{Kind, Layout, RefPrefix, RefSegment, RepoStore, Typed};
 
 pub use gix_comment::{Comment, State as CommentState};
 pub use gix_query::Value as QueryValue;
 
-const STORE_DATA_PREFIX: &str = "refs/forge";
-const STORE_SCHEMA_PREFIX: &str = "refs/schema";
+fn layout() -> Layout {
+    Layout {
+        data: RefPrefix::new("refs/forge").expect("built-in ref prefix is valid"),
+        schema: RefPrefix::new("refs/schema").expect("built-in ref prefix is valid"),
+    }
+}
 
-fn open_store(repo: &Repository) -> Result<gix_store::Store<'_>, Error> {
-    Ok(gix_store::Store::open_with_prefixes(
-        repo,
-        STORE_DATA_PREFIX,
-        STORE_SCHEMA_PREFIX,
-    )?)
+fn open_store(repo: &Repository) -> RepoStore<'_> {
+    RepoStore::open_with_layout(repo, layout())
 }
 
 /// Errors from `gix-forge`'s storage operations.
@@ -24,15 +25,9 @@ pub enum Error {
     /// Failed at the `gix-store` layer (missing schema, git error, etc).
     #[error(transparent)]
     Store(#[from] gix_store::Error),
-    /// Failed converting a typed value into the dynamic `Value` `gix-store` stores.
-    #[error("failed to convert to a storage value: {0}")]
-    ToValue(String),
-    /// Failed converting a stored `Value` back into a typed value.
+    /// An id is not a valid Git ref segment.
     #[error(transparent)]
-    FromValue(#[from] facet_value::ValueError),
-    /// Failed to derive a `SchemaDoc` for a type.
-    #[error("failed to derive schema: {0}")]
-    Schema(String),
+    InvalidId(#[from] gix_store::InvalidRefName),
     /// Failed at the `gix-query` layer.
     #[error(transparent)]
     Query(#[from] gix_query::QueryError),
@@ -91,76 +86,80 @@ struct StoredIssue {
     edit: Option<String>,
 }
 
+type IssueKind<'s, 'r> =
+    Kind<'s, Typed<StoredIssue>, gix_store::GixRefStore<'r>, &'r gix::OdbHandle>;
+
 impl Issue {
     /// The `gix-store` kind this entity is published under.
     pub const KIND: &'static str = "issue";
 
+    fn kind<'a>(store: &'a RepoStore<'a>) -> IssueKind<'a, 'a> {
+        store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
+    }
+
     /// Publish (or evolve) the `issue` schema in `store`. Call this once
     /// before the first `save`.
-    pub fn ensure_schema(store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let doc = gix_store::schema_of::<Issue>().map_err(|e| Error::Schema(e.to_string()))?;
-        Ok(store.put_schema(Self::KIND, &doc)?)
+    pub fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Ok(Self::kind(store).publish()?)
     }
 
     /// Store this issue at `refs/forge/issue/<id>`.
-    pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let value = facet_value::to_value(&StoredIssue::from(self))
-            .map_err(|e| Error::ToValue(e.to_string()))?;
-        Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    pub fn save(&self, store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        let name = RefSegment::new(&self.id)?;
+        Ok(Self::kind(store).put(&name, &StoredIssue::from(self))?)
     }
 
     /// Create a new issue and return its stable store id.
     pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
-        let store = open_store(repo)?;
+        let store = open_store(repo);
         Self::ensure_schema(&store)?;
-        let value = facet_value::to_value(&StoredIssue::from(self))
-            .map_err(|e| Error::ToValue(e.to_string()))?;
-        let (id, _) = store.store_anonymous(Self::KIND, &value, None)?;
-        Ok(id)
+        let (name, _) = Self::kind(&store)
+            .write(&StoredIssue::from(self))
+            .anonymous()?;
+        Ok(name.to_string())
     }
 
     /// Load the issue named `id`, or `None` if it doesn't exist.
-    pub fn load(store: &gix_store::Store<'_>, id: &str) -> Result<Option<Issue>, Error> {
-        let Some(value) = store.retrieve(Self::KIND, id)? else {
-            return Ok(None);
-        };
-        if let Ok(stored) = facet_value::from_value::<StoredIssue>(value.clone()) {
-            return Ok(Some(Issue::from_stored(id, stored)));
-        }
-        let mut issue: Issue = facet_value::from_value(value)?;
-        issue.id = id.to_owned();
-        Ok(Some(issue))
+    pub fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Issue>, Error> {
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(store)
+            .get(&name)?
+            .map(|stored| Issue::from_stored(id, stored)))
     }
 
     /// Ensure schema and save to the repository-backed store.
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = open_store(repo)?;
+        let store = open_store(repo);
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     /// Load an issue from the repository-backed store.
     pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Issue>, Error> {
-        let store = open_store(repo)?;
-        Self::load(&store, id)
+        Self::load(&open_store(repo), id)
     }
 
     /// List issue ids in the repository-backed store.
     pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
-        let store = open_store(repo)?;
-        Ok(store.list(Self::KIND)?)
+        Ok(Self::kind(&open_store(repo))
+            .list()?
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect())
     }
 
-    /// List issue version history, newest first.
+    /// List issue version history, tip-first.
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = open_store(repo)?;
-        Ok(store.history(Self::KIND, id)?)
+        let store = open_store(repo);
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(&store).history(&name)?)
     }
 
     /// Delete an issue by id.
     pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
-        let store = open_store(repo)?;
-        Ok(store.delete(Self::KIND, id)?)
+        let store = open_store(repo);
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(&store).remove(&name)?)
     }
 
     fn from_stored(id: &str, stored: StoredIssue) -> Self {
@@ -218,40 +217,44 @@ pub struct CommentEdit {
     pub edit: String,
 }
 
+type CommentEditKind<'s, 'r> =
+    Kind<'s, Typed<CommentEdit>, gix_store::GixRefStore<'r>, &'r gix::OdbHandle>;
+
 impl CommentEdit {
     pub const KIND: &'static str = "comment";
 
-    pub fn ensure_schema(store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let doc =
-            gix_store::schema_of::<CommentEdit>().map_err(|e| Error::Schema(e.to_string()))?;
-        Ok(store.put_schema(Self::KIND, &doc)?)
+    fn kind<'a>(store: &'a RepoStore<'a>) -> CommentEditKind<'a, 'a> {
+        store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
     }
 
-    pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let value = facet_value::to_value(self).map_err(|e| Error::ToValue(e.to_string()))?;
-        Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    pub fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Ok(Self::kind(store).publish()?)
+    }
+
+    pub fn save(&self, store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        let name = RefSegment::new(&self.id)?;
+        Ok(Self::kind(store).put(&name, self)?)
     }
 
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = open_store(repo)?;
+        let store = open_store(repo);
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = open_store(repo)?;
-        Ok(store.history(Self::KIND, id)?)
+        let store = open_store(repo);
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(&store).history(&name)?)
     }
 }
 
 pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
-    let store = open_store(repo)?;
-    Issue::ensure_schema(&store)
+    Issue::ensure_schema(&open_store(repo))
 }
 
 pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
-    let store = open_store(repo)?;
-    Review::ensure_schema(&store)
+    Review::ensure_schema(&open_store(repo))
 }
 
 pub fn install_builtin_query_rules(repo: &Repository) -> Result<(), Error> {
@@ -311,76 +314,80 @@ blocked(Rev)       :- tree_entry(Rev, _, B), self_approved(Rev, B, _).
 mergeable(Rev)     :- commit(Rev), !blocked(Rev).
 "#;
 
+type ReviewKind<'s, 'r> =
+    Kind<'s, Typed<StoredReview>, gix_store::GixRefStore<'r>, &'r gix::OdbHandle>;
+
 impl Review {
     /// The `gix-store` kind this entity is published under.
     pub const KIND: &'static str = "review";
 
+    fn kind<'a>(store: &'a RepoStore<'a>) -> ReviewKind<'a, 'a> {
+        store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
+    }
+
     /// Publish (or evolve) the `review` schema in `store`. Call this once
     /// before the first `save`.
-    pub fn ensure_schema(store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let doc = gix_store::schema_of::<Review>().map_err(|e| Error::Schema(e.to_string()))?;
-        Ok(store.put_schema(Self::KIND, &doc)?)
+    pub fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Ok(Self::kind(store).publish()?)
     }
 
     /// Store this review at `refs/forge/review/<id>`.
-    pub fn save(&self, store: &gix_store::Store<'_>) -> Result<ObjectId, Error> {
-        let value = facet_value::to_value(&StoredReview::from(self))
-            .map_err(|e| Error::ToValue(e.to_string()))?;
-        Ok(store.store(Self::KIND, &self.id, &value, None)?)
+    pub fn save(&self, store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        let name = RefSegment::new(&self.id)?;
+        Ok(Self::kind(store).put(&name, &StoredReview::from(self))?)
     }
 
     /// Create a new review and return its stable store id.
     pub fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
-        let store = open_store(repo)?;
+        let store = open_store(repo);
         Self::ensure_schema(&store)?;
-        let value = facet_value::to_value(&StoredReview::from(self))
-            .map_err(|e| Error::ToValue(e.to_string()))?;
-        let (id, _) = store.store_anonymous(Self::KIND, &value, None)?;
-        Ok(id)
+        let (name, _) = Self::kind(&store)
+            .write(&StoredReview::from(self))
+            .anonymous()?;
+        Ok(name.to_string())
     }
 
     /// Load the review named `id`, or `None` if it doesn't exist.
-    pub fn load(store: &gix_store::Store<'_>, id: &str) -> Result<Option<Review>, Error> {
-        let Some(value) = store.retrieve(Self::KIND, id)? else {
-            return Ok(None);
-        };
-        if let Ok(stored) = facet_value::from_value::<StoredReview>(value.clone()) {
-            return Ok(Some(Review::from_stored(id, stored)));
-        }
-        let mut review: Review = facet_value::from_value(value)?;
-        review.id = id.to_owned();
-        Ok(Some(review))
+    pub fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Review>, Error> {
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(store)
+            .get(&name)?
+            .map(|stored| Review::from_stored(id, stored)))
     }
 
     /// Ensure schema and save to the repository-backed store.
     pub fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
-        let store = open_store(repo)?;
+        let store = open_store(repo);
         Self::ensure_schema(&store)?;
         self.save(&store)
     }
 
     /// Load a review from the repository-backed store.
     pub fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Review>, Error> {
-        let store = open_store(repo)?;
-        Self::load(&store, id)
+        Self::load(&open_store(repo), id)
     }
 
     /// List review ids in the repository-backed store.
     pub fn list(repo: &Repository) -> Result<Vec<String>, Error> {
-        let store = open_store(repo)?;
-        Ok(store.list(Self::KIND)?)
+        Ok(Self::kind(&open_store(repo))
+            .list()?
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect())
     }
 
-    /// List review version history, newest first.
+    /// List review version history, tip-first.
     pub fn history(repo: &Repository, id: &str) -> Result<Vec<ObjectId>, Error> {
-        let store = open_store(repo)?;
-        Ok(store.history(Self::KIND, id)?)
+        let store = open_store(repo);
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(&store).history(&name)?)
     }
 
     /// Delete a review by id.
     pub fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
-        let store = open_store(repo)?;
-        Ok(store.delete(Self::KIND, id)?)
+        let store = open_store(repo);
+        let name = RefSegment::new(id)?;
+        Ok(Self::kind(&store).remove(&name)?)
     }
 
     fn from_stored(id: &str, stored: StoredReview) -> Self {
@@ -574,7 +581,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         test_support::init_repo(dir.path());
         let repo = gix::open(dir.path()).expect("open repo");
-        let store = open_store(&repo).expect("open store");
+        let store = open_store(&repo);
 
         Issue::ensure_schema(&store).expect("publish issue schema");
 
@@ -609,7 +616,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         test_support::init_repo(dir.path());
         let repo = gix::open(dir.path()).expect("open repo");
-        let store = open_store(&repo).expect("open store");
+        let store = open_store(&repo);
 
         Review::ensure_schema(&store).expect("publish review schema");
 
