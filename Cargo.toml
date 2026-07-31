@@ -10,7 +10,6 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-gix-comment = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-store = { git = "https://github.com/git-ents/git-store.git" }
 gix-query = { git = "https://github.com/git-ents/git-query.git" }

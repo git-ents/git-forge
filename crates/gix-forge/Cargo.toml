@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 gix.workspace = true
-gix-comment.workspace = true
+gix-anchor.workspace = true
 gix-store.workspace = true
 gix-query.workspace = true
 facet.workspace = true
