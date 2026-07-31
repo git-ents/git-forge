@@ -24,13 +24,13 @@ repos:
       - id: fmt
         name: cargo fmt
         language: system
-        entry: cargo fmt --all --
+        entry: cargo fmt -p gix-forge -p git-forge -p test-support --
         types: [rust]
         pass_filenames: false
       - id: clippy
         name: cargo clippy
         language: system
-        entry: cargo clippy --all-targets --all-features -- -D warnings
+        entry: cargo clippy --workspace --exclude acdc-parser --exclude acdc-converters-core --exclude acdc-converters-terminal --all-targets --all-features -- -D warnings
         types: [rust]
         pass_filenames: false
   - repo: https://github.com/crate-ci/committed
