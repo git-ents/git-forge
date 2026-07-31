@@ -68,21 +68,98 @@ pub fn search_requester(repo: &Repository, name: &str) -> Result<Vec<String>, Er
 /// # Errors
 /// See [`Error`].
 pub fn search_keyword(repo: &Repository, value: &str) -> Result<Vec<SearchHit>, Error> {
-    let needle = quote(&value.to_ascii_lowercase());
     let mut hits = Vec::new();
-    for id in ids_for_goal(repo, &format!("issue_body_contains(Id, {needle})"))? {
+    for id in search_issue(repo, None, Some(value))? {
         hits.push(SearchHit {
             kind: HitKind::Issue,
             id,
         });
     }
-    for id in ids_for_goal(repo, &format!("review_body_contains(Id, {needle})"))? {
+    for id in search_review(repo, None, None, Some(value))? {
         hits.push(SearchHit {
             kind: HitKind::Review,
             id,
         });
     }
     Ok(hits)
+}
+
+/// Issues matched by `assignee` and/or a case-insensitive `keyword` in the
+/// body -- the filters `issue search` exposes.
+///
+/// # Errors
+/// See [`Error`].
+pub fn search_issue(
+    repo: &Repository,
+    assignee: Option<&str>,
+    keyword: Option<&str>,
+) -> Result<Vec<String>, Error> {
+    let mut clauses = Vec::new();
+    match assignee {
+        Some(name) => clauses.push(format!("issue_assignee(Id, {})", quote(name))),
+        None => clauses.push("issue(Id)".to_owned()),
+    }
+    if let Some(value) = keyword {
+        clauses.push(format!(
+            "issue_body_contains(Id, {})",
+            quote(&value.to_ascii_lowercase())
+        ));
+    }
+    ids_for_goal(repo, &clauses.join(", "))
+}
+
+/// Reviews matched by `reviewer`, `requester`, and/or a case-insensitive
+/// `keyword` in the body -- the filters `review search` exposes.
+///
+/// # Errors
+/// See [`Error`].
+pub fn search_review(
+    repo: &Repository,
+    reviewer: Option<&str>,
+    requester: Option<&str>,
+    keyword: Option<&str>,
+) -> Result<Vec<String>, Error> {
+    let mut clauses = Vec::new();
+    if let Some(name) = reviewer {
+        clauses.push(format!("review_reviewer(Id, {})", quote(name)));
+    }
+    if let Some(name) = requester {
+        clauses.push(format!("review_requester(Id, {})", quote(name)));
+    }
+    if clauses.is_empty() {
+        clauses.push("review(Id)".to_owned());
+    }
+    if let Some(value) = keyword {
+        clauses.push(format!(
+            "review_body_contains(Id, {})",
+            quote(&value.to_ascii_lowercase())
+        ));
+    }
+    ids_for_goal(repo, &clauses.join(", "))
+}
+
+/// Comments matched by `author` and/or a case-insensitive `keyword` in the
+/// body -- the filters `comment search` exposes.
+///
+/// # Errors
+/// See [`Error`].
+pub fn search_comment(
+    repo: &Repository,
+    author: Option<&str>,
+    keyword: Option<&str>,
+) -> Result<Vec<String>, Error> {
+    let mut clauses = Vec::new();
+    match author {
+        Some(name) => clauses.push(format!("comment_author(Id, {})", quote(name))),
+        None => clauses.push("comment(Id)".to_owned()),
+    }
+    if let Some(value) = keyword {
+        clauses.push(format!(
+            "comment_body_contains(Id, {})",
+            quote(&value.to_ascii_lowercase())
+        ));
+    }
+    ids_for_goal(repo, &clauses.join(", "))
 }
 
 /// The combined filter `QueryCommand::Find` used to expose: issues matched by
@@ -101,19 +178,10 @@ pub fn search_find(
     requester: Option<&str>,
     keyword: Option<&str>,
 ) -> Result<Vec<SearchHit>, Error> {
-    let needle = keyword.map(|value| quote(&value.to_ascii_lowercase()));
     let mut hits = Vec::new();
 
     if reviewer.is_none() && requester.is_none() {
-        let mut clauses = Vec::new();
-        match assignee {
-            Some(name) => clauses.push(format!("issue_assignee(Id, {})", quote(name))),
-            None => clauses.push("issue(Id)".to_owned()),
-        }
-        if let Some(needle) = &needle {
-            clauses.push(format!("issue_body_contains(Id, {needle})"));
-        }
-        for id in ids_for_goal(repo, &clauses.join(", "))? {
+        for id in search_issue(repo, assignee, keyword)? {
             hits.push(SearchHit {
                 kind: HitKind::Issue,
                 id,
@@ -122,20 +190,7 @@ pub fn search_find(
     }
 
     if assignee.is_none() {
-        let mut clauses = Vec::new();
-        if let Some(name) = reviewer {
-            clauses.push(format!("review_reviewer(Id, {})", quote(name)));
-        }
-        if let Some(name) = requester {
-            clauses.push(format!("review_requester(Id, {})", quote(name)));
-        }
-        if clauses.is_empty() {
-            clauses.push("review(Id)".to_owned());
-        }
-        if let Some(needle) = &needle {
-            clauses.push(format!("review_body_contains(Id, {needle})"));
-        }
-        for id in ids_for_goal(repo, &clauses.join(", "))? {
+        for id in search_review(repo, reviewer, requester, keyword)? {
             hits.push(SearchHit {
                 kind: HitKind::Review,
                 id,
@@ -156,6 +211,7 @@ fn ids_for_goal(repo: &Repository, goal: &str) -> Result<Vec<String>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::comment::Comment;
     use crate::entity::EntityOps;
     use crate::issue::Issue;
     use crate::review::{Review, ReviewTarget};
@@ -270,5 +326,73 @@ mod tests {
                 id: issue_id,
             }]
         );
+    }
+
+    #[test]
+    fn search_issue_combines_assignee_and_keyword() {
+        let (_dir, repo) = sample_repo();
+        let matching = issue("has the widget bug", &["alice"])
+            .create_in_repo(&repo)
+            .expect("create");
+        issue("has the widget bug", &["bob"])
+            .create_in_repo(&repo)
+            .expect("create");
+        issue("unrelated", &["alice"])
+            .create_in_repo(&repo)
+            .expect("create");
+
+        let ids = search_issue(&repo, Some("alice"), Some("widget")).expect("search");
+        assert_eq!(ids, vec![matching]);
+    }
+
+    #[test]
+    fn search_issue_with_no_filters_lists_every_issue() {
+        let (_dir, repo) = sample_repo();
+        let id = issue("a", &[]).create_in_repo(&repo).expect("create");
+
+        let ids = search_issue(&repo, None, None).expect("search");
+        assert_eq!(ids, vec![id]);
+    }
+
+    #[test]
+    fn search_review_combines_reviewer_requester_and_keyword() {
+        let (_dir, repo) = sample_repo();
+        let matching = review("please review the widget", &["carol"], &["dave"])
+            .create_in_repo(&repo)
+            .expect("create");
+        review("please review the widget", &["carol"], &["erin"])
+            .create_in_repo(&repo)
+            .expect("create");
+
+        let ids =
+            search_review(&repo, Some("carol"), Some("dave"), Some("widget")).expect("search");
+        assert_eq!(ids, vec![matching]);
+    }
+
+    #[test]
+    fn search_comment_combines_author_and_keyword() {
+        let (_dir, repo) = sample_repo();
+        let issue_id = issue("a", &[]).create_in_repo(&repo).expect("create issue");
+        let matching =
+            Comment::create_under(&repo, "issue", &issue_id, "alice", "the widget broke", None)
+                .expect("create comment");
+        Comment::create_under(&repo, "issue", &issue_id, "bob", "the widget broke", None)
+            .expect("create comment");
+        Comment::create_under(&repo, "issue", &issue_id, "alice", "unrelated", None)
+            .expect("create comment");
+
+        let ids = search_comment(&repo, Some("alice"), Some("widget")).expect("search");
+        assert_eq!(ids, vec![matching]);
+    }
+
+    #[test]
+    fn search_comment_with_no_filters_lists_every_comment() {
+        let (_dir, repo) = sample_repo();
+        let issue_id = issue("a", &[]).create_in_repo(&repo).expect("create issue");
+        let id = Comment::create_under(&repo, "issue", &issue_id, "alice", "b", None)
+            .expect("create comment");
+
+        let ids = search_comment(&repo, None, None).expect("search");
+        assert_eq!(ids, vec![id]);
     }
 }

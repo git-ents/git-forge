@@ -30,8 +30,8 @@ pub use gix_query::Value as QueryValue;
 pub use issue::Issue;
 pub use review::{Review, ReviewTarget};
 pub use search::{
-    HitKind, SearchHit, search_assignee, search_find, search_keyword, search_requester,
-    search_reviewer,
+    HitKind, SearchHit, search_assignee, search_comment, search_find, search_issue, search_keyword,
+    search_requester, search_review, search_reviewer,
 };
 pub use status::Status;
 
