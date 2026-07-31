@@ -9,7 +9,7 @@
 
 use facet::Facet;
 use gix::{ObjectId, Repository};
-use gix_store::{GixRefStore, Kind, RefPath, RefSegment, RepoStore, Typed};
+use gix_store::{GixRefStore, Kind, NamedEntries, RefPath, RefSegment, RepoStore, Typed};
 
 use crate::{Error, open_store};
 
@@ -81,6 +81,28 @@ pub trait EntityOps: Entity {
     /// [`load`](Self::load) against the repository-backed store.
     fn load_from_repo(repo: &Repository, id: &str) -> Result<Option<Self>, Error> {
         Self::load(&open_store(repo), id)
+    }
+
+    /// Every entity of this kind, ascending by id, in one pass: `gix-store`
+    /// pairs each name with the commit its ref already points at, so no ref
+    /// is resolved twice and the schema those commits bind is parsed once for
+    /// the whole scan.
+    fn load_all(store: &RepoStore<'_>) -> Result<Vec<Self>, Error> {
+        Ok(Self::rebuild(Self::kind(store).entries()?))
+    }
+
+    /// [`load_all`](Self::load_all) narrowed to the entities nested under
+    /// `group`.
+    fn load_all_under(store: &RepoStore<'_>, group: &RefPath) -> Result<Vec<Self>, Error> {
+        Ok(Self::rebuild(Self::kind(store).entries_under(group)?))
+    }
+
+    /// The one place stored entries become public entities.
+    fn rebuild(entries: NamedEntries<Self::Stored>) -> Vec<Self> {
+        entries
+            .into_iter()
+            .map(|(name, entry)| Self::from_stored(name.to_string(), entry.value))
+            .collect()
     }
 
     /// Every id of this kind, ascending.

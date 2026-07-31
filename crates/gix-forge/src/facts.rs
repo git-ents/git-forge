@@ -18,6 +18,7 @@ use gix_query::{
     ArgSet, Backing, Bindings, Fact, FactSource, Facts, HostError, HostRegistry, PredicateEntry,
     PredicateKey, QueryError, Value, ValueType,
 };
+use gix_store::RepoStore;
 
 use crate::comment::Comment;
 use crate::entity::EntityOps;
@@ -53,8 +54,12 @@ const PROVIDED: &[(&str, usize)] = &[
 /// issue_body_contains(Id, "x")`), and every demand round the evaluator
 /// drives, share one load instead of re-reading every ref, commit, tree and
 /// blob per predicate occurrence.
+///
+/// The three scans also share one `RepoStore`, so the schema every entity
+/// commit binds is parsed once for the whole query rather than once per
+/// entity read.
 pub struct ForgeFacts<'r> {
-    repo: &'r Repository,
+    store: RepoStore<'r>,
     issues: OnceCell<Vec<Issue>>,
     reviews: OnceCell<Vec<Review>>,
     comments: OnceCell<Vec<Comment>>,
@@ -64,7 +69,7 @@ impl<'r> ForgeFacts<'r> {
     #[must_use]
     pub fn new(repo: &'r Repository) -> Self {
         Self {
-            repo,
+            store: crate::open_store(repo),
             issues: OnceCell::new(),
             reviews: OnceCell::new(),
             comments: OnceCell::new(),
@@ -75,7 +80,7 @@ impl<'r> ForgeFacts<'r> {
         if let Some(cached) = self.issues.get() {
             return Ok(cached);
         }
-        let loaded = load_all(self.repo, key)?;
+        let loaded = self.load_all(key)?;
         Ok(self.issues.get_or_init(|| loaded))
     }
 
@@ -83,7 +88,7 @@ impl<'r> ForgeFacts<'r> {
         if let Some(cached) = self.reviews.get() {
             return Ok(cached);
         }
-        let loaded = load_all(self.repo, key)?;
+        let loaded = self.load_all(key)?;
         Ok(self.reviews.get_or_init(|| loaded))
     }
 
@@ -91,8 +96,13 @@ impl<'r> ForgeFacts<'r> {
         if let Some(cached) = self.comments.get() {
             return Ok(cached);
         }
-        let loaded = load_all(self.repo, key)?;
+        let loaded = self.load_all(key)?;
         Ok(self.comments.get_or_init(|| loaded))
+    }
+
+    /// Every entity of one kind, through the shared store.
+    fn load_all<T: EntityOps>(&self, key: &PredicateKey) -> Result<Vec<T>, HostError> {
+        T::load_all(&self.store).map_err(|e| backend(key, e))
     }
 
     /// [`HostRegistry::host`] plus every predicate [`ForgeFacts`] answers
@@ -419,24 +429,6 @@ fn contains_fold(haystack: &str, needle: &str) -> bool {
         .as_bytes()
         .windows(needle.len())
         .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-/// Every entity of one kind, over a single `RepoStore` rather than one
-/// reopened per entity.
-fn load_all<T: EntityOps>(repo: &Repository, key: &PredicateKey) -> Result<Vec<T>, HostError> {
-    let store = crate::open_store(repo);
-    let kind = T::kind(&store);
-    let mut out = Vec::new();
-    for path in kind.list().map_err(|e| backend(key, e.into()))? {
-        if let Some(entity) = kind
-            .get(&path)
-            .map_err(|e| backend(key, e.into()))?
-            .map(|stored| T::from_stored(path.to_string(), stored))
-        {
-            out.push(entity);
-        }
-    }
-    Ok(out)
 }
 
 /// Quote `value` as a Datalog string literal (`gix-query-parse`'s lexer

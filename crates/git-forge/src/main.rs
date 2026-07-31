@@ -289,7 +289,11 @@ struct CommentEditArgs {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let repo = gix::discover(".").context("not inside a git repository")?;
+    let mut repo = gix::discover(".").context("not inside a git repository")?;
+    // Every forge command reads entities, and a query scans a whole kind:
+    // the same schema objects come back thousands of times per run, so give
+    // gix's object cache -- off unless asked for -- something to hold them.
+    repo.object_cache_size_if_unset(4 * 1024 * 1024);
 
     match cli.command {
         Command::Issue(command) => run_issue(&repo, command)?,

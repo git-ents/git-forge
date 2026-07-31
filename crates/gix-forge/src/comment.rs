@@ -105,13 +105,7 @@ impl Comment {
     ) -> Result<Vec<Comment>, Error> {
         let store = crate::open_store(repo);
         let group = subject_group(subject_kind, subject_id)?;
-        let mut comments = Vec::new();
-        for path in Self::kind(&store).list_under(&group)? {
-            if let Some(stored) = Self::kind(&store).get(&path)? {
-                comments.push(Comment::from_stored(path.to_string(), stored));
-            }
-        }
-        Ok(comments)
+        Self::load_all_under(&store, &group)
     }
 }
 
