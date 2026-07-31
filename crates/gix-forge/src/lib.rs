@@ -122,12 +122,12 @@ pub unreviewed(Rev, B).
 pub blocked(Rev).
 pub mergeable(Rev).
 
-active_member(M) :- member(M), !revoked(M).
-review(C)        :- claim(C), kind(C, review).
+active_member(M)  :- member(M), !revoked(M).
+review_claim(C)   :- claim(C), kind(C, review).
 
-approved_by(B, M) :- review(C), target(C, B), signer(C, M),
+approved_by(B, M) :- review_claim(C), target(C, B), signer(C, M),
                      verdict(C, approve), active_member(M).
-rejected(B)       :- review(C), target(C, B), verdict(C, reject),
+rejected(B)       :- review_claim(C), target(C, B), verdict(C, reject),
                      signer(C, M), active_member(M).
 reviewed(B)       :- approved_by(B, _).
 

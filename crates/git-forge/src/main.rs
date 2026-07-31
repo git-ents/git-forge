@@ -12,7 +12,7 @@ use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table, pre
 use dialoguer::{
     Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select, theme::ColorfulTheme,
 };
-use gix_forge::{CommentEdit, Issue, QueryValue, Review, ReviewTarget, Status};
+use gix_forge::{Comment, Entity, EntityOps, Issue, QueryValue, Review, ReviewTarget, Status};
 use owo_colors::OwoColorize;
 
 #[derive(Parser)]
@@ -43,9 +43,9 @@ struct InstallArgs {
 
 #[derive(Subcommand)]
 enum IssueCommand {
-    New(IssueNewArgs),
-    #[command(hide = true)]
-    Put(IssueNewArgs),
+    #[command(alias = "new")]
+    #[command(alias = "put")]
+    Add(IssueNewArgs),
     Edit(IssueEditArgs),
     Show {
         id: String,
@@ -58,6 +58,16 @@ enum IssueCommand {
     Rm {
         id: String,
     },
+    Search(IssueSearchArgs),
+    Query(QueryArgs),
+}
+
+#[derive(Args)]
+struct IssueSearchArgs {
+    #[arg(long)]
+    assignee: Option<String>,
+    #[arg(long)]
+    keyword: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -95,9 +105,9 @@ struct IssueNewArgs {
 
 #[derive(Subcommand)]
 enum ReviewCommand {
-    New(ReviewNewArgs),
-    #[command(hide = true)]
-    Put(ReviewNewArgs),
+    #[command(alias = "new")]
+    #[command(alias = "put")]
+    Add(ReviewNewArgs),
     Edit(ReviewEditArgs),
     Show {
         id: String,
@@ -110,26 +120,95 @@ enum ReviewCommand {
     Rm {
         id: String,
     },
+    Search(ReviewSearchArgs),
+    Query(QueryArgs),
+}
+
+#[derive(Args)]
+struct ReviewSearchArgs {
+    #[arg(long)]
+    reviewer: Option<String>,
+    #[arg(long)]
+    requester: Option<String>,
+    #[arg(long)]
+    keyword: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum CommentCommand {
+    #[command(alias = "new")]
+    Add(CommentAddArgs),
     Edit(CommentEditArgs),
-    Log { id: String },
+    Show {
+        id: String,
+    },
+    #[command(visible_alias = "ls")]
+    List,
+    Log {
+        id: String,
+    },
+    Rm {
+        id: String,
+    },
+    Search(CommentSearchArgs),
+    Query(QueryArgs),
+}
+
+#[derive(Args)]
+struct CommentSearchArgs {
+    #[arg(long)]
+    author: Option<String>,
+    #[arg(long)]
+    keyword: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CommentSubjectKind {
+    Issue,
+    Review,
+}
+
+impl CommentSubjectKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            CommentSubjectKind::Issue => Issue::KIND,
+            CommentSubjectKind::Review => Review::KIND,
+        }
+    }
+}
+
+#[derive(Args)]
+struct CommentAddArgs {
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["on", "subject", "author", "body"])]
+    interactive: bool,
+    #[arg(long = "on", value_enum)]
+    on: Option<CommentSubjectKind>,
+    #[arg(long)]
+    subject: Option<String>,
+    #[arg(long)]
+    author: Option<String>,
+    #[arg(long)]
+    body: Option<String>,
+}
+
+/// Shared by the raw `query` verb everywhere it appears (top-level `query
+/// run` and each entity's own `query`) -- one args shape, one implementation
+/// in [`run_query_args`], over the library's `query_goal`/`query_predicate`.
+#[derive(Args)]
+struct QueryArgs {
+    #[arg(conflicts_with = "goal")]
+    predicate: Option<String>,
+    #[arg(long = "bind", value_name = "POSITION=VALUE")]
+    bind: Vec<String>,
+    #[arg(long)]
+    goal: Option<String>,
+    #[arg(long, value_delimiter = ',')]
+    select: Vec<String>,
 }
 
 #[derive(Subcommand)]
 enum QueryCommand {
-    Run {
-        #[arg(conflicts_with = "goal")]
-        predicate: Option<String>,
-        #[arg(long = "bind", value_name = "POSITION=VALUE")]
-        bind: Vec<String>,
-        #[arg(long)]
-        goal: Option<String>,
-        #[arg(long, value_delimiter = ',')]
-        select: Vec<String>,
-    },
+    Run(QueryArgs),
     Assignee {
         name: String,
     },
@@ -202,10 +281,10 @@ struct ReviewEditArgs {
 #[derive(Args)]
 struct CommentEditArgs {
     id: String,
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["edit"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["body"])]
     interactive: bool,
     #[arg(long)]
-    edit: Option<String>,
+    body: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -225,7 +304,7 @@ fn main() -> Result<()> {
 
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     match command {
-        IssueCommand::New(args) | IssueCommand::Put(args) => {
+        IssueCommand::Add(args) => {
             let interactive = resolve_interactive(
                 args.interactive,
                 args.title.is_none()
@@ -315,30 +394,131 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 bail!("no issue {id}");
             }
         }
+        IssueCommand::Search(args) => {
+            let ids =
+                gix_forge::search_issue(repo, args.assignee.as_deref(), args.keyword.as_deref())?;
+            print_id_list("issues", &ids);
+        }
+        IssueCommand::Query(args) => run_query_args(repo, args)?,
     }
     Ok(())
 }
 
 fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
     match command {
-        CommentCommand::Edit(args) => {
-            let interactive = resolve_interactive(args.interactive, args.edit.is_none())?;
-            let edit = CommentEdit {
-                id: args.id,
-                edit: if interactive {
-                    prompt_comment_edit_reason()?
-                } else {
-                    args.edit
-                        .context("--edit is required unless running interactively")?
-                },
+        CommentCommand::Add(args) => {
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.on.is_none()
+                    && args.subject.is_none()
+                    && args.author.is_none()
+                    && args.body.is_none(),
+            )?;
+            let (kind, subject_id, author, body) = if interactive {
+                prompt_comment_fields(repo)?
+            } else {
+                let kind = args
+                    .on
+                    .context("--on is required unless running interactively")?;
+                let subject_input = args
+                    .subject
+                    .context("--subject is required unless running interactively")?;
+                let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
+                    .with_context(|| format!("no {} {subject_input}", kind.as_str()))?;
+                (
+                    kind,
+                    subject_id,
+                    args.author
+                        .context("--author is required unless running interactively")?,
+                    args.body
+                        .context("--body is required unless running interactively")?,
+                )
             };
-            println!("{}", edit.save_in_repo(repo)?);
+            let id = Comment::create_under(repo, kind.as_str(), &subject_id, &author, &body, None)?;
+            println!("{id}");
         }
+        CommentCommand::Edit(args) => {
+            let id = resolve_comment_show_id(repo, &args.id)?
+                .with_context(|| format!("no comment {}", args.id))?;
+            let mut comment =
+                Comment::load_from_repo(repo, &id)?.with_context(|| format!("no comment {id}"))?;
+            let no_args_supplied = args.body.is_none();
+            let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
+            if interactive {
+                comment.body = prompt_body(&comment.body)?;
+            } else {
+                if no_args_supplied {
+                    bail!("--body is required unless running interactively");
+                }
+                if let Some(body) = args.body {
+                    comment.body = body;
+                }
+            }
+            comment.edit = None;
+            println!("{}", comment.save_in_repo(repo)?);
+        }
+        CommentCommand::Show { id } => {
+            let id =
+                resolve_comment_show_id(repo, &id)?.with_context(|| format!("no comment {id}"))?;
+            let comment =
+                Comment::load_from_repo(repo, &id)?.with_context(|| format!("no comment {id}"))?;
+            print_comment(&comment);
+        }
+        CommentCommand::List => print_comment_list(repo)?,
         CommentCommand::Log { id } => {
-            print_log("comment", &id, repo, CommentEdit::history(repo, &id)?)?;
+            print_log("comment", &id, repo, Comment::history(repo, &id)?)?;
         }
+        CommentCommand::Rm { id } => {
+            if !Comment::delete(repo, &id)? {
+                bail!("no comment {id}");
+            }
+        }
+        CommentCommand::Search(args) => {
+            let ids =
+                gix_forge::search_comment(repo, args.author.as_deref(), args.keyword.as_deref())?;
+            print_id_list("comments", &ids);
+        }
+        CommentCommand::Query(args) => run_query_args(repo, args)?,
     }
     Ok(())
+}
+
+fn resolve_comment_subject_id(
+    repo: &gix::Repository,
+    kind: CommentSubjectKind,
+    input: &str,
+) -> Result<Option<String>> {
+    match kind {
+        CommentSubjectKind::Issue => resolve_issue_show_id(repo, input),
+        CommentSubjectKind::Review => resolve_review_show_id(repo, input),
+    }
+}
+
+fn resolve_comment_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
+    resolve_show_id("comment", id, &Comment::list(repo)?)
+}
+
+fn prompt_comment_fields(
+    repo: &gix::Repository,
+) -> Result<(CommentSubjectKind, String, String, String)> {
+    require_terminal_for_interactive()?;
+    let kinds = ["issue", "review"];
+    let choice = Select::with_theme(&interactive_theme())
+        .with_prompt("Comment on")
+        .items(&kinds)
+        .default(0)
+        .interact()?;
+    let kind = if choice == 0 {
+        CommentSubjectKind::Issue
+    } else {
+        CommentSubjectKind::Review
+    };
+    let subject_input = prompt_required_text(&format!("{} id", kinds[choice]))?;
+    let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
+        .with_context(|| format!("no {} {subject_input}", kinds[choice]))?;
+    let author = prompt_required_text("Author")?;
+    let body = prompt_body("")?;
+    Ok((kind, subject_id, author, body))
 }
 
 fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
@@ -609,7 +789,7 @@ fn prompt_review_edit_fields(
         match index {
             0 => body = Some(prompt_body(&review.body)?),
             1 => {
-                let current = format_review_target(&review.target);
+                let current = review.target.to_string();
                 target = Some(prompt_text_with_default("Target", &current)?);
             }
             2 => {
@@ -620,10 +800,6 @@ fn prompt_review_edit_fields(
         }
     }
     Ok((body, target, status))
-}
-
-fn prompt_comment_edit_reason() -> Result<String> {
-    prompt_required_text("Edit reason")
 }
 
 fn parse_csv_input(value: &str) -> Vec<String> {
@@ -645,89 +821,25 @@ fn require_terminal_for_interactive() -> Result<()> {
 
 fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
     match command {
-        QueryCommand::Run {
-            predicate,
-            bind,
-            goal,
-            select,
-        } => match (predicate, goal) {
-            (Some(predicate), None) => {
-                let bound: Vec<(usize, QueryValue)> = bind
-                    .iter()
-                    .map(|item| parse_bind(item))
-                    .collect::<Result<_>>()?;
-                let rows = gix_forge::query_predicate(repo, &predicate, &bound)?;
-                print_rows(&rows);
-            }
-            (None, Some(goal)) => {
-                if select.is_empty() {
-                    bail!("--goal requires --select");
-                }
-                let select: Vec<&str> = select.iter().map(String::as_str).collect();
-                let rows = gix_forge::query_goal(repo, &goal, &select)?;
-                print_rows(&rows);
-            }
-            (None, None) => bail!("run requires either a predicate or --goal"),
-            (Some(_), Some(_)) => unreachable!("clap rejects predicate with --goal"),
-        },
+        QueryCommand::Run(args) => run_query_args(repo, args)?,
         QueryCommand::Assignee { name } => {
-            let ids = Issue::list(repo)?;
-            let mut matches = Vec::new();
-            for id in ids {
-                if let Some(issue) = Issue::load_from_repo(repo, &id)?
-                    && issue.assignees.iter().any(|assignee| assignee == &name)
-                {
-                    matches.push(issue.id);
-                }
-            }
-            print_id_list(&format!("issues assigned to {name}"), &matches);
+            let ids = gix_forge::search_assignee(repo, &name)?;
+            print_id_list(&format!("issues assigned to {name}"), &ids);
         }
         QueryCommand::Reviewer { name } => {
-            let ids = Review::list(repo)?;
-            let mut matches = Vec::new();
-            for id in ids {
-                if let Some(review) = Review::load_from_repo(repo, &id)?
-                    && review.reviewers.iter().any(|reviewer| reviewer == &name)
-                {
-                    matches.push(review.id);
-                }
-            }
-            print_id_list(&format!("reviews by reviewer {name}"), &matches);
+            let ids = gix_forge::search_reviewer(repo, &name)?;
+            print_id_list(&format!("reviews by reviewer {name}"), &ids);
         }
         QueryCommand::Requester { name } => {
-            let ids = Review::list(repo)?;
-            let mut matches = Vec::new();
-            for id in ids {
-                if let Some(review) = Review::load_from_repo(repo, &id)?
-                    && review.requesters.iter().any(|requester| requester == &name)
-                {
-                    matches.push(review.id);
-                }
-            }
-            print_id_list(&format!("reviews by requester {name}"), &matches);
+            let ids = gix_forge::search_requester(repo, &name)?;
+            print_id_list(&format!("reviews by requester {name}"), &ids);
         }
         QueryCommand::Keyword { value } => {
-            let needle = value.to_ascii_lowercase();
-            let mut matches = Vec::new();
-
-            let issue_ids = Issue::list(repo)?;
-            for id in issue_ids {
-                if let Some(issue) = Issue::load_from_repo(repo, &id)?
-                    && issue.body.to_ascii_lowercase().contains(&needle)
-                {
-                    matches.push(format!("issue {}", issue.id));
-                }
-            }
-
-            let review_ids = Review::list(repo)?;
-            for id in review_ids {
-                if let Some(review) = Review::load_from_repo(repo, &id)?
-                    && review.body.to_ascii_lowercase().contains(&needle)
-                {
-                    matches.push(format!("review {}", review.id));
-                }
-            }
-
+            let hits = gix_forge::search_keyword(repo, &value)?;
+            let matches: Vec<String> = hits
+                .iter()
+                .map(|hit| format!("{} {}", hit.kind.as_str(), hit.id))
+                .collect();
             print_bulleted_section(&format!("matches for \"{value}\""), &matches);
         }
         QueryCommand::Find {
@@ -737,62 +849,59 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
             keyword,
             title,
         } => {
-            let needle = keyword.or(title).map(|value| value.to_ascii_lowercase());
+            let needle = keyword.or(title);
             if assignee.is_none() && reviewer.is_none() && requester.is_none() && needle.is_none() {
                 bail!(
                     "query find requires at least one filter: --assignee, --reviewer, --requester, --keyword, or --title"
                 );
             }
 
-            let mut matches = Vec::new();
-
-            let issue_ids = Issue::list(repo)?;
-            for id in issue_ids {
-                if let Some(issue) = Issue::load_from_repo(repo, &id)? {
-                    if let Some(name) = &assignee
-                        && !issue.assignees.iter().any(|a| a == name)
-                    {
-                        continue;
-                    }
-                    if reviewer.is_some() || requester.is_some() {
-                        continue;
-                    }
-                    if let Some(needle) = &needle
-                        && !issue.body.to_ascii_lowercase().contains(needle)
-                    {
-                        continue;
-                    }
-                    matches.push(format!("issue {}", issue.id));
-                }
-            }
-
-            let review_ids = Review::list(repo)?;
-            for id in review_ids {
-                if let Some(review) = Review::load_from_repo(repo, &id)? {
-                    if assignee.is_some() {
-                        continue;
-                    }
-                    if let Some(name) = &reviewer
-                        && !review.reviewers.iter().any(|r| r == name)
-                    {
-                        continue;
-                    }
-                    if let Some(name) = &requester
-                        && !review.requesters.iter().any(|r| r == name)
-                    {
-                        continue;
-                    }
-                    if let Some(needle) = &needle
-                        && !review.body.to_ascii_lowercase().contains(needle)
-                    {
-                        continue;
-                    }
-                    matches.push(format!("review {}", review.id));
-                }
-            }
-
+            let hits = gix_forge::search_find(
+                repo,
+                assignee.as_deref(),
+                reviewer.as_deref(),
+                requester.as_deref(),
+                needle.as_deref(),
+            )?;
+            let matches: Vec<String> = hits
+                .iter()
+                .map(|hit| format!("{} {}", hit.kind.as_str(), hit.id))
+                .collect();
             print_bulleted_section("query matches", &matches);
         }
+    }
+    Ok(())
+}
+
+/// The raw predicate/goal query -- shared by top-level `query run` and every
+/// entity's own `query` verb, all four of which take the same [`QueryArgs`]
+/// and run it exactly the same way.
+fn run_query_args(repo: &gix::Repository, args: QueryArgs) -> Result<()> {
+    let QueryArgs {
+        predicate,
+        bind,
+        goal,
+        select,
+    } = args;
+    match (predicate, goal) {
+        (Some(predicate), None) => {
+            let bound: Vec<(usize, QueryValue)> = bind
+                .iter()
+                .map(|item| parse_bind(item))
+                .collect::<Result<_>>()?;
+            let rows = gix_forge::query_predicate(repo, &predicate, &bound)?;
+            print_rows(&rows);
+        }
+        (None, Some(goal)) => {
+            if select.is_empty() {
+                bail!("--goal requires --select");
+            }
+            let select: Vec<&str> = select.iter().map(String::as_str).collect();
+            let rows = gix_forge::query_goal(repo, &goal, &select)?;
+            print_rows(&rows);
+        }
+        (None, None) => bail!("query requires either a predicate or --goal"),
+        (Some(_), Some(_)) => unreachable!("clap rejects predicate with --goal"),
     }
     Ok(())
 }
@@ -827,7 +936,7 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
 
 fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
     match command {
-        ReviewCommand::New(args) | ReviewCommand::Put(args) => {
+        ReviewCommand::Add(args) => {
             let interactive = resolve_interactive(
                 args.interactive,
                 args.body.is_none()
@@ -859,7 +968,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 body,
                 reviewers,
                 requesters,
-                target: parse_review_target(&target)?,
+                target: ReviewTarget::parse(&target)?,
                 edit: None,
             };
             println!("{}", review.create_in_repo(repo)?);
@@ -878,7 +987,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     review.body = body;
                 }
                 if let Some(target) = target {
-                    review.target = parse_review_target(&target)?;
+                    review.target = ReviewTarget::parse(&target)?;
                 }
                 if let Some(status) = status {
                     review.status = status;
@@ -892,7 +1001,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     review.body = body;
                 }
                 if let Some(target) = args.target {
-                    review.target = parse_review_target(&target)?;
+                    review.target = ReviewTarget::parse(&target)?;
                 }
                 if let Some(status) = args.status {
                     review.status = status.as_status().as_str().to_owned();
@@ -915,6 +1024,16 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 bail!("no review {id}");
             }
         }
+        ReviewCommand::Search(args) => {
+            let ids = gix_forge::search_review(
+                repo,
+                args.reviewer.as_deref(),
+                args.requester.as_deref(),
+                args.keyword.as_deref(),
+            )?;
+            print_id_list("reviews", &ids);
+        }
+        ReviewCommand::Query(args) => run_query_args(repo, args)?,
     }
     Ok(())
 }
@@ -970,19 +1089,6 @@ fn min_unique_prefix_len(id: &str, ids: &[String]) -> usize {
     id.len()
 }
 
-fn format_review_target(target: &ReviewTarget) -> String {
-    match target {
-        ReviewTarget::Commit { oid } => format!("commit:{oid}"),
-        ReviewTarget::Tree { oid } => format!("tree:{oid}"),
-        ReviewTarget::Blob { path, oid } => format!("blob:{path}:{oid}"),
-        ReviewTarget::BaseTipTreePair { base, tip } => format!("base-tip-tree:{base}:{tip}"),
-        ReviewTarget::BaseTipCommitPair { base, tip } => {
-            format!("base-tip-commit:{base}:{tip}")
-        }
-        ReviewTarget::CommitRange { start, end } => format!("commit-range:{start}:{end}"),
-    }
-}
-
 fn format_status(status: &str) -> String {
     match Status::parse(status) {
         Some(Status::Open) => "Open".green().bold().to_string(),
@@ -991,109 +1097,67 @@ fn format_status(status: &str) -> String {
     }
 }
 
-fn parse_review_target(target: &str) -> Result<ReviewTarget> {
-    if let Some(rest) = target.strip_prefix("commit:") {
-        return Ok(ReviewTarget::Commit {
-            oid: rest.to_owned(),
-        });
-    }
-    if let Some(rest) = target.strip_prefix("tree:") {
-        return Ok(ReviewTarget::Tree {
-            oid: rest.to_owned(),
-        });
-    }
-    if let Some(rest) = target.strip_prefix("blob:") {
-        let mut parts = rest.splitn(2, ':');
-        let path = parts.next().unwrap_or_default();
-        let oid = parts.next().unwrap_or_default();
-        if path.is_empty() || oid.is_empty() {
-            bail!("blob target must be blob:<path>:<oid>");
-        }
-        return Ok(ReviewTarget::Blob {
-            path: path.to_owned(),
-            oid: oid.to_owned(),
-        });
-    }
-    if let Some(rest) = target.strip_prefix("base-tip-tree:") {
-        let mut parts = rest.splitn(2, ':');
-        let base = parts.next().unwrap_or_default();
-        let tip = parts.next().unwrap_or_default();
-        if base.is_empty() || tip.is_empty() {
-            bail!("base-tip-tree target must be base-tip-tree:<base>:<tip>");
-        }
-        return Ok(ReviewTarget::BaseTipTreePair {
-            base: base.to_owned(),
-            tip: tip.to_owned(),
-        });
-    }
-    if let Some(rest) = target.strip_prefix("base-tip-commit:") {
-        let mut parts = rest.splitn(2, ':');
-        let base = parts.next().unwrap_or_default();
-        let tip = parts.next().unwrap_or_default();
-        if base.is_empty() || tip.is_empty() {
-            bail!("base-tip-commit target must be base-tip-commit:<base>:<tip>");
-        }
-        return Ok(ReviewTarget::BaseTipCommitPair {
-            base: base.to_owned(),
-            tip: tip.to_owned(),
-        });
-    }
-    if let Some(rest) = target.strip_prefix("commit-range:") {
-        let mut parts = rest.splitn(2, ':');
-        let start = parts.next().unwrap_or_default();
-        let end = parts.next().unwrap_or_default();
-        if start.is_empty() || end.is_empty() {
-            bail!("commit-range target must be commit-range:<start>:<end>");
-        }
-        return Ok(ReviewTarget::CommitRange {
-            start: start.to_owned(),
-            end: end.to_owned(),
-        });
-    }
-    Ok(ReviewTarget::Commit {
-        oid: target.to_owned(),
-    })
-}
-
 fn print_id_list(title: &str, ids: &[String]) {
     print_bulleted_section(title, ids);
 }
 
-fn print_issue_list(repo: &gix::Repository) -> Result<()> {
-    let ids = Issue::list(repo)?;
+/// Every entity's own `list` command loads each id and formats a table row
+/// the same way -- `to_row` supplies only what's genuinely specific to the
+/// kind (its two non-status columns, and its status if it has one).
+fn entity_rows<T: EntityOps>(
+    repo: &gix::Repository,
+    to_row: impl Fn(&T) -> (String, String, String),
+) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
-    for id in ids {
-        let Some(issue) = Issue::load_from_repo(repo, &id)? else {
+    for id in T::list(repo)? {
+        let Some(entity) = T::load_from_repo(repo, &id)? else {
             continue;
         };
+        let (col2, col3, status) = to_row(&entity);
         rows.push(vec![
             format!("#{id}"),
+            col2,
+            col3,
+            status,
+            updated_relative(repo, T::history(repo, &id)?)?,
+        ]);
+    }
+    Ok(rows)
+}
+
+fn print_issue_list(repo: &gix::Repository) -> Result<()> {
+    let rows = entity_rows::<Issue>(repo, |issue| {
+        (
             title_or_untitled(&issue.title).to_owned(),
             join_values_or_none(&issue.labels),
             issue.status.clone(),
-            updated_relative(repo, Issue::history(repo, &id)?)?,
-        ]);
-    }
+        )
+    })?;
     print_entity_table("issues", "TITLE", "LABELS", rows);
     Ok(())
 }
 
 fn print_review_list(repo: &gix::Repository) -> Result<()> {
-    let ids = Review::list(repo)?;
-    let mut rows = Vec::new();
-    for id in ids {
-        let Some(review) = Review::load_from_repo(repo, &id)? else {
-            continue;
-        };
-        rows.push(vec![
-            format!("#{id}"),
-            format_target(&review.target),
+    let rows = entity_rows::<Review>(repo, |review| {
+        (
+            review.target.to_string(),
             join_values_or_none(&review.reviewers),
             review.status.clone(),
-            updated_relative(repo, Review::history(repo, &id)?)?,
-        ]);
-    }
+        )
+    })?;
     print_entity_table("reviews", "TARGET", "REVIEWERS", rows);
+    Ok(())
+}
+
+fn print_comment_list(repo: &gix::Repository) -> Result<()> {
+    let rows = entity_rows::<Comment>(repo, |comment| {
+        (
+            comment.subject.clone(),
+            comment.author.clone(),
+            "-".to_owned(),
+        )
+    })?;
+    print_entity_table("comments", "SUBJECT", "AUTHOR", rows);
     Ok(())
 }
 
@@ -1231,7 +1295,7 @@ fn print_review(review: &Review) {
         "requesters: {}",
         join_values_or_none(&review.requesters)
     ));
-    meta.push(format!("target: {}", format_target(&review.target)));
+    meta.push(format!("target: {}", review.target));
     if let Some(edit) = &review.edit {
         meta.push(format!("edit: {edit}"));
     }
@@ -1242,6 +1306,24 @@ fn print_review(review: &Review) {
         title: None,
         meta,
         body: &review.body,
+    });
+}
+
+fn print_comment(comment: &Comment) {
+    let mut meta = vec![
+        format!("subject: {}", comment.subject),
+        format!("author: {}", comment.author),
+    ];
+    if let Some(edit) = &comment.edit {
+        meta.push(format!("edit: {edit}"));
+    }
+
+    print_show_doc(ShowDoc {
+        kind: "comment",
+        id: &comment.id,
+        title: None,
+        meta,
+        body: &comment.body,
     });
 }
 
@@ -1351,19 +1433,4 @@ fn colorize(value: &str, code: &str) -> String {
 
 fn color_output_enabled() -> bool {
     std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
-fn format_target(target: &ReviewTarget) -> String {
-    match target {
-        ReviewTarget::Blob { path, oid } => format!("blob:{path}:{oid}"),
-        ReviewTarget::Tree { oid } => format!("tree:{oid}"),
-        ReviewTarget::Commit { oid } => format!("commit:{oid}"),
-        ReviewTarget::BaseTipTreePair { base, tip } => {
-            format!("base-tip-tree:{base}:{tip}")
-        }
-        ReviewTarget::BaseTipCommitPair { base, tip } => {
-            format!("base-tip-commit:{base}:{tip}")
-        }
-        ReviewTarget::CommitRange { start, end } => format!("commit-range:{start}:{end}"),
-    }
 }

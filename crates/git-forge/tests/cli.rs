@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use gix_forge::{Issue, Review, ReviewTarget};
+use gix_forge::{EntityOps, Issue, Review, ReviewTarget};
 use proptest::prelude::*;
 use test_support::init_repo;
 
@@ -629,75 +629,327 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     assert!(out.contains("deadbeef"), "review show output: {out}");
 }
 
+fn add_issue(path: &Path, body: &str) -> String {
+    let (out, err, ok) = run(path, &["issue", "new", "--body", body]);
+    assert!(ok, "issue new failed: {err}");
+    created_id(&out)
+}
+
 #[test]
-fn comment_edit_without_args_requires_edit_without_terminal() {
+fn comment_add_without_args_requires_fields_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
 
-    let (_, err, ok) = run(dir.path(), &["comment", "edit", "comment-1"]);
+    let (_, err, ok) = run(dir.path(), &["comment", "add"]);
+    assert!(!ok, "comment add should fail without args and terminal");
+    assert!(
+        err.contains("--on is required unless running interactively"),
+        "comment add stderr: {err}"
+    );
+}
+
+#[test]
+fn comment_add_interactive_requires_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["comment", "add", "-i"]);
+    assert!(!ok, "interactive comment add should fail without terminal");
+    assert!(
+        err.contains("--interactive requires a terminal"),
+        "interactive comment add stderr: {err}"
+    );
+}
+
+#[test]
+fn comment_edit_without_args_requires_body_without_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+
+    let issue_id = add_issue(path, "needs a comment");
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "add",
+            "--on",
+            "issue",
+            "--subject",
+            issue_id.as_str(),
+            "--author",
+            "alice",
+            "--body",
+            "first comment",
+        ],
+    );
+    assert!(ok, "comment add failed: {err}");
+    let comment_id = created_id(&out);
+
+    let (_, err, ok) = run(path, &["comment", "edit", comment_id.as_str()]);
     assert!(!ok, "comment edit should fail without args and terminal");
     assert!(
-        err.contains("--edit is required unless running interactively"),
+        err.contains("--body is required unless running interactively"),
         "comment edit stderr: {err}"
     );
 }
 
 #[test]
-fn comment_edit_interactive_requires_terminal() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-
-    let (_, err, ok) = run(dir.path(), &["comment", "edit", "comment-1", "-i"]);
-    assert!(!ok, "interactive comment edit should fail without terminal");
-    assert!(
-        err.contains("--interactive requires a terminal"),
-        "interactive comment edit stderr: {err}"
-    );
-}
-
-#[test]
-fn comment_edit_without_edit_defaults_to_interactive_with_pty() {
+fn comment_add_show_list_edit_log_search_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
     let path = dir.path();
+    create_origin_commit(path);
 
-    let (_out, err, ok) = run_with_pty_env(
+    let issue_id = add_issue(path, "needs a comment");
+
+    let (out, err, ok) = run(
         path,
-        &["comment", "edit", "comment-1"],
-        &[("Edit reason", "editor reason\n")],
-        &[],
+        &[
+            "comment",
+            "add",
+            "--on",
+            "issue",
+            "--subject",
+            issue_id.as_str(),
+            "--author",
+            "alice",
+            "--body",
+            "first comment",
+        ],
     );
-    assert!(ok, "interactive comment edit failed: {err}");
+    assert!(ok, "comment add failed: {err}");
+    let comment_id = created_id(&out);
 
-    let (out, err, ok) = run(path, &["comment", "log", "comment-1"]);
-    assert!(ok, "comment log failed: {err}");
+    let show_args = vec!["comment", "show", comment_id.as_str()];
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "comment show failed: {err}");
+    assert!(out.contains("first comment"), "comment show output: {out}");
+    assert!(out.contains("alice"), "comment show output: {out}");
     assert!(
-        out.contains("comment history comment-1:"),
-        "comment log output: {out}"
+        out.contains(&format!("issue:{issue_id}")),
+        "comment show output: {out}"
     );
-}
 
-#[test]
-fn comment_edit_and_log() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path());
-    let path = dir.path();
+    let (out, err, ok) = run(path, &["comment", "ls"]);
+    assert!(ok, "comment ls failed: {err}");
+    assert!(out.contains("SUBJECT"), "comment ls output: {out}");
+    assert!(out.contains("AUTHOR"), "comment ls output: {out}");
+    assert!(
+        out.contains(&format!("#{comment_id}")),
+        "comment ls output: {out}"
+    );
 
-    let comment_id = "comment-1";
     let (_, err, ok) = run(
         path,
-        &["comment", "edit", comment_id, "--edit", "fix wording"],
+        &[
+            "comment",
+            "edit",
+            comment_id.as_str(),
+            "--body",
+            "edited comment",
+        ],
     );
     assert!(ok, "comment edit failed: {err}");
 
-    let (out, err, ok) = run(path, &["comment", "log", comment_id]);
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "comment show after edit failed: {err}");
+    assert!(out.contains("edited comment"), "comment show output: {out}");
+
+    let log_args = vec!["comment", "log", comment_id.as_str()];
+    let (out, err, ok) = run(path, &log_args);
     assert!(ok, "comment log failed: {err}");
     assert!(
         out.contains(&format!("comment history {comment_id}:")),
         "comment log output: {out}"
     );
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines.len() >= 2, "comment log output: {out}");
+    assert!(lines.len() >= 3, "comment log output: {out}");
+
+    let (out, err, ok) = run(path, &["comment", "search", "--author", "alice"]);
+    assert!(ok, "comment search by author failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![comment_id.clone()]);
+
+    let (out, err, ok) = run(path, &["comment", "search", "--author", "nobody"]);
+    assert!(ok, "comment search by author failed: {err}");
+    assert!(
+        bulleted_items(&out).is_empty(),
+        "comment search output: {out}"
+    );
+
+    let (out, err, ok) = run(path, &["comment", "search", "--keyword", "edited"]);
+    assert!(ok, "comment search by keyword failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![comment_id.clone()]);
+
+    let rm_args = vec!["comment", "rm", comment_id.as_str()];
+    let (_, err, ok) = run(path, &rm_args);
+    assert!(ok, "comment rm failed: {err}");
+
+    let (_, _, ok) = run(path, &show_args);
+    assert!(!ok, "comment show after rm should fail");
+}
+
+#[test]
+fn issue_search_filters_by_assignee_and_keyword() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "issue",
+            "new",
+            "--body",
+            "release blocker",
+            "--assignee",
+            "alice",
+        ],
+    );
+    assert!(ok, "issue new failed: {err}");
+    let matching_id = created_id(&out);
+
+    let (_, err, ok) = run(
+        path,
+        &["issue", "new", "--body", "unrelated", "--assignee", "bob"],
+    );
+    assert!(ok, "issue new failed: {err}");
+
+    let (out, err, ok) = run(path, &["issue", "search", "--assignee", "alice"]);
+    assert!(ok, "issue search failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![matching_id.clone()]);
+
+    let (out, err, ok) = run(path, &["issue", "search", "--keyword", "blocker"]);
+    assert!(ok, "issue search failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![matching_id.clone()]);
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "issue",
+            "search",
+            "--assignee",
+            "alice",
+            "--keyword",
+            "unrelated",
+        ],
+    );
+    assert!(ok, "issue search failed: {err}");
+    assert!(
+        bulleted_items(&out).is_empty(),
+        "issue search output: {out}"
+    );
+}
+
+#[test]
+fn review_search_filters_by_reviewer_requester_and_keyword() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "review",
+            "new",
+            "--body",
+            "release reviewed",
+            "--reviewer",
+            "carol",
+            "--requester",
+            "dave",
+            "--target",
+            "commit:deadbeef",
+        ],
+    );
+    assert!(ok, "review new failed: {err}");
+    let review_id = created_id(&out);
+
+    let (out, err, ok) = run(path, &["review", "search", "--reviewer", "carol"]);
+    assert!(ok, "review search failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+
+    let (out, err, ok) = run(path, &["review", "search", "--requester", "dave"]);
+    assert!(ok, "review search failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+
+    let (out, err, ok) = run(path, &["review", "search", "--keyword", "reviewed"]);
+    assert!(ok, "review search failed: {err}");
+    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+
+    let (out, err, ok) = run(path, &["review", "search", "--reviewer", "nobody"]);
+    assert!(ok, "review search failed: {err}");
+    assert!(
+        bulleted_items(&out).is_empty(),
+        "review search output: {out}"
+    );
+}
+
+#[test]
+fn per_entity_query_runs_the_same_raw_goal_as_top_level_query_run() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+
+    let issue_id = add_issue(path, "queryable");
+
+    let (issue_out, err, ok) = run(
+        path,
+        &["issue", "query", "--goal", "issue(Id)", "--select", "Id"],
+    );
+    assert!(ok, "issue query failed: {err}");
+    assert!(
+        issue_out.contains(&issue_id),
+        "issue query output: {issue_out}"
+    );
+
+    let (top_out, err, ok) = run(
+        path,
+        &["query", "run", "--goal", "issue(Id)", "--select", "Id"],
+    );
+    assert!(ok, "query run failed: {err}");
+    assert_eq!(issue_out, top_out, "issue query and query run should agree");
+
+    let (review_out, err, ok) = run(
+        path,
+        &["review", "query", "--goal", "review(Id)", "--select", "Id"],
+    );
+    assert!(ok, "review query failed: {err}");
+    assert!(
+        review_out.contains("(none)"),
+        "review query output: {review_out}"
+    );
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "query",
+            "--goal",
+            "comment(Id)",
+            "--select",
+            "Id",
+        ],
+    );
+    assert!(ok, "comment query failed: {err}");
+    assert!(out.contains("(none)"), "comment query output: {out}");
+}
+
+#[test]
+fn query_run_requires_a_predicate_or_goal() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["query", "run"]);
+    assert!(!ok, "query run should fail without a predicate or --goal");
+    assert!(
+        err.contains("query requires either a predicate or --goal"),
+        "query run stderr: {err}"
+    );
 }
 
 #[test]
