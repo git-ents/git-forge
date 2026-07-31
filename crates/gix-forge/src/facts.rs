@@ -5,10 +5,13 @@
 //! example named there; this is the base-fact half that feeds such rules).
 //!
 //! Every predicate here is read straight off the entities `Issue`, `Review`,
-//! and `Comment` already know how to load -- no separate index, no cache.
+//! and `Comment` already know how to load -- no separate index, and no cache
+//! outliving the one query run a [`ForgeFacts`] backs.
 //! This is the only place forge data is scanned in memory: `search` and
 //! `query` both compile to goal text and run through [`run_forge_goal`] /
 //! [`run_forge_predicate`], never by looping over `Entity::list` themselves.
+
+use std::cell::OnceCell;
 
 use gix::Repository;
 use gix_query::{
@@ -43,14 +46,53 @@ const PROVIDED: &[(&str, usize)] = &[
 ];
 
 /// A `FactSource` over one repository's issues, reviews, and comments.
+///
+/// One instance backs exactly one query run, so the three scans it memoizes
+/// are read at most once each per query and can never go stale: a goal
+/// naming several predicates of the same kind (`issue(Id),
+/// issue_body_contains(Id, "x")`), and every demand round the evaluator
+/// drives, share one load instead of re-reading every ref, commit, tree and
+/// blob per predicate occurrence.
 pub struct ForgeFacts<'r> {
     repo: &'r Repository,
+    issues: OnceCell<Vec<Issue>>,
+    reviews: OnceCell<Vec<Review>>,
+    comments: OnceCell<Vec<Comment>>,
 }
 
 impl<'r> ForgeFacts<'r> {
     #[must_use]
     pub fn new(repo: &'r Repository) -> Self {
-        Self { repo }
+        Self {
+            repo,
+            issues: OnceCell::new(),
+            reviews: OnceCell::new(),
+            comments: OnceCell::new(),
+        }
+    }
+
+    fn issues(&self, key: &PredicateKey) -> Result<&[Issue], HostError> {
+        if let Some(cached) = self.issues.get() {
+            return Ok(cached);
+        }
+        let loaded = load_all(self.repo, key)?;
+        Ok(self.issues.get_or_init(|| loaded))
+    }
+
+    fn reviews(&self, key: &PredicateKey) -> Result<&[Review], HostError> {
+        if let Some(cached) = self.reviews.get() {
+            return Ok(cached);
+        }
+        let loaded = load_all(self.repo, key)?;
+        Ok(self.reviews.get_or_init(|| loaded))
+    }
+
+    fn comments(&self, key: &PredicateKey) -> Result<&[Comment], HostError> {
+        if let Some(cached) = self.comments.get() {
+            return Ok(cached);
+        }
+        let loaded = load_all(self.repo, key)?;
+        Ok(self.comments.get_or_init(|| loaded))
     }
 
     /// [`HostRegistry::host`] plus every predicate [`ForgeFacts`] answers
@@ -196,100 +238,135 @@ impl FactSource for ForgeFacts<'_> {
         }
 
         let rows: Vec<Vec<Value>> = match (key.name.as_ref(), key.arity) {
-            ("issue", 1) => all_issues(self.repo, key)?
-                .into_iter()
-                .map(|issue| vec![Value::sym(issue.id)])
+            ("issue", 1) => self
+                .issues(key)?
+                .iter()
+                .map(|issue| vec![Value::sym(issue.id.as_str())])
                 .collect(),
-            ("issue_status", 2) => all_issues(self.repo, key)?
-                .into_iter()
-                .map(|issue| vec![Value::sym(issue.id), Value::sym(issue.status)])
-                .collect(),
-            ("issue_assignee", 2) => all_issues(self.repo, key)?
-                .into_iter()
-                .flat_map(|issue| {
-                    issue
-                        .assignees
-                        .into_iter()
-                        .map(move |name| vec![Value::sym(issue.id.clone()), Value::sym(name)])
-                        .collect::<Vec<_>>()
+            ("issue_status", 2) => self
+                .issues(key)?
+                .iter()
+                .map(|issue| {
+                    vec![
+                        Value::sym(issue.id.as_str()),
+                        Value::sym(issue.status.as_str()),
+                    ]
                 })
                 .collect(),
-            ("issue_reporter", 2) => all_issues(self.repo, key)?
-                .into_iter()
-                .flat_map(|issue| {
-                    issue
-                        .reporters
-                        .into_iter()
-                        .map(move |name| vec![Value::sym(issue.id.clone()), Value::sym(name)])
-                        .collect::<Vec<_>>()
-                })
-                .collect(),
-            ("issue_body_contains", 2) => {
-                let needle = needle_arg(key, bound)?;
-                all_issues(self.repo, key)?
-                    .into_iter()
-                    .filter(|issue| issue.body.to_ascii_lowercase().contains(&needle))
-                    .map(|issue| vec![Value::sym(issue.id), Value::sym(needle.clone())])
+            ("issue_assignee", 2) => {
+                self.issues(key)?
+                    .iter()
+                    .flat_map(|issue| {
+                        issue.assignees.iter().map(|name| {
+                            vec![Value::sym(issue.id.as_str()), Value::sym(name.as_str())]
+                        })
+                    })
                     .collect()
             }
-            ("review", 1) => all_reviews(self.repo, key)?
-                .into_iter()
-                .map(|review| vec![Value::sym(review.id)])
+            ("issue_reporter", 2) => {
+                self.issues(key)?
+                    .iter()
+                    .flat_map(|issue| {
+                        issue.reporters.iter().map(|name| {
+                            vec![Value::sym(issue.id.as_str()), Value::sym(name.as_str())]
+                        })
+                    })
+                    .collect()
+            }
+            ("issue_body_contains", 2) => {
+                let needle = needle_arg(key, bound)?;
+                self.issues(key)?
+                    .iter()
+                    .filter(|issue| contains_fold(&issue.body, &needle))
+                    .map(|issue| vec![Value::sym(issue.id.as_str()), Value::sym(needle.as_str())])
+                    .collect()
+            }
+            ("review", 1) => self
+                .reviews(key)?
+                .iter()
+                .map(|review| vec![Value::sym(review.id.as_str())])
                 .collect(),
-            ("review_status", 2) => all_reviews(self.repo, key)?
-                .into_iter()
-                .map(|review| vec![Value::sym(review.id), Value::sym(review.status)])
-                .collect(),
-            ("review_reviewer", 2) => all_reviews(self.repo, key)?
-                .into_iter()
-                .flat_map(|review| {
-                    review
-                        .reviewers
-                        .into_iter()
-                        .map(move |name| vec![Value::sym(review.id.clone()), Value::sym(name)])
-                        .collect::<Vec<_>>()
+            ("review_status", 2) => self
+                .reviews(key)?
+                .iter()
+                .map(|review| {
+                    vec![
+                        Value::sym(review.id.as_str()),
+                        Value::sym(review.status.as_str()),
+                    ]
                 })
                 .collect(),
-            ("review_requester", 2) => all_reviews(self.repo, key)?
-                .into_iter()
-                .flat_map(|review| {
-                    review
-                        .requesters
-                        .into_iter()
-                        .map(move |name| vec![Value::sym(review.id.clone()), Value::sym(name)])
-                        .collect::<Vec<_>>()
+            ("review_reviewer", 2) => {
+                self.reviews(key)?
+                    .iter()
+                    .flat_map(|review| {
+                        review.reviewers.iter().map(|name| {
+                            vec![Value::sym(review.id.as_str()), Value::sym(name.as_str())]
+                        })
+                    })
+                    .collect()
+            }
+            ("review_requester", 2) => {
+                self.reviews(key)?
+                    .iter()
+                    .flat_map(|review| {
+                        review.requesters.iter().map(|name| {
+                            vec![Value::sym(review.id.as_str()), Value::sym(name.as_str())]
+                        })
+                    })
+                    .collect()
+            }
+            ("review_target", 2) => self
+                .reviews(key)?
+                .iter()
+                .map(|review| {
+                    vec![
+                        Value::sym(review.id.as_str()),
+                        Value::sym(review.target.to_string()),
+                    ]
                 })
-                .collect(),
-            ("review_target", 2) => all_reviews(self.repo, key)?
-                .into_iter()
-                .map(|review| vec![Value::sym(review.id), Value::sym(review.target.to_string())])
                 .collect(),
             ("review_body_contains", 2) => {
                 let needle = needle_arg(key, bound)?;
-                all_reviews(self.repo, key)?
-                    .into_iter()
-                    .filter(|review| review.body.to_ascii_lowercase().contains(&needle))
-                    .map(|review| vec![Value::sym(review.id), Value::sym(needle.clone())])
+                self.reviews(key)?
+                    .iter()
+                    .filter(|review| contains_fold(&review.body, &needle))
+                    .map(|review| vec![Value::sym(review.id.as_str()), Value::sym(needle.as_str())])
                     .collect()
             }
-            ("comment", 1) => all_comments(self.repo, key)?
-                .into_iter()
-                .map(|comment| vec![Value::sym(comment.id)])
+            ("comment", 1) => self
+                .comments(key)?
+                .iter()
+                .map(|comment| vec![Value::sym(comment.id.as_str())])
                 .collect(),
-            ("comment_author", 2) => all_comments(self.repo, key)?
-                .into_iter()
-                .map(|comment| vec![Value::sym(comment.id), Value::sym(comment.author)])
+            ("comment_author", 2) => self
+                .comments(key)?
+                .iter()
+                .map(|comment| {
+                    vec![
+                        Value::sym(comment.id.as_str()),
+                        Value::sym(comment.author.as_str()),
+                    ]
+                })
                 .collect(),
-            ("comment_subject", 2) => all_comments(self.repo, key)?
-                .into_iter()
-                .map(|comment| vec![Value::sym(comment.id), Value::sym(comment.subject)])
+            ("comment_subject", 2) => self
+                .comments(key)?
+                .iter()
+                .map(|comment| {
+                    vec![
+                        Value::sym(comment.id.as_str()),
+                        Value::sym(comment.subject.as_str()),
+                    ]
+                })
                 .collect(),
             ("comment_body_contains", 2) => {
                 let needle = needle_arg(key, bound)?;
-                all_comments(self.repo, key)?
-                    .into_iter()
-                    .filter(|comment| comment.body.to_ascii_lowercase().contains(&needle))
-                    .map(|comment| vec![Value::sym(comment.id), Value::sym(needle.clone())])
+                self.comments(key)?
+                    .iter()
+                    .filter(|comment| contains_fold(&comment.body, &needle))
+                    .map(|comment| {
+                        vec![Value::sym(comment.id.as_str()), Value::sym(needle.as_str())]
+                    })
                     .collect()
             }
             _ => unreachable!("provides() already rejected any other key"),
@@ -332,31 +409,31 @@ fn backend(key: &PredicateKey, error: crate::error::Error) -> HostError {
     }
 }
 
-fn all_issues(repo: &Repository, key: &PredicateKey) -> Result<Vec<Issue>, HostError> {
-    let mut out = Vec::new();
-    for id in Issue::list(repo).map_err(|e| backend(key, e))? {
-        if let Some(issue) = Issue::load_from_repo(repo, &id).map_err(|e| backend(key, e))? {
-            out.push(issue);
-        }
+/// Whether `haystack` contains the already-lowercased `needle`, without
+/// allocating a lowercased copy of every body scanned.
+fn contains_fold(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
     }
-    Ok(out)
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-fn all_reviews(repo: &Repository, key: &PredicateKey) -> Result<Vec<Review>, HostError> {
+/// Every entity of one kind, over a single `RepoStore` rather than one
+/// reopened per entity.
+fn load_all<T: EntityOps>(repo: &Repository, key: &PredicateKey) -> Result<Vec<T>, HostError> {
+    let store = crate::open_store(repo);
+    let kind = T::kind(&store);
     let mut out = Vec::new();
-    for id in Review::list(repo).map_err(|e| backend(key, e))? {
-        if let Some(review) = Review::load_from_repo(repo, &id).map_err(|e| backend(key, e))? {
-            out.push(review);
-        }
-    }
-    Ok(out)
-}
-
-fn all_comments(repo: &Repository, key: &PredicateKey) -> Result<Vec<Comment>, HostError> {
-    let mut out = Vec::new();
-    for id in Comment::list(repo).map_err(|e| backend(key, e))? {
-        if let Some(comment) = Comment::load_from_repo(repo, &id).map_err(|e| backend(key, e))? {
-            out.push(comment);
+    for path in kind.list().map_err(|e| backend(key, e.into()))? {
+        if let Some(entity) = kind
+            .get(&path)
+            .map_err(|e| backend(key, e.into()))?
+            .map(|stored| T::from_stored(path.to_string(), stored))
+        {
+            out.push(entity);
         }
     }
     Ok(out)
