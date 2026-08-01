@@ -1,0 +1,1 @@
+We should have LSP support for `git-forge comment`, and all comments should be viewable (and creatable, possibly editable) in the Zed editor via a *Dev Extension*.
