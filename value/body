@@ -1,0 +1,7 @@
+== Feature
+
+We should support `member` entities, with the flexibility to discriminate roles e.g. `maintainer` and `contributor`.
+This will allow for identitying users by their signing key, supporting gates for updating refs, and more.
+I'm inclined to say we should have a single entity type --- `member` --- with a `role` field.
+We could alternatively have separate entity types for each role, but that seems to be unnecessary complexity.
+Both library and CLI support should be included.
