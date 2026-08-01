@@ -1,0 +1,7 @@
+The CLI has some quirks, including the following.
+
+- When adding an assignee, reporter, reviewer, or label, users are asked to select from *existing* values before they are asked to add *new* values.
+  These *existing* and *new* distinctions should not exist.
+  Existing values should show as the user types via tab-completion.
+- All searches, lists, etc. should show the current list view.
+- Checkboxes are not rendering correctly; there should not be check boxes, just checkmarks or no checkmarks.
