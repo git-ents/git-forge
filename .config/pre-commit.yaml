@@ -30,7 +30,7 @@ repos:
       - id: clippy
         name: cargo clippy
         language: system
-        entry: cargo clippy --workspace --exclude acdc-parser --exclude acdc-converters-core --exclude acdc-converters-terminal --all-targets --all-features -- -D warnings
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
         types: [rust]
         pass_filenames: false
   - repo: https://github.com/crate-ci/committed

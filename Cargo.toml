@@ -3,6 +3,8 @@ members = [
     "crates/gix-forge",
     "crates/git-forge",
     "crates/test-support",
+]
+exclude = [
     "vendor/acdc/acdc-parser",
     "vendor/acdc/converters/core",
     "vendor/acdc/converters/terminal",
