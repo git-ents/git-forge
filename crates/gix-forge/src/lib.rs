@@ -14,6 +14,7 @@ mod entity;
 mod error;
 mod facts;
 mod issue;
+mod member;
 mod review;
 mod search;
 mod status;
@@ -28,6 +29,7 @@ pub use facts::ForgeFacts;
 pub use gix_anchor::{Binding, LineRange};
 pub use gix_query::Value as QueryValue;
 pub use issue::Issue;
+pub use member::Member;
 pub use review::{Review, ReviewTarget};
 pub use search::{
     HitKind, SearchHit, search_assignee, search_comment, search_find, search_issue, search_keyword,
@@ -39,6 +41,8 @@ pub use status::Status;
 pub use comment::StoredComment;
 #[doc(hidden)]
 pub use issue::StoredIssue;
+#[doc(hidden)]
+pub use member::StoredMember;
 #[doc(hidden)]
 pub use review::StoredReview;
 
@@ -67,6 +71,14 @@ pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
 /// See [`Error`].
 pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
     Review::ensure_schema(&open_store(repo))
+}
+
+/// Publish (or evolve) the `member` schema.
+///
+/// # Errors
+/// See [`Error`].
+pub fn ensure_member_schema(repo: &Repository) -> Result<ObjectId, Error> {
+    Member::ensure_schema(&open_store(repo))
 }
 
 /// Publish (or evolve) the `comment` schema.

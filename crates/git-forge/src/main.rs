@@ -12,7 +12,9 @@ use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table, pre
 use dialoguer::{
     Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select, theme::ColorfulTheme,
 };
-use gix_forge::{Comment, Entity, EntityOps, Issue, QueryValue, Review, ReviewTarget, Status};
+use gix_forge::{
+    Comment, Entity, EntityOps, Issue, Member, QueryValue, Review, ReviewTarget, Status,
+};
 use owo_colors::OwoColorize;
 
 #[derive(Parser)]
@@ -28,6 +30,8 @@ enum Command {
     Issue(IssueCommand),
     #[command(subcommand)]
     Review(ReviewCommand),
+    #[command(subcommand)]
+    Member(MemberCommand),
     #[command(subcommand)]
     Comment(CommentCommand),
     #[command(subcommand)]
@@ -132,6 +136,45 @@ struct ReviewSearchArgs {
     requester: Option<String>,
     #[arg(long)]
     keyword: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum MemberCommand {
+    #[command(alias = "new")]
+    Add(MemberAddArgs),
+    Edit(MemberEditArgs),
+    Show {
+        id: String,
+    },
+    #[command(visible_alias = "ls")]
+    List,
+    Log {
+        id: String,
+    },
+    Rm {
+        id: String,
+    },
+}
+
+#[derive(Args)]
+struct MemberAddArgs {
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["signing_key", "role"])]
+    interactive: bool,
+    #[arg(long = "signing-key")]
+    signing_key: Option<String>,
+    #[arg(long)]
+    role: Option<String>,
+}
+
+#[derive(Args)]
+struct MemberEditArgs {
+    id: String,
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["signing_key", "role"])]
+    interactive: bool,
+    #[arg(long = "signing-key")]
+    signing_key: Option<String>,
+    #[arg(long)]
+    role: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -283,6 +326,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Issue(command) => run_issue(&repo, command)?,
         Command::Review(command) => run_review(&repo, command)?,
+        Command::Member(command) => run_member(&repo, command)?,
         Command::Comment(command) => run_comment(&repo, command)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
@@ -393,6 +437,74 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     Ok(())
 }
 
+fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
+    match command {
+        MemberCommand::Add(args) => {
+            let interactive = resolve_interactive(
+                args.interactive,
+                args.signing_key.is_none() && args.role.is_none(),
+            )?;
+            let (signing_key, role) = if interactive {
+                (
+                    prompt_required_text("Signing key")?,
+                    prompt_required_text("Role")?,
+                )
+            } else {
+                (
+                    args.signing_key
+                        .context("--signing-key is required unless running interactively")?,
+                    args.role
+                        .context("--role is required unless running interactively")?,
+                )
+            };
+            let member = Member {
+                id: String::new(),
+                signing_key,
+                role,
+            };
+            println!("{}", member.create_in_repo(repo)?);
+        }
+        MemberCommand::Edit(args) => {
+            let id = resolve_member_show_id(repo, &args.id)?
+                .with_context(|| format!("no member {}", args.id))?;
+            let mut member =
+                Member::load_from_repo(repo, &id)?.with_context(|| format!("no member {id}"))?;
+            let no_args_supplied = args.signing_key.is_none() && args.role.is_none();
+            let interactive = resolve_interactive(args.interactive, no_args_supplied)?;
+            if interactive {
+                member.signing_key = prompt_text_with_default("Signing key", &member.signing_key)?;
+                member.role = prompt_text_with_default("Role", &member.role)?;
+            } else {
+                if no_args_supplied {
+                    bail!("--signing-key or --role is required unless running interactively");
+                }
+                if let Some(signing_key) = args.signing_key {
+                    member.signing_key = signing_key;
+                }
+                if let Some(role) = args.role {
+                    member.role = role;
+                }
+            }
+            println!("{}", member.save_in_repo(repo)?);
+        }
+        MemberCommand::Show { id } => {
+            let id =
+                resolve_member_show_id(repo, &id)?.with_context(|| format!("no member {id}"))?;
+            let member =
+                Member::load_from_repo(repo, &id)?.with_context(|| format!("no member {id}"))?;
+            print_member(&member);
+        }
+        MemberCommand::List => print_member_list(repo)?,
+        MemberCommand::Log { id } => print_log("member", &id, repo, Member::history(repo, &id)?)?,
+        MemberCommand::Rm { id } => {
+            if !Member::delete(repo, &id)? {
+                bail!("no member {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
     match command {
         CommentCommand::Add(args) => {
@@ -473,6 +585,10 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
     Ok(())
 }
 
+fn resolve_member_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
+    resolve_show_id("member", id, &Member::list(repo)?)
+}
+
 fn resolve_comment_subject_id(
     repo: &gix::Repository,
     kind: &str,
@@ -523,6 +639,15 @@ fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
             "{} {}",
             Review::KIND,
             gix_forge::ensure_review_schema(repo)?
+        );
+        installed = true;
+    }
+
+    if should_install(args.interactive, "member schema")? {
+        println!(
+            "{} {}",
+            Member::KIND,
+            gix_forge::ensure_member_schema(repo)?
         );
         installed = true;
     }
@@ -1138,6 +1263,18 @@ fn print_review_list(repo: &gix::Repository) -> Result<()> {
     Ok(())
 }
 
+fn print_member_list(repo: &gix::Repository) -> Result<()> {
+    let rows = entity_rows::<Member>(repo, |member| {
+        (
+            member.signing_key.clone(),
+            member.role.clone(),
+            "-".to_owned(),
+        )
+    })?;
+    print_entity_table("members", "SIGNING KEY", "ROLE", rows);
+    Ok(())
+}
+
 fn print_comment_list(repo: &gix::Repository) -> Result<()> {
     let rows = entity_rows::<Comment>(repo, |comment| {
         (
@@ -1295,6 +1432,19 @@ fn print_review(review: &Review) {
         title: None,
         meta,
         body: &review.body,
+    });
+}
+
+fn print_member(member: &Member) {
+    print_show_doc(ShowDoc {
+        kind: "member",
+        id: &member.id,
+        title: None,
+        meta: vec![
+            format!("signing key: {}", member.signing_key),
+            format!("role: {}", member.role),
+        ],
+        body: "",
     });
 }
 
