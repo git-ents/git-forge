@@ -162,27 +162,12 @@ struct CommentSearchArgs {
     keyword: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum CommentSubjectKind {
-    Issue,
-    Review,
-}
-
-impl CommentSubjectKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            CommentSubjectKind::Issue => Issue::KIND,
-            CommentSubjectKind::Review => Review::KIND,
-        }
-    }
-}
-
 #[derive(Args)]
 struct CommentAddArgs {
     #[arg(short = 'i', long = "interactive", conflicts_with_all = ["on", "subject", "author", "body"])]
     interactive: bool,
-    #[arg(long = "on", value_enum)]
-    on: Option<CommentSubjectKind>,
+    #[arg(long = "on")]
+    on: Option<String>,
     #[arg(long)]
     subject: Option<String>,
     #[arg(long)]
@@ -423,14 +408,15 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
             } else {
                 let kind = args
                     .on
+                    .as_deref()
                     .context("--on is required unless running interactively")?;
                 let subject_input = args
                     .subject
                     .context("--subject is required unless running interactively")?;
                 let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
-                    .with_context(|| format!("no {} {subject_input}", kind.as_str()))?;
+                    .with_context(|| format!("no {kind} {subject_input}"))?;
                 (
-                    kind,
+                    kind.to_owned(),
                     subject_id,
                     args.author
                         .context("--author is required unless running interactively")?,
@@ -438,7 +424,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
                         .context("--body is required unless running interactively")?,
                 )
             };
-            let id = Comment::create_under(repo, kind.as_str(), &subject_id, &author, &body, None)?;
+            let id = Comment::create_under(repo, &kind, &subject_id, &author, &body, None)?;
             println!("{id}");
         }
         CommentCommand::Edit(args) => {
@@ -489,12 +475,13 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
 
 fn resolve_comment_subject_id(
     repo: &gix::Repository,
-    kind: CommentSubjectKind,
+    kind: &str,
     input: &str,
 ) -> Result<Option<String>> {
     match kind {
-        CommentSubjectKind::Issue => resolve_issue_show_id(repo, input),
-        CommentSubjectKind::Review => resolve_review_show_id(repo, input),
+        Issue::KIND => resolve_issue_show_id(repo, input),
+        Review::KIND => resolve_review_show_id(repo, input),
+        _ => Ok(Some(input.to_owned())),
     }
 }
 
@@ -502,9 +489,7 @@ fn resolve_comment_show_id(repo: &gix::Repository, id: &str) -> Result<Option<St
     resolve_show_id("comment", id, &Comment::list(repo)?)
 }
 
-fn prompt_comment_fields(
-    repo: &gix::Repository,
-) -> Result<(CommentSubjectKind, String, String, String)> {
+fn prompt_comment_fields(repo: &gix::Repository) -> Result<(String, String, String, String)> {
     require_terminal_for_interactive()?;
     let kinds = ["issue", "review"];
     let choice = Select::with_theme(&interactive_theme())
@@ -513,12 +498,12 @@ fn prompt_comment_fields(
         .default(0)
         .interact()?;
     let kind = if choice == 0 {
-        CommentSubjectKind::Issue
+        Issue::KIND.to_owned()
     } else {
-        CommentSubjectKind::Review
+        Review::KIND.to_owned()
     };
     let subject_input = prompt_required_text(&format!("{} id", kinds[choice]))?;
-    let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
+    let subject_id = resolve_comment_subject_id(repo, &kind, &subject_input)?
         .with_context(|| format!("no {} {subject_input}", kinds[choice]))?;
     let author = prompt_required_text("Author")?;
     let body = prompt_body("")?;
