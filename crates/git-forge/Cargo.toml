@@ -7,6 +7,10 @@ edition = "2024"
 name = "git-forge"
 path = "src/main.rs"
 
+[[bin]]
+name = "git-forge-lsp"
+path = "src/bin/git-forge-lsp.rs"
+
 [dependencies]
 gix-forge = { path = "../gix-forge" }
 gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs", "interrupt", "revision"] }
@@ -16,6 +20,9 @@ chrono = "0.4"
 comfy-table = "7"
 owo-colors = "4"
 dialoguer = "0.11"
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+serde_json = "1"
 acdc-parser = { path = "../../vendor/acdc/acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
 acdc-converters-core = { path = "../../vendor/acdc/converters/core", default-features = false }
 acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", default-features = false, features = ["pre-spec-subs", "highlighting"] }
