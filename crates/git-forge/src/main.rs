@@ -10,10 +10,11 @@ use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use dialoguer::{
-    Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select, theme::ColorfulTheme,
+    Completion, Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select,
+    theme::ColorfulTheme,
 };
 use gix_forge::{
-    Comment, Entity, EntityOps, Issue, Member, QueryValue, Review, ReviewTarget, Status,
+    Comment, Entity, EntityOps, HitKind, Issue, Member, QueryValue, Review, ReviewTarget, Status,
 };
 use owo_colors::OwoColorize;
 
@@ -219,9 +220,6 @@ struct CommentAddArgs {
     body: Option<String>,
 }
 
-/// Shared by the raw `query` verb everywhere it appears (top-level `query
-/// run` and each entity's own `query`) -- one args shape, one implementation
-/// in [`run_query_args`], over the library's `query_goal`/`query_predicate`.
 #[derive(Args)]
 struct QueryArgs {
     #[arg(conflicts_with = "goal")]
@@ -420,7 +418,10 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 Issue::load_from_repo(repo, &id)?.with_context(|| format!("no issue {id}"))?;
             print_issue(&issue);
         }
-        IssueCommand::List => print_issue_list(repo)?,
+        IssueCommand::List => {
+            let ids = Issue::list(repo)?;
+            print_issue_list(repo, &ids)?;
+        }
         IssueCommand::Log { id } => print_log("issue", &id, repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
             if !Issue::delete(repo, &id)? {
@@ -430,7 +431,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
         IssueCommand::Search(args) => {
             let ids =
                 gix_forge::search_issue(repo, args.assignee.as_deref(), args.keyword.as_deref())?;
-            print_id_list("issues", &ids);
+            print_issue_list(repo, &ids)?;
         }
         IssueCommand::Query(args) => run_query_args(repo, args)?,
     }
@@ -566,7 +567,10 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
                 Comment::load_from_repo(repo, &id)?.with_context(|| format!("no comment {id}"))?;
             print_comment(&comment);
         }
-        CommentCommand::List => print_comment_list(repo)?,
+        CommentCommand::List => {
+            let ids = Comment::list(repo)?;
+            print_comment_list(repo, &ids)?;
+        }
         CommentCommand::Log { id } => {
             print_log("comment", &id, repo, Comment::history(repo, &id)?)?;
         }
@@ -578,7 +582,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
         CommentCommand::Search(args) => {
             let ids =
                 gix_forge::search_comment(repo, args.author.as_deref(), args.keyword.as_deref())?;
-            print_id_list("comments", &ids);
+            print_comment_list(repo, &ids)?;
         }
         CommentCommand::Query(args) => run_query_args(repo, args)?,
     }
@@ -686,7 +690,9 @@ fn resolve_interactive(explicit: bool, no_args_supplied: bool) -> Result<bool> {
 }
 
 fn interactive_theme() -> ColorfulTheme {
-    ColorfulTheme::default()
+    let mut theme = ColorfulTheme::default();
+    theme.unchecked_item_prefix = theme.unpicked_item_prefix.clone();
+    theme
 }
 
 fn prompt_optional_text(prompt: &str) -> Result<String> {
@@ -752,36 +758,31 @@ fn prompt_status(current: Status) -> Result<Status> {
     })
 }
 
-/// Pick zero or more values for a repeated field (labels, assignees, …). When
-/// `known` values exist (gathered from other entities already in the repo)
-/// they're offered as a multi-select picker; either way the user can also
-/// type in new, comma-separated values.
+struct ValueCompletion<'a> {
+    known: &'a [String],
+}
+
+impl Completion for ValueCompletion<'_> {
+    fn get(&self, input: &str) -> Option<String> {
+        let prefix_end = input.rfind(',').map_or(0, |index| index + 1);
+        let prefix = &input[..prefix_end];
+        let value = input[prefix_end..].trim();
+        self.known
+            .iter()
+            .find(|candidate| candidate.starts_with(value) && candidate != &value)
+            .map(|candidate| format!("{prefix}{candidate}"))
+    }
+}
+
 fn prompt_multi_values(label: &str, known: &[String]) -> Result<Vec<String>> {
     require_terminal_for_interactive()?;
-    let theme = interactive_theme();
-
-    let mut selected: Vec<String> = if known.is_empty() {
-        Vec::new()
-    } else {
-        MultiSelect::with_theme(&theme)
-            .with_prompt(format!("{label} (space to toggle, enter to confirm)"))
-            .items(known)
-            .interact()?
-            .into_iter()
-            .map(|index| known[index].clone())
-            .collect()
-    };
-
-    let extra: String = Input::with_theme(&theme)
-        .with_prompt(format!("Add {label} (comma-separated, optional)"))
+    let completion = ValueCompletion { known };
+    let value = Input::<String>::with_theme(&interactive_theme())
+        .with_prompt(format!("{label} (comma-separated, optional)"))
         .allow_empty(true)
+        .completion_with(&completion)
         .interact_text()?;
-    for value in parse_csv_input(&extra) {
-        if !selected.contains(&value) {
-            selected.push(value);
-        }
-    }
-    Ok(selected)
+    Ok(parse_csv_input(&value))
 }
 
 fn known_issue_values(
@@ -938,23 +939,19 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
         QueryCommand::Run(args) => run_query_args(repo, args)?,
         QueryCommand::Assignee { name } => {
             let ids = gix_forge::search_assignee(repo, &name)?;
-            print_id_list(&format!("issues assigned to {name}"), &ids);
+            print_issue_list(repo, &ids)?;
         }
         QueryCommand::Reviewer { name } => {
             let ids = gix_forge::search_reviewer(repo, &name)?;
-            print_id_list(&format!("reviews by reviewer {name}"), &ids);
+            print_review_list(repo, &ids)?;
         }
         QueryCommand::Requester { name } => {
             let ids = gix_forge::search_requester(repo, &name)?;
-            print_id_list(&format!("reviews by requester {name}"), &ids);
+            print_review_list(repo, &ids)?;
         }
         QueryCommand::Keyword { value } => {
             let hits = gix_forge::search_keyword(repo, &value)?;
-            let matches: Vec<String> = hits
-                .iter()
-                .map(|hit| format!("{} {}", hit.kind.as_str(), hit.id))
-                .collect();
-            print_bulleted_section(&format!("matches for \"{value}\""), &matches);
+            print_search_views(repo, &hits)?;
         }
         QueryCommand::Find {
             assignee,
@@ -977,11 +974,7 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                 requester.as_deref(),
                 needle.as_deref(),
             )?;
-            let matches: Vec<String> = hits
-                .iter()
-                .map(|hit| format!("{} {}", hit.kind.as_str(), hit.id))
-                .collect();
-            print_bulleted_section("query matches", &matches);
+            print_search_views(repo, &hits)?;
         }
     }
     Ok(())
@@ -1131,7 +1124,10 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 Review::load_from_repo(repo, &id)?.with_context(|| format!("no review {id}"))?;
             print_review(&review);
         }
-        ReviewCommand::List => print_review_list(repo)?,
+        ReviewCommand::List => {
+            let ids = Review::list(repo)?;
+            print_review_list(repo, &ids)?;
+        }
         ReviewCommand::Log { id } => print_log("review", &id, repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
             if !Review::delete(repo, &id)? {
@@ -1145,7 +1141,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 args.requester.as_deref(),
                 args.keyword.as_deref(),
             )?;
-            print_id_list("reviews", &ids);
+            print_review_list(repo, &ids)?;
         }
         ReviewCommand::Query(args) => run_query_args(repo, args)?,
     }
@@ -1211,8 +1207,28 @@ fn format_status(status: &str) -> String {
     }
 }
 
-fn print_id_list(title: &str, ids: &[String]) {
-    print_bulleted_section(title, ids);
+fn print_search_views(repo: &gix::Repository, hits: &[gix_forge::SearchHit]) -> Result<()> {
+    let issue_ids: Vec<String> = hits
+        .iter()
+        .filter(|hit| hit.kind == HitKind::Issue)
+        .map(|hit| hit.id.clone())
+        .collect();
+    let review_ids: Vec<String> = hits
+        .iter()
+        .filter(|hit| hit.kind == HitKind::Review)
+        .map(|hit| hit.id.clone())
+        .collect();
+    if issue_ids.is_empty() && review_ids.is_empty() {
+        println!("No matches");
+        return Ok(());
+    }
+    if !issue_ids.is_empty() {
+        print_issue_list(repo, &issue_ids)?;
+    }
+    if !review_ids.is_empty() {
+        print_review_list(repo, &review_ids)?;
+    }
+    Ok(())
 }
 
 /// Every entity's own `list` command loads each id and formats a table row
@@ -1220,11 +1236,12 @@ fn print_id_list(title: &str, ids: &[String]) {
 /// kind (its two non-status columns, and its status if it has one).
 fn entity_rows<T: EntityOps>(
     repo: &gix::Repository,
+    ids: &[String],
     to_row: impl Fn(&T) -> (String, String, String),
 ) -> Result<Vec<Vec<String>>> {
     let mut rows = Vec::new();
-    for id in T::list(repo)? {
-        let Some(entity) = T::load_from_repo(repo, &id)? else {
+    for id in ids {
+        let Some(entity) = T::load_from_repo(repo, id)? else {
             continue;
         };
         let (col2, col3, status) = to_row(&entity);
@@ -1233,14 +1250,14 @@ fn entity_rows<T: EntityOps>(
             col2,
             col3,
             status,
-            updated_relative(repo, T::history(repo, &id)?)?,
+            updated_relative(repo, T::history(repo, id)?)?,
         ]);
     }
     Ok(rows)
 }
 
-fn print_issue_list(repo: &gix::Repository) -> Result<()> {
-    let rows = entity_rows::<Issue>(repo, |issue| {
+fn print_issue_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
+    let rows = entity_rows::<Issue>(repo, ids, |issue| {
         (
             title_or_untitled(&issue.title).to_owned(),
             join_values_or_none(&issue.labels),
@@ -1251,8 +1268,8 @@ fn print_issue_list(repo: &gix::Repository) -> Result<()> {
     Ok(())
 }
 
-fn print_review_list(repo: &gix::Repository) -> Result<()> {
-    let rows = entity_rows::<Review>(repo, |review| {
+fn print_review_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
+    let rows = entity_rows::<Review>(repo, ids, |review| {
         (
             review.target.to_string(),
             join_values_or_none(&review.reviewers),
@@ -1264,7 +1281,8 @@ fn print_review_list(repo: &gix::Repository) -> Result<()> {
 }
 
 fn print_member_list(repo: &gix::Repository) -> Result<()> {
-    let rows = entity_rows::<Member>(repo, |member| {
+    let ids = Member::list(repo)?;
+    let rows = entity_rows::<Member>(repo, &ids, |member| {
         (
             member.signing_key.clone(),
             member.role.clone(),
@@ -1275,8 +1293,8 @@ fn print_member_list(repo: &gix::Repository) -> Result<()> {
     Ok(())
 }
 
-fn print_comment_list(repo: &gix::Repository) -> Result<()> {
-    let rows = entity_rows::<Comment>(repo, |comment| {
+fn print_comment_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
+    let rows = entity_rows::<Comment>(repo, ids, |comment| {
         (
             comment.subject.clone(),
             comment.author.clone(),
@@ -1350,17 +1368,6 @@ fn relative_time_from_unix_seconds(seconds: i64) -> Option<String> {
 
     let plural = if value == 1 { "" } else { "s" };
     Some(format!("about {value} {unit}{plural} ago"))
-}
-
-fn print_bulleted_section(title: &str, items: &[String]) {
-    println!("{}:", color_field_name(title));
-    if items.is_empty() {
-        println!("  {}", color_empty_marker("(none)"));
-        return;
-    }
-    for item in items {
-        println!("  - {item}");
-    }
 }
 
 fn print_log(
