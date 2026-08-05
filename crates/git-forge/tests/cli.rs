@@ -106,9 +106,10 @@ fn run_with_pty_env(
     )
 }
 
-fn bulleted_items(out: &str) -> Vec<String> {
+fn table_ids(out: &str) -> Vec<String> {
     out.lines()
-        .filter_map(|line| line.strip_prefix("  - "))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|id| id.starts_with('#'))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -792,18 +793,21 @@ fn comment_add_show_list_edit_log_search_and_remove() {
 
     let (out, err, ok) = run(path, &["comment", "search", "--author", "alice"]);
     assert!(ok, "comment search by author failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&comment_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&comment_id))]
+    );
 
     let (out, err, ok) = run(path, &["comment", "search", "--author", "nobody"]);
     assert!(ok, "comment search by author failed: {err}");
-    assert!(
-        bulleted_items(&out).is_empty(),
-        "comment search output: {out}"
-    );
+    assert!(table_ids(&out).is_empty(), "comment search output: {out}");
 
     let (out, err, ok) = run(path, &["comment", "search", "--keyword", "edited"]);
     assert!(ok, "comment search by keyword failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![comment_id.clone()]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&comment_id))]
+    );
 
     let rm_args = vec!["comment", "rm", comment_id.as_str()];
     let (_, err, ok) = run(path, &rm_args);
@@ -842,11 +846,17 @@ fn issue_search_filters_by_assignee_and_keyword() {
 
     let (out, err, ok) = run(path, &["issue", "search", "--assignee", "alice"]);
     assert!(ok, "issue search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&matching_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&matching_id))]
+    );
 
     let (out, err, ok) = run(path, &["issue", "search", "--keyword", "blocker"]);
     assert!(ok, "issue search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&matching_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&matching_id))]
+    );
 
     let (out, err, ok) = run(
         path,
@@ -860,10 +870,7 @@ fn issue_search_filters_by_assignee_and_keyword() {
         ],
     );
     assert!(ok, "issue search failed: {err}");
-    assert!(
-        bulleted_items(&out).is_empty(),
-        "issue search output: {out}"
-    );
+    assert!(table_ids(&out).is_empty(), "issue search output: {out}");
 }
 
 #[test]
@@ -893,22 +900,28 @@ fn review_search_filters_by_reviewer_requester_and_keyword() {
 
     let (out, err, ok) = run(path, &["review", "search", "--reviewer", "carol"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
+    );
 
     let (out, err, ok) = run(path, &["review", "search", "--requester", "dave"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
+    );
 
     let (out, err, ok) = run(path, &["review", "search", "--keyword", "reviewed"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
+    );
 
     let (out, err, ok) = run(path, &["review", "search", "--reviewer", "nobody"]);
     assert!(ok, "review search failed: {err}");
-    assert!(
-        bulleted_items(&out).is_empty(),
-        "review search output: {out}"
-    );
+    assert!(table_ids(&out).is_empty(), "review search output: {out}");
 }
 
 #[test]
@@ -1019,42 +1032,42 @@ fn query_sugar_filters_by_people_and_keyword() {
 
     let (out, err, ok) = run(path, &["query", "assignee", "alice"]);
     assert!(ok, "query assignee failed: {err}");
-    assert!(
-        out.contains("issues assigned to alice:"),
-        "query assignee output: {out}"
-    );
-    assert_eq!(bulleted_items(&out), vec![issue_id.clone()]);
+    assert!(out.contains("ID"), "query assignee output: {out}");
+    assert_eq!(table_ids(&out), vec![format!("#{}", display_id(&issue_id))]);
 
     let (out, err, ok) = run(path, &["query", "reviewer", "carol"]);
     assert!(ok, "query reviewer failed: {err}");
-    assert!(
-        out.contains("reviews by reviewer carol:"),
-        "query reviewer output: {out}"
+    assert!(out.contains("ID"), "query reviewer output: {out}");
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
     );
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
 
     let (out, err, ok) = run(path, &["query", "requester", "dave"]);
     assert!(ok, "query requester failed: {err}");
-    assert!(
-        out.contains("reviews by requester dave:"),
-        "query requester output: {out}"
+    assert!(out.contains("ID"), "query requester output: {out}");
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
     );
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
 
     let (out, err, ok) = run(path, &["query", "keyword", "release"]);
     assert!(ok, "query keyword failed: {err}");
-    assert!(
-        out.contains(&format!("  - issue {issue_id}")),
-        "query keyword output: {out}"
-    );
-    assert!(
-        out.contains(&format!("  - review {review_id}")),
+    assert_eq!(
+        table_ids(&out),
+        vec![
+            format!("#{}", display_id(&issue_id)),
+            format!("#{}", display_id(&review_id)),
+        ],
         "query keyword output: {out}"
     );
 
     let (out, err, ok) = run(path, &["query", "title", "reviewed"]);
     assert!(ok, "query title alias failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![format!("review {review_id}")]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
+    );
 
     let (out, err, ok) = run(
         path,
@@ -1068,7 +1081,7 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "query find issue filter failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![format!("issue {issue_id}")]);
+    assert_eq!(table_ids(&out), vec![format!("#{}", display_id(&issue_id))]);
 
     let (out, err, ok) = run(
         path,
@@ -1084,7 +1097,10 @@ fn query_sugar_filters_by_people_and_keyword() {
         ],
     );
     assert!(ok, "query find review filter failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![format!("review {review_id}")]);
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&review_id))]
+    );
 
     let (_, err, ok) = run(path, &["query", "find"]);
     assert!(!ok, "query find without filters should fail");
@@ -1187,7 +1203,7 @@ proptest! {
             let matches_kind_specific = !use_reviewer && !use_requester;
             let matches_text = !use_text_filter || body.contains("release");
             if matches_assignee && matches_kind_specific && matches_text {
-                expected.push(format!("issue {id}"));
+                expected.push(format!("#{id}"));
             }
         }
 
@@ -1197,11 +1213,11 @@ proptest! {
             let matches_requester = !use_requester || *requester == "dave";
             let matches_text = !use_text_filter || body.contains("release");
             if matches_assignee && matches_reviewer && matches_requester && matches_text {
-                expected.push(format!("review {id}"));
+                expected.push(format!("#{id}"));
             }
         }
 
-        let got = bulleted_items(&out);
+        let got = table_ids(&out);
         let oracle = "oracle: issues where assignee/alice if set, no reviewer/requester filters, text has release if set; reviews where no assignee filter, reviewer/requester match if set, text has release if set";
         prop_assert_eq!(
             got,
