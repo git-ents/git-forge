@@ -15,6 +15,12 @@ pub enum Error {
     /// Failed storing or checking built-in query rules.
     #[error("failed to install built-in query rules: {0}")]
     QueryRules(String),
+    /// Failed changing a repository reference during uninstall.
+    #[error("failed to uninstall forge data: {0}")]
+    Uninstall(String),
+    /// Forge data is still present and must be removed first.
+    #[error("cannot uninstall forge schemas while {0} data exists")]
+    DataPresent(String),
     /// Failed capturing a `gix-anchor` binding.
     #[error(transparent)]
     Anchor(#[from] gix_anchor::Error),

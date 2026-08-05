@@ -194,6 +194,22 @@ fn install_publishes_forge_schemas() {
 }
 
 #[test]
+fn uninstall_removes_forge_schemas() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run(dir.path(), &["install"]);
+    assert!(ok, "install failed: {err}");
+
+    let (out, err, ok) = run(dir.path(), &["uninstall"]);
+    assert!(ok, "uninstall failed: {err}");
+    assert!(out.contains("forge uninstalled"), "uninstall output: {out}");
+
+    let (_, err, ok) = run(dir.path(), &["uninstall"]);
+    assert!(ok, "second uninstall failed: {err}");
+}
+
+#[test]
 fn issue_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

@@ -38,10 +38,17 @@ enum Command {
     #[command(subcommand)]
     Query(QueryCommand),
     Install(InstallArgs),
+    Uninstall(UninstallArgs),
 }
 
 #[derive(Args)]
 struct InstallArgs {
+    #[arg(short = 'i', long = "interactive")]
+    interactive: bool,
+}
+
+#[derive(Args)]
+struct UninstallArgs {
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
 }
@@ -328,6 +335,7 @@ fn main() -> Result<()> {
         Command::Comment(command) => run_comment(&repo, command)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
+        Command::Uninstall(args) => run_uninstall(&repo, args)?,
     }
 
     Ok(())
@@ -669,6 +677,14 @@ fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_uninstall(repo: &gix::Repository, args: UninstallArgs) -> Result<()> {
+    if should_uninstall(args.interactive)? {
+        gix_forge::uninstall(repo)?;
+        println!("forge uninstalled");
+    }
+    Ok(())
+}
+
 fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     if !interactive {
         return Ok(true);
@@ -678,6 +694,18 @@ fn should_install(interactive: bool, prompt: &str) -> Result<bool> {
     Ok(Confirm::with_theme(&interactive_theme())
         .with_prompt(format!("install {prompt}?"))
         .default(true)
+        .interact()?)
+}
+
+fn should_uninstall(interactive: bool) -> Result<bool> {
+    if !interactive {
+        return Ok(true);
+    }
+    require_terminal_for_interactive()?;
+
+    Ok(Confirm::with_theme(&interactive_theme())
+        .with_prompt("uninstall forge schemas and query rules?")
+        .default(false)
         .interact()?)
 }
 

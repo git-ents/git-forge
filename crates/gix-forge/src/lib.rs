@@ -20,7 +20,7 @@ mod search;
 mod status;
 
 use gix::{ObjectId, Repository};
-use gix_store::{Layout, RefPrefix, RepoStore};
+use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use comment::{Comment, Commentable, binding_genesis};
 pub use entity::{Entity, EntityOps};
@@ -101,6 +101,55 @@ pub fn install_builtin_query_rules(repo: &Repository) -> Result<(), Error> {
         .map_err(|e| Error::QueryRules(e.to_string()))?;
     gix_query::checked_program_with(repo, &ForgeFacts::registry())?;
     Ok(())
+}
+
+/// Remove forge schemas and the built-in query rules from an empty forge.
+///
+/// # Errors
+/// Returns an error if any forge entity remains or a reference cannot be removed.
+pub fn uninstall(repo: &Repository) -> Result<(), Error> {
+    let store = open_store(repo);
+    for kind in [Issue::KIND, Review::KIND, Member::KIND, Comment::KIND] {
+        let kind = RefSegment::new(kind).expect("built-in kind is valid");
+        let kind_name = kind.to_string();
+        if !store.dynamic(kind).list()?.is_empty() {
+            return Err(Error::DataPresent(kind_name));
+        }
+    }
+
+    let rules = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
+    let has_review_rule = rules
+        .get("review")
+        .map_err(|e| Error::QueryRules(e.to_string()))?
+        .is_some();
+    if has_review_rule {
+        rules
+            .delete("review")
+            .map_err(|e| Error::QueryRules(e.to_string()))?;
+    }
+
+    for kind in [
+        Issue::KIND,
+        Review::KIND,
+        Member::KIND,
+        Comment::KIND,
+        "rules",
+    ] {
+        delete_reference_if_present(repo, &format!("refs/schema/{kind}"))?;
+    }
+    Ok(())
+}
+
+fn delete_reference_if_present(repo: &Repository, name: &str) -> Result<(), Error> {
+    let Some(reference) = repo
+        .try_find_reference(name)
+        .map_err(|e| Error::Uninstall(e.to_string()))?
+    else {
+        return Ok(());
+    };
+    reference
+        .delete()
+        .map_err(|e| Error::Uninstall(e.to_string()))
 }
 
 /// Run `goal`, selecting `select`'s columns, against every host predicate
