@@ -1313,7 +1313,7 @@ fn print_issue_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
         )
     })?;
     if rows.is_empty() && !ids.is_empty() {
-        println!("No open issues");
+        println!("No unresolved issues");
         return Ok(());
     }
     print_entity_table("issues", "TITLE", "LABELS", rows);
@@ -1329,7 +1329,7 @@ fn print_review_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
         )
     })?;
     if rows.is_empty() && !ids.is_empty() {
-        println!("No open reviews");
+        println!("No unresolved reviews");
         return Ok(());
     }
     print_entity_table("reviews", "TARGET", "REVIEWERS", rows);
