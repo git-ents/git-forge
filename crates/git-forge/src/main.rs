@@ -1290,6 +1290,9 @@ fn entity_rows<T: EntityOps>(
             continue;
         };
         let (col2, col3, status) = to_row(&entity);
+        if matches!(Status::parse(&status), Some(Status::Closed)) {
+            continue;
+        }
         rows.push(vec![
             display_entity_id(id),
             col2,
