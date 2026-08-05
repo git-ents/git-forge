@@ -26,7 +26,17 @@ impl Backend {
         let Binding::Position(anchor) = comment.binding.as_ref()? else {
             return None;
         };
-        let path = self.root.join(&anchor.identity.path);
+        let relative = Path::new(&anchor.identity.path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return None;
+        }
+        let root = self.root.canonicalize().ok()?;
+        let path = root.join(relative).canonicalize().ok()?;
+        path.strip_prefix(&root).ok()?;
         let contents = std::fs::read(&path).ok()?;
         let start = position_at_offset(&contents, anchor.identity.span.start)?;
         let end = position_at_offset(&contents, anchor.identity.span.end)?;
@@ -185,7 +195,11 @@ fn position_at_offset(contents: &[u8], offset: u64) -> Option<Position> {
     let offset = usize::try_from(offset).ok()?;
     let prefix = contents.get(..offset)?;
     let line = prefix.iter().filter(|&&byte| byte == b'\n').count();
-    let character = prefix.rsplit(|&byte| byte == b'\n').next()?.len();
+    let line_prefix = prefix.rsplit(|&byte| byte == b'\n').next()?;
+    let character = std::str::from_utf8(line_prefix)
+        .ok()?
+        .encode_utf16()
+        .count();
     Some(Position {
         line: u32::try_from(line).ok()?,
         character: u32::try_from(character).ok()?,

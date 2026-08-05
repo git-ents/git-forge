@@ -94,11 +94,17 @@ impl ReviewTarget {
         let invalid = || Error::InvalidTarget(value.to_owned());
 
         if let Some(rest) = value.strip_prefix("commit:") {
+            if rest.is_empty() {
+                return Err(invalid());
+            }
             return Ok(ReviewTarget::Commit {
                 oid: rest.to_owned(),
             });
         }
         if let Some(rest) = value.strip_prefix("tree:") {
+            if rest.is_empty() {
+                return Err(invalid());
+            }
             return Ok(ReviewTarget::Tree {
                 oid: rest.to_owned(),
             });
@@ -118,6 +124,9 @@ impl ReviewTarget {
         if let Some(rest) = value.strip_prefix("commit-range:") {
             let (start, end) = split_two(rest).ok_or_else(invalid)?;
             return Ok(ReviewTarget::CommitRange { start, end });
+        }
+        if value.is_empty() {
+            return Err(invalid());
         }
         Ok(ReviewTarget::Commit {
             oid: value.to_owned(),
