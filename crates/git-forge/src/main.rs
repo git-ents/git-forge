@@ -1312,6 +1312,10 @@ fn print_issue_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
             issue.status.clone(),
         )
     })?;
+    if rows.is_empty() && !ids.is_empty() {
+        println!("No open issues");
+        return Ok(());
+    }
     print_entity_table("issues", "TITLE", "LABELS", rows);
     Ok(())
 }
@@ -1324,6 +1328,10 @@ fn print_review_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
             review.status.clone(),
         )
     })?;
+    if rows.is_empty() && !ids.is_empty() {
+        println!("No open reviews");
+        return Ok(());
+    }
     print_entity_table("reviews", "TARGET", "REVIEWERS", rows);
     Ok(())
 }
