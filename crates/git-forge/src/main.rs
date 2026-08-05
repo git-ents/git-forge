@@ -1207,9 +1207,26 @@ fn resolve_show_id(kind: &str, input: &str, ids: &[String]) -> Result<Option<Str
 }
 
 fn emphasize_min_unique_prefix(id: &str, ids: &[String]) -> String {
-    let min_len = min_unique_prefix_len(id, ids);
-    let (prefix, suffix) = id.split_at(min_len);
+    let display_id = shorten_entity_id(id);
+    let min_len = min_unique_prefix_len(id, ids).min(display_id.len());
+    let (prefix, suffix) = display_id.split_at(min_len);
     format!("**{prefix}**{suffix}")
+}
+
+fn shorten_entity_id(id: &str) -> &str {
+    let id = id.rsplit('/').next().unwrap_or(id);
+    id.get(..8).unwrap_or(id)
+}
+
+fn display_entity_id(id: &str) -> String {
+    format!("#{}", shorten_entity_id(id))
+}
+
+fn display_entity_reference(reference: &str) -> String {
+    let Some((kind, id)) = reference.split_once(':') else {
+        return reference.to_owned();
+    };
+    format!("{kind}:{}", shorten_entity_id(id))
 }
 
 fn min_unique_prefix_len(id: &str, ids: &[String]) -> usize {
@@ -1274,7 +1291,7 @@ fn entity_rows<T: EntityOps>(
         };
         let (col2, col3, status) = to_row(&entity);
         rows.push(vec![
-            format!("#{id}"),
+            display_entity_id(id),
             col2,
             col3,
             status,
@@ -1324,7 +1341,7 @@ fn print_member_list(repo: &gix::Repository) -> Result<()> {
 fn print_comment_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
     let rows = entity_rows::<Comment>(repo, ids, |comment| {
         (
-            comment.subject.clone(),
+            display_entity_reference(&comment.subject),
             comment.author.clone(),
             "-".to_owned(),
         )
@@ -1408,7 +1425,7 @@ fn print_log(
         "{} {} {}:",
         color_heading(kind),
         color_field_name("history"),
-        color_id(id)
+        color_id(&display_entity_id(id))
     );
     if commits.is_empty() {
         println!("  {}", color_empty_marker("(none)"));
@@ -1485,7 +1502,7 @@ fn print_member(member: &Member) {
 
 fn print_comment(comment: &Comment) {
     let mut meta = vec![
-        format!("subject: {}", comment.subject),
+        format!("subject: {}", display_entity_reference(&comment.subject)),
         format!("author: {}", comment.author),
     ];
     if let Some(edit) = &comment.edit {
@@ -1514,10 +1531,10 @@ fn print_show_doc(doc: ShowDoc<'_>) {
         println!(
             "{} {}",
             title_or_untitled(title).bold(),
-            format!("#{}", doc.id).yellow()
+            display_entity_id(doc.id).yellow()
         );
     } else {
-        println!("{} {}", doc.kind.bold(), doc.id.yellow());
+        println!("{} {}", doc.kind.bold(), display_entity_id(doc.id).yellow());
     }
 
     if !doc.meta.is_empty() {

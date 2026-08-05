@@ -138,6 +138,10 @@ fn created_id(out: &str) -> String {
     out.lines().next().unwrap_or_default().trim().to_owned()
 }
 
+fn display_id(id: &str) -> String {
+    id.rsplit('/').next().unwrap()[..8].to_owned()
+}
+
 fn put_issue(dir: &Path, id: &str, body: &str) {
     let repo = gix::open(dir).unwrap();
     let issue = Issue {
@@ -252,7 +256,7 @@ fn issue_new_show_list_log_and_remove() {
     assert!(out.contains("ID"), "issue ls output: {out}");
     assert!(out.contains("TITLE"), "issue ls output: {out}");
     assert!(
-        out.contains(&format!("#{issue_id}")),
+        out.contains(&format!("#{}", display_id(&issue_id))),
         "issue ls output: {out}"
     );
 
@@ -270,7 +274,7 @@ fn issue_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &log_args);
     assert!(ok, "issue log failed: {err}");
     assert!(
-        out.contains(&format!("issue history {issue_id}:")),
+        out.contains(&format!("issue history #{}:", display_id(&issue_id))),
         "issue log output: {out}"
     );
     let lines: Vec<&str> = out.lines().collect();
@@ -549,7 +553,10 @@ fn review_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "review show failed: {err}");
     assert!(out.contains("review"), "review show output: {out}");
-    assert!(out.contains(&review_id), "review show output: {out}");
+    assert!(
+        out.contains(&format!("#{}", display_id(&review_id))),
+        "review show output: {out}"
+    );
     assert!(out.contains("Open"), "review show output: {out}");
     assert!(out.contains("looks good"), "review show output: {out}");
     assert!(out.contains("carol"), "review show output: {out}");
@@ -561,7 +568,7 @@ fn review_new_show_list_log_and_remove() {
     assert!(out.contains("ID"), "review ls output: {out}");
     assert!(out.contains("TARGET"), "review ls output: {out}");
     assert!(
-        out.contains(&format!("#{review_id}")),
+        out.contains(&format!("#{}", display_id(&review_id))),
         "review ls output: {out}"
     );
 
@@ -588,7 +595,7 @@ fn review_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &log_args);
     assert!(ok, "review log failed: {err}");
     assert!(
-        out.contains(&format!("review history {review_id}:")),
+        out.contains(&format!("review history #{}:", display_id(&review_id))),
         "review log output: {out}"
     );
     let lines: Vec<&str> = out.lines().collect();
@@ -744,7 +751,7 @@ fn comment_add_show_list_edit_log_search_and_remove() {
     assert!(out.contains("first comment"), "comment show output: {out}");
     assert!(out.contains("alice"), "comment show output: {out}");
     assert!(
-        out.contains(&format!("issue:{issue_id}")),
+        out.contains(&format!("issue:{}", display_id(&issue_id))),
         "comment show output: {out}"
     );
 
@@ -753,7 +760,7 @@ fn comment_add_show_list_edit_log_search_and_remove() {
     assert!(out.contains("SUBJECT"), "comment ls output: {out}");
     assert!(out.contains("AUTHOR"), "comment ls output: {out}");
     assert!(
-        out.contains(&format!("#{comment_id}")),
+        out.contains(&format!("#{}", display_id(&comment_id))),
         "comment ls output: {out}"
     );
 
@@ -777,7 +784,7 @@ fn comment_add_show_list_edit_log_search_and_remove() {
     let (out, err, ok) = run(path, &log_args);
     assert!(ok, "comment log failed: {err}");
     assert!(
-        out.contains(&format!("comment history {comment_id}:")),
+        out.contains(&format!("comment history #{}:", display_id(&comment_id))),
         "comment log output: {out}"
     );
     let lines: Vec<&str> = out.lines().collect();
@@ -785,7 +792,7 @@ fn comment_add_show_list_edit_log_search_and_remove() {
 
     let (out, err, ok) = run(path, &["comment", "search", "--author", "alice"]);
     assert!(ok, "comment search by author failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![comment_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&comment_id)]);
 
     let (out, err, ok) = run(path, &["comment", "search", "--author", "nobody"]);
     assert!(ok, "comment search by author failed: {err}");
@@ -835,11 +842,11 @@ fn issue_search_filters_by_assignee_and_keyword() {
 
     let (out, err, ok) = run(path, &["issue", "search", "--assignee", "alice"]);
     assert!(ok, "issue search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![matching_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&matching_id)]);
 
     let (out, err, ok) = run(path, &["issue", "search", "--keyword", "blocker"]);
     assert!(ok, "issue search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![matching_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&matching_id)]);
 
     let (out, err, ok) = run(
         path,
@@ -886,15 +893,15 @@ fn review_search_filters_by_reviewer_requester_and_keyword() {
 
     let (out, err, ok) = run(path, &["review", "search", "--reviewer", "carol"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
 
     let (out, err, ok) = run(path, &["review", "search", "--requester", "dave"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
 
     let (out, err, ok) = run(path, &["review", "search", "--keyword", "reviewed"]);
     assert!(ok, "review search failed: {err}");
-    assert_eq!(bulleted_items(&out), vec![review_id.clone()]);
+    assert_eq!(bulleted_items(&out), vec![display_id(&review_id)]);
 
     let (out, err, ok) = run(path, &["review", "search", "--reviewer", "nobody"]);
     assert!(ok, "review search failed: {err}");
