@@ -1,4 +1,5 @@
 mod dashboard;
+mod files;
 mod issues;
 mod members;
 mod query;

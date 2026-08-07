@@ -7,6 +7,7 @@ use topcoat::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Dashboard,
+    Files,
     Issues,
     Reviews,
     Members,
@@ -14,8 +15,9 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Dashboard,
+        Self::Files,
         Self::Issues,
         Self::Reviews,
         Self::Members,
@@ -25,6 +27,7 @@ impl Tab {
     const fn label(self) -> &'static str {
         match self {
             Self::Dashboard => "Dashboard",
+            Self::Files => "Files",
             Self::Issues => "Issues",
             Self::Reviews => "Reviews",
             Self::Members => "Members",
@@ -35,6 +38,7 @@ impl Tab {
     const fn icon(self) -> &'static str {
         match self {
             Self::Dashboard => "⌂",
+            Self::Files => "▤",
             Self::Issues => "!",
             Self::Reviews => "✓",
             Self::Members => "●",
@@ -45,6 +49,7 @@ impl Tab {
     const fn href(self) -> &'static str {
         match self {
             Self::Dashboard => "/",
+            Self::Files => "/tree",
             Self::Issues => "/issues",
             Self::Reviews => "/reviews",
             Self::Members => "/members",
