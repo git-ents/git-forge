@@ -156,7 +156,7 @@ impl Server {
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(error) => panic!("waiting for git-forge UI URL: {error}"),
             };
-            if let Some(port) = line.strip_prefix("http://127.0.0.1:") {
+            if let Some(port) = line.strip_prefix("https://127.0.0.1:") {
                 return format!("127.0.0.1:{port}").parse().unwrap_or_else(|error| {
                     panic!("malformed git-forge UI URL {line:?}: {error}")
                 });

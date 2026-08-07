@@ -65,6 +65,8 @@ struct UiArgs {
     #[arg(long)]
     detach: bool,
     #[arg(long)]
+    open: bool,
+    #[arg(long)]
     port: Option<u16>,
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
@@ -368,6 +370,7 @@ fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
 
     let repo_path = repo.path().to_owned();
     let host = args.host;
+    let open = args.open;
     let port = args.port;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -386,7 +389,11 @@ fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
             .context("failed to determine the UI listener address")?
             .port();
 
-        println!("{}", ui_url(&host, port));
+        let url = ui_url(&host, port);
+        println!("{url}");
+        if open {
+            open_url(&url)?;
+        }
         topcoat::serve(listener, router)
             .await
             .context("the UI server failed")?;
@@ -402,7 +409,33 @@ fn ui_url(host: &str, port: u16) -> String {
     } else {
         host.to_owned()
     };
-    format!("http://{host}:{port}")
+    format!("https://{host}:{port}")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+fn open_url(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    command.arg(url);
+    let status = command.status().context("failed to open the UI URL")?;
+    if !status.success() {
+        bail!("failed to open the UI URL: {url}");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn open_url(_url: &str) -> Result<()> {
+    bail!("opening UI URLs is unsupported on this platform");
 }
 
 #[cfg(unix)]
@@ -428,7 +461,11 @@ fn run_ui_detached(repo: &gix::Repository, args: UiArgs) -> Result<()> {
         .arg("--host")
         .arg(&args.host)
         .arg("--port")
-        .arg(port.to_string())
+        .arg(port.to_string());
+    if args.open {
+        command.arg("--open");
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
