@@ -149,6 +149,42 @@ th { color: var(--color-text-muted); font-size: .75rem; text-transform: uppercas
 .code-view .arb-punctuation, .code-view .arb-escape { color: var(--color-text-muted); }
 .code-view .arb-error { color: var(--color-danger); text-decoration: underline wavy; text-decoration-thickness: 1px; }
 
+.tree-panel { min-width: 0; }
+.breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin-bottom: 1rem; padding-bottom: .75rem; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .85rem; }
+.breadcrumbs a { overflow-wrap: anywhere; }
+.breadcrumbs a:hover { color: var(--color-accent); }
+.breadcrumbs a + a::before { content: '/'; margin-right: .5rem; color: var(--color-text-subtle); }
+.file-list { margin-top: 1rem; }
+.file-list .entity-link { min-width: 0; flex-wrap: wrap; }
+.file-list .entity-link > span { min-width: 0; }
+.file-list .entity-link > span:last-child { overflow-wrap: anywhere; text-align: right; }
+.view-toggle { display: flex; flex-wrap: wrap; gap: .25rem; width: fit-content; max-width: 100%; margin: 1rem 0; padding: .25rem; border: 1px solid var(--color-border); border-radius: .45rem; background: var(--color-surface-muted); }
+.view-toggle a { padding: .35rem .65rem; border-radius: .3rem; color: var(--color-text-muted); font-size: .8rem; font-weight: 700; }
+.view-toggle a:hover, .view-toggle a:focus-visible { background: var(--color-surface); color: var(--color-accent); }
+.source-view { max-width: 100%; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--color-border); border-radius: .7rem; background: var(--color-code-bg); color: var(--color-code-text); font: .85rem/1.65 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; tab-size: 4; white-space: pre; }
+.source-view code { font: inherit; }
+.rendered-file { min-width: 0; max-width: 100%; color: var(--color-text); line-height: 1.7; overflow-wrap: anywhere; }
+.rendered-file > :first-child { margin-top: 0; }
+.rendered-file > :last-child { margin-bottom: 0; }
+.rendered-file h1, .rendered-file h2, .rendered-file h3, .rendered-file h4, .rendered-file h5, .rendered-file h6 { color: var(--color-text); font-family: Lora, Georgia, serif; line-height: 1.25; }
+.rendered-file h1 { margin-bottom: .75rem; font-size: 1.8rem; }
+.rendered-file h2 { margin: 1.75rem 0 .6rem; font-size: 1.35rem; }
+.rendered-file h3, .rendered-file h4, .rendered-file h5, .rendered-file h6 { margin: 1.35rem 0 .45rem; font-size: 1.05rem; }
+.rendered-file p, .rendered-file ul, .rendered-file ol { margin: 0 0 1rem; }
+.rendered-file ul, .rendered-file ol { padding-left: 1.5rem; }
+.rendered-file a { color: var(--color-accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .15em; }
+.rendered-file a:hover { color: var(--color-accent-hover); }
+.rendered-file blockquote { margin: 1.25rem 0; padding: .75rem 1rem; border-left: 3px solid var(--color-border-strong); background: var(--color-surface-muted); color: var(--color-text-muted); }
+.rendered-file blockquote > :last-child { margin-bottom: 0; }
+.rendered-file table { display: block; max-width: 100%; margin: 1.25rem 0; overflow-x: auto; border: 1px solid var(--color-border); border-radius: .45rem; }
+.rendered-file th, .rendered-file td { white-space: nowrap; }
+.rendered-file th { background: var(--color-surface-muted); }
+.rendered-file code { padding: .15rem .3rem; border-radius: .25rem; background: var(--color-code-bg); color: var(--color-code-text); font: .88em 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; overflow-wrap: anywhere; }
+.rendered-file pre { max-width: 100%; margin: 1.25rem 0; overflow: auto; padding: 1rem; border: 1px solid var(--color-border); border-radius: .7rem; background: var(--color-code-bg); color: var(--color-code-text); font: .85rem/1.65 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; tab-size: 4; white-space: pre; }
+.rendered-file pre code { padding: 0; background: transparent; color: inherit; font: inherit; overflow-wrap: normal; }
+.rendered-file img { display: block; max-width: 100%; height: auto; border: 1px solid var(--color-border); border-radius: .5rem; }
+.rendered-file hr { margin: 1.75rem 0; border: 0; border-top: 1px solid var(--color-border); }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 760px) {
