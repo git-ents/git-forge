@@ -114,9 +114,14 @@ async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Resul
         })?
     } else {
         match render_preview(current_path, &file.text) {
-            Ok(Preview::Html(html)) => {
+            Ok(Preview::RenderedHtml(html)) => {
                 (view! { cx =>
                     <div class="rendered-file">(Unescaped::new_unchecked(html))</div>
+                })?
+            }
+            Ok(Preview::CodeHtml(html)) => {
+                (view! { cx =>
+                    <div class="code-view">(Unescaped::new_unchecked(html))</div>
                 })?
             }
             Ok(Preview::Source(source)) => {
@@ -177,18 +182,19 @@ async fn error_panel(cx: &Cx, title: &str, error: &str) -> Result {
 }
 
 enum Preview {
-    Html(String),
+    RenderedHtml(String),
+    CodeHtml(String),
     Source(String),
 }
 
 fn render_preview(path: &str, source: &str) -> std::result::Result<Preview, String> {
     catch_unwind(AssertUnwindSafe(|| {
         if is_markdown(path) {
-            Preview::Html(render_markdown(source))
+            Preview::RenderedHtml(render_markdown(source))
         } else if is_asciidoc(path) {
-            Preview::Html(render_asciidoc(source))
+            Preview::RenderedHtml(render_asciidoc(source))
         } else if arborium::detect_language(path).is_some() {
-            Preview::Html(highlight_file(path, source))
+            Preview::CodeHtml(highlight_file(path, source))
         } else {
             Preview::Source(source.to_owned())
         }
