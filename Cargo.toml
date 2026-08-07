@@ -2,6 +2,7 @@
 members = [
     "crates/gix-forge",
     "crates/git-forge",
+    "crates/git-forge-ui",
     "crates/test-support",
 ]
 exclude = [

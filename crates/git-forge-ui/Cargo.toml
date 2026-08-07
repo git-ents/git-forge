@@ -1,0 +1,11 @@
+[package]
+name = "git-forge-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gix-forge = { path = "../gix-forge" }
+gix = { workspace = true, features = ["parallel"] }
+topcoat = { path = "../../vendor/topcoat/crates/topcoat", default-features = false, features = ["asset", "router", "serve", "view", "discover"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+anyhow = "1"
