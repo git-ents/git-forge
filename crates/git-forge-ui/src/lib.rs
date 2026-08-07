@@ -1,3 +1,6 @@
+mod pages;
+mod shell;
+
 use std::sync::Arc;
 
 use topcoat::{
