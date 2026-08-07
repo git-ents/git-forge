@@ -1,6 +1,7 @@
 mod pages;
 pub mod render;
 mod shell;
+pub mod tree;
 
 use std::sync::Arc;
 
