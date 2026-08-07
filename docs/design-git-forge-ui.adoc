@@ -1,0 +1,111 @@
+= `git forge ui`: a local topcoat web UI
+Claude:claude-sonnet-5
+v1.0, 2026-08-06
+
+[abstract]
+****
+`git forge` has no web UI today, only the CLI.
+This document plans a `git forge ui` subcommand that starts a local dynamic web server built on `tokio-rs/topcoat`, optionally detaching into the background, with `git forge ui-stop` / `git forge ui-status` to manage the detached process.
+The UI reuses the structural layout of `git-ents/git-ents`'s `crates/cli/ents-web` (icon nav rail, sticky top bar, plain and split master-detail content regions) but not its styling — ents-web is `axum` + `maud`; this is a different stack with a from-scratch visual design.
+Reference for the topcoat integration pattern is `~/Workspace/github.com/jdc-pub/jdc-pub`, a static-site generator built on topcoat; this application is dynamic only, with no build/prerender step.
+****
+
+== Decisions
+
+Made with the user before planning:
+
+[cols="1,3", options="header"]
+|===
+| Decision | Choice
+
+| Auth | None. Single-user, local-trusted server, matching ents-web's own "local trusted deployment" framing.
+| v1 scope | Read-only: browse issues/reviews/members, run datalog queries, search. No create/comment/approve/close.
+| topcoat sourcing | Vendored via `.gitvendors`, the same mechanism already used for `acdc`, pinned to the commit jdc-pub vendors (`be297413fe2df8773633b206fa2fd6026ca8d954`).
+| `--detach` | Backgrounds the server, tracked via a pidfile under `.git/`, managed with `git forge ui-stop` / `git forge ui-status`.
+|===
+
+== Architecture
+
+A new workspace crate, `crates/git-forge-ui`, holds all web-specific code, keeping `gix-forge` UI-agnostic and `git-forge`'s `main.rs` a thin CLI wrapper — the same separation already drawn between `gix-forge` and `git-forge`.
+
+=== The gix threading gotcha
+
+`gix-forge`'s API (`Issue::list`, `Review::load_from_repo`, `query_goal`, and so on) is fully synchronous and takes `&gix::Repository`, which is not `Send + Sync` because of its thread-local object cache.
+The UI stores a `gix::ThreadSafeRepository` in topcoat's `app_context`, and each page handler calls `.to_thread_local()` inside `tokio::task::spawn_blocking` to get a per-task `gix::Repository` before calling into `gix_forge`.
+This is the standard `gix` pattern for multi-threaded and async consumers, and it is the integration detail most likely to be gotten wrong: a raw `gix::Repository` in shared state either fails to compile against topcoat's `Send + Sync` bound or, if forced through, serializes every request onto one thread.
+
+=== Layout shell
+
+Modeled structurally on ents-web's `src/pages/mod.rs` (icon rail: Dashboard / Issues / Reviews / Members / Query, plus a top bar with repo name and search box), implemented as plain topcoat `#[component]` functions — the same pattern jdc-pub uses for its `page_shell` in `src/pages/shell.rs` — rather than topcoat's `#[layout]` macro, since per-tab highlighting needs page-specific state:
+
+* `shell(active: Tab, title: &str, child: View) -> View` — plain single-pane content: dashboard, members, query, search.
+* `split_shell(active: Tab, title: &str, list: View, detail: View) -> View` — two-pane master-detail: issues, reviews.
+
+=== Pages
+
+`crates/git-forge-ui/src/pages/*.rs`, each a `#[page("/...")]` handler:
+
+[cols="2,1,3", options="header"]
+|===
+| Route | Shell | Data
+
+| `/` | `shell` | Counts and recent activity, via `gix_forge::query_goal` on `issue_status`/`review_status`.
+| `/issues`, `/issues/{id}` | `split_shell` | `Issue::list` / `Issue::load_from_repo`; comments via `Commentable::get_comments`.
+| `/reviews`, `/reviews/{id}` | `split_shell` | `Review::list` / `Review::load_from_repo`.
+| `/members` | `shell` | `Member::list`.
+| `/query` | `shell` | Form posting to `gix_forge::query_goal` / `query_predicate`.
+| `/search` | `shell` | `gix_forge::search_find`.
+|===
+
+Comments get no dedicated top-level tab in v1 — they're shown inline under issue and review detail, matching how `Comment` actually attaches via `subject: "<kind>:<id>"`.
+ents-web's Files, Commits, Meta, Effects, Toolchains, Redactions, Inbox, Account, and Login tabs don't map to anything `gix-forge` models and are intentionally dropped.
+
+=== Styling
+
+One fresh, hand-written `assets/style.css` defines the shell grid — rail width, top-bar height, split-pane columns — with new colors and type, no ents-web CSS involved.
+topcoat supports plain static-asset serving with no `build.rs`, Tailwind, or icon step, confirmed by inspecting `vendor/topcoat/examples/hello-world` in jdc-pub; v1 skips `topcoat-tailwind` and `topcoat-icon` entirely.
+
+== Implementation steps
+
+. *Vendor topcoat.* Add a `[vendor "topcoat"]` block to root `.gitvendors`, mirroring `[vendor "acdc"]` and jdc-pub's own topcoat entry, pinned at `be297413fe2df8773633b206fa2fd6026ca8d954`. Run `git vendor add` to pull it into `vendor/topcoat/`. Add the vendored crate paths actually used (`topcoat`, `topcoat-router`, `topcoat-view`, `topcoat-runtime`, `topcoat-asset`) to root `Cargo.toml`'s `exclude`, the same treatment as `vendor/acdc/*`.
+. *Root `Cargo.toml`.* Add `"crates/git-forge-ui"` to `members`.
+. *New crate `crates/git-forge-ui`.* Depends on `gix-forge` (path), `gix` (workspace), `topcoat` (vendored path, only the router/view/serve features — no `tailwind`, `icon`, `session`, or `mail`), `tokio` (`rt-multi-thread`, `macros`, `net`, `signal`), `anyhow`.
+. *`src/lib.rs`.* `pub async fn build_router(repo: Arc<gix::ThreadSafeRepository>) -> topcoat::router::Router`, via `Router::builder().discover().app_context(repo).assets(bundle_assets()).build()`.
+. *`src/shell.rs`.* `Tab` enum plus the `shell` and `split_shell` components described above.
+. *`src/pages/{dashboard,issues,reviews,members,query,search}.rs`.* One file per route group; each handler fetches `Arc<ThreadSafeRepository>` from `app_context`, clones it into `spawn_blocking`, calls into `gix_forge`, and renders through `shell`/`split_shell` with `view!{}`.
+. *CLI wiring in `crates/git-forge/src/main.rs`,* following the existing flat-leaf `Install`/`Uninstall` pattern rather than the nested `IssueCommand`-style groups, since these are one-shot actions:
++
+[source,rust]
+----
+enum Command {
+    // ...
+    Ui(UiArgs),
+    UiStop,
+    UiStatus,
+}
+
+#[derive(Args)]
+struct UiArgs {
+    #[arg(long)] detach: bool,
+    #[arg(long)] port: Option<u16>,
+    #[arg(long, default_value = "127.0.0.1")] host: String,
+}
+----
++
+`run_ui(repo, args)`: the foreground path builds a `tokio::runtime::Runtime`, opens `gix::ThreadSafeRepository::open(repo.path())`, builds the router, binds a `TcpListener` (resolving an ephemeral port up front when `--port` is absent), prints the URL, and calls `topcoat::serve(listener, router)`.
+The detach path resolves the port first (bind-and-release, then pass `--port <resolved>` explicitly to the child so parent and child agree), re-execs `std::env::current_exe()` with `--detach` stripped via `std::process::Command`, redirects stdio to a log file, and calls `pre_exec(|| { libc::setsid(); Ok(()) })` on Unix (`std::os::unix::process::CommandExt`) so the child survives terminal close — then writes `.git/git-forge-ui.pid` (JSON: pid, host, port, url) and prints the URL without blocking.
++
+`run_ui_stop(repo)` reads the pidfile, sends `SIGTERM` via `libc::kill`, removes the pidfile, and reports the result (or "not running").
+`run_ui_status(repo)` reads the pidfile, liveness-checks with `libc::kill(pid, 0)`, and prints the URL or "not running", cleaning up a stale pidfile.
+Add `git-forge-ui = { path = "../git-forge-ui" }` and `libc` to `crates/git-forge/Cargo.toml`.
+
+== Explicitly out of scope
+
+Auth and sessions, mutating routes (create, comment, approve, close), Tailwind and icon bundling, live-reload on ref changes, Windows support for `--detach`, and file or commit browsing are all follow-up work, not part of this change.
+
+== Verification
+
+* `cargo build -p git-forge-ui -p git-forge`
+* `cargo run -p git-forge -- ui` (foreground): hit the printed URL, confirm dashboard, issues, reviews, members, query, and search all render against this repository's own `git forge` data.
+* `cargo run -p git-forge -- ui --detach`: `git forge ui-status` reports running with the correct URL, `curl` against that URL succeeds, `git forge ui-stop` stops it, and a follow-up `git forge ui-status` reports not running with the pidfile removed.
+* `cargo clippy` across the new crate.
