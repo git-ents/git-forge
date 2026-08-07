@@ -69,8 +69,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 a { color: inherit; text-decoration: none; }
-button, input { font: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+button, input, select, textarea { font: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 
 .app-shell { display: grid; grid-template-columns: 9rem 1fr; min-height: 100vh; }
 .rail { padding: 1.25rem .75rem; background: var(--color-rail); color: var(--color-rail-text); }
@@ -84,8 +84,9 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 .repo-name { font-weight: 700; letter-spacing: -.02em; }
 .search-form { display: flex; gap: .5rem; max-width: 28rem; width: 100%; }
 .search-form input { min-width: 0; flex: 1; }
-input { width: 100%; padding: .65rem .75rem; border: 1px solid var(--color-border-strong); border-radius: .45rem; background: var(--color-surface-raised); color: var(--color-text); }
-input::placeholder { color: var(--color-text-subtle); }
+input, select, textarea { width: 100%; padding: .65rem .75rem; border: 1px solid var(--color-border-strong); border-radius: .45rem; background: var(--color-surface-raised); color: var(--color-text); }
+input::placeholder, textarea::placeholder { color: var(--color-text-subtle); }
+textarea { min-height: 8rem; resize: vertical; line-height: 1.55; }
 button { padding: .65rem .9rem; border: 0; border-radius: .45rem; background: var(--color-accent); color: var(--color-on-accent); cursor: pointer; font-weight: 700; }
 button:hover { background: var(--color-accent-hover); }
 .content { max-width: 90rem; margin: 0 auto; padding: 2.5rem; }
@@ -104,6 +105,17 @@ h3 { margin-bottom: 0; font-size: 1rem; }
 .stat-card:hover, .entity-link:hover { border-color: var(--color-accent); }
 .panel { padding: 1.25rem; }
 .panel-heading, .list-heading, .detail-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.list-heading > div { display: flex; align-items: baseline; gap: 1rem; }
+.detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 1rem 0 1.25rem; }
+.detail-heading h2 { margin-bottom: .2rem; }
+.detail-actions, .form-actions, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.button-link { display: inline-flex; align-items: center; justify-content: center; padding: .65rem .9rem; border-radius: .45rem; background: var(--color-accent); color: var(--color-on-accent); font-weight: 700; }
+.button-link:hover { background: var(--color-accent-hover); }
+.button-link.secondary { border: 1px solid var(--color-border-strong); background: var(--color-surface-raised); color: var(--color-accent); }
+.button-link.secondary:hover { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.inline-form { display: inline-flex; margin: 0; }
+.danger-button { background: var(--color-danger); }
+.danger-button:hover { background: #7f3c33; }
 .panel-heading { margin-bottom: 1rem; }
 .activity-list, .entity-list { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
 .activity-list li { padding: .7rem .8rem; border-left: 3px solid var(--color-accent); background: var(--color-surface-muted); }
@@ -132,6 +144,26 @@ th { color: var(--color-text-muted); font-size: .75rem; text-transform: uppercas
 .stack-form label { margin-top: .4rem; color: var(--color-text-muted); font-size: .85rem; font-weight: 700; }
 .stack-form button { justify-self: start; margin-top: .75rem; }
 .form-help { color: var(--color-text-muted); font-size: .8rem; }
+.form-layout { display: grid; grid-template-columns: minmax(14rem, 22rem) minmax(0, 46rem); gap: 2rem; align-items: start; }
+.form-intro { position: sticky; top: 1.5rem; }
+.form-intro h2 { margin-bottom: .5rem; font-size: 1.6rem; }
+.entity-form { display: grid; gap: 1rem; padding: 1.35rem; border: 1px solid var(--color-border); border-radius: .7rem; background: var(--color-surface); }
+.entity-form fieldset { display: grid; gap: .5rem; padding: 0; border: 0; }
+.entity-form legend { width: 100%; margin-bottom: .35rem; padding-bottom: .5rem; border-bottom: 1px solid var(--color-border); font-family: Lora, Georgia, serif; font-size: 1.05rem; font-weight: 700; }
+.entity-form label, .comment-form label { margin-top: .35rem; color: var(--color-text-muted); font-size: .85rem; font-weight: 700; }
+.entity-form .form-actions { margin-top: .25rem; }
+.form-context { margin: 0; padding: .75rem; border-radius: .45rem; background: var(--color-surface-muted); color: var(--color-text-muted); }
+.success-panel, .empty-panel { display: grid; justify-items: start; gap: .65rem; padding: 2rem; border: 1px solid var(--color-border); border-radius: .7rem; background: var(--color-surface); }
+.success-panel { max-width: 42rem; }
+.success-panel h2, .empty-panel h2 { margin: 0; }
+.success-icon { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 50%; background: var(--color-accent-soft); color: var(--color-accent); font-weight: 800; }
+.narrow-panel { max-width: 52rem; }
+.comment-heading { display: flex; justify-content: space-between; gap: 1rem; }
+.comment-form { display: grid; gap: .5rem; margin-top: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface-raised); }
+.comment-form button { justify-self: start; margin-top: .35rem; }
+.table-actions { align-items: center; }
+table small { display: block; margin-top: .2rem; }
+code { overflow-wrap: anywhere; }
 .query-results { margin-top: 1rem; }
 .query-results ol { margin: 0; padding-left: 1.5rem; }
 .query-results li { padding: .35rem 0; }
@@ -193,4 +225,7 @@ th { color: var(--color-text-muted); font-size: .75rem; text-transform: uppercas
     .topbar { height: auto; padding-top: .8rem; padding-bottom: .8rem; align-items: flex-start; flex-direction: column; }
     .split-pane { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
+    .form-layout { grid-template-columns: 1fr; gap: 1rem; }
+    .form-intro { position: static; }
+    .detail-heading { display: grid; }
 }

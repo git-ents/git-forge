@@ -55,6 +55,10 @@ async fn dashboard(cx: &Cx) -> Result {
                             }
                         </ul>
                     }
+                    <div class="form-actions">
+                        <a class="button-link secondary" href="/comments/new">"Start a discussion"</a>
+                        <a class="button-link secondary" href="/issues/new">"Open an issue"</a>
+                    </div>
                 </section>
             })?
         }

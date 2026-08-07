@@ -1,3 +1,4 @@
+mod comments;
 mod dashboard;
 mod files;
 mod issues;
@@ -7,6 +8,15 @@ mod reviews;
 mod search;
 
 use topcoat::context::{Cx, app_context};
+
+pub(crate) fn csv_values(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
 
 pub(crate) async fn with_repo<T, F>(cx: &Cx, operation: F) -> Result<T, String>
 where
