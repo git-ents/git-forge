@@ -1606,14 +1606,17 @@ dependencies = [
  "clap",
  "comfy-table",
  "dialoguer",
+ "git-forge-ui",
  "gix",
  "gix-forge",
+ "libc",
  "owo-colors",
  "proptest",
  "serde_json",
  "tempfile",
  "test-support",
  "tokio",
+ "topcoat",
  "tower-lsp",
 ]
 

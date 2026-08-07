@@ -1,6 +1,10 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
 use std::io::IsTerminal;
+use std::sync::Arc;
+
+#[cfg(unix)]
+use serde_json::{Value, json};
 
 use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
 use acdc_converters_terminal::Processor as TerminalProcessor;
@@ -39,6 +43,9 @@ enum Command {
     Query(QueryCommand),
     Install(InstallArgs),
     Uninstall(UninstallArgs),
+    Ui(UiArgs),
+    UiStop,
+    UiStatus,
 }
 
 #[derive(Args)]
@@ -51,6 +58,16 @@ struct InstallArgs {
 struct UninstallArgs {
     #[arg(short = 'i', long = "interactive")]
     interactive: bool,
+}
+
+#[derive(Args)]
+struct UiArgs {
+    #[arg(long)]
+    detach: bool,
+    #[arg(long)]
+    port: Option<u16>,
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
 }
 
 #[derive(Subcommand)]
@@ -336,9 +353,236 @@ fn main() -> Result<()> {
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, args)?,
         Command::Uninstall(args) => run_uninstall(&repo, args)?,
+        Command::Ui(args) => run_ui(&repo, args)?,
+        Command::UiStop => run_ui_stop(&repo)?,
+        Command::UiStatus => run_ui_status(&repo)?,
     }
 
     Ok(())
+}
+
+fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
+    if args.detach {
+        return run_ui_detached(repo, args);
+    }
+
+    let repo_path = repo.path().to_owned();
+    let host = args.host;
+    let port = args.port;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create the UI runtime")?;
+
+    runtime.block_on(async move {
+        let repo = gix::ThreadSafeRepository::open(repo_path)
+            .context("failed to open the repository for the UI")?;
+        let router = git_forge_ui::build_router(Arc::new(repo)).await;
+        let listener = tokio::net::TcpListener::bind((host.as_str(), port.unwrap_or(0)))
+            .await
+            .with_context(|| format!("failed to bind the UI to {host}:{:?}", port))?;
+        let port = listener
+            .local_addr()
+            .context("failed to determine the UI listener address")?
+            .port();
+
+        println!("{}", ui_url(&host, port));
+        topcoat::serve(listener, router)
+            .await
+            .context("the UI server failed")?;
+        Ok(())
+    })
+}
+
+fn ui_url(host: &str, port: u16) -> String {
+    let host = if host.starts_with('[') && host.ends_with(']') {
+        host.to_owned()
+    } else if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    format!("http://{host}:{port}")
+}
+
+#[cfg(unix)]
+fn run_ui_detached(repo: &gix::Repository, args: UiArgs) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let port = resolve_ui_port(&args.host, args.port)?;
+    let log_path = repo.git_dir().join("git-forge-ui.log");
+    let stdout = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open UI log {}", log_path.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .with_context(|| format!("failed to prepare UI log {}", log_path.display()))?;
+    let executable =
+        std::env::current_exe().context("failed to locate the git-forge executable")?;
+    let mut command = Command::new(executable);
+    command
+        .arg("ui")
+        .arg("--host")
+        .arg(&args.host)
+        .arg("--port")
+        .arg(port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = command
+        .spawn()
+        .with_context(|| "failed to start the detached UI")?;
+    let url = ui_url(&args.host, port);
+    let pidfile = repo.git_dir().join("git-forge-ui.pid");
+    let contents = serde_json::to_vec_pretty(&json!({
+        "pid": child.id(),
+        "host": args.host,
+        "port": port,
+        "url": url,
+    }))
+    .context("failed to encode the UI pidfile")?;
+    std::fs::write(&pidfile, contents)
+        .with_context(|| format!("failed to write UI pidfile {}", pidfile.display()))?;
+    println!("{url}");
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_ui_detached(_repo: &gix::Repository, _args: UiArgs) -> Result<()> {
+    bail!("--detach is not supported on Windows; run `git forge ui` in the foreground")
+}
+
+#[cfg(unix)]
+fn resolve_ui_port(host: &str, port: Option<u16>) -> Result<u16> {
+    let listener = std::net::TcpListener::bind((host, port.unwrap_or(0)))
+        .with_context(|| format!("failed to reserve the UI address {host}:{:?}", port))?;
+    listener
+        .local_addr()
+        .context("failed to determine the reserved UI port")
+        .map(|address| address.port())
+}
+
+#[cfg(unix)]
+struct UiState {
+    pid: i32,
+    url: String,
+}
+
+#[cfg(unix)]
+fn read_ui_state(repo: &gix::Repository) -> Result<Option<UiState>> {
+    let pidfile = repo.git_dir().join("git-forge-ui.pid");
+    let contents = match std::fs::read_to_string(&pidfile) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read UI pidfile {}", pidfile.display()));
+        }
+    };
+    let value: Value = serde_json::from_str(&contents)
+        .with_context(|| format!("invalid JSON in UI pidfile {}", pidfile.display()))?;
+    let pid = value
+        .get("pid")
+        .and_then(Value::as_i64)
+        .with_context(|| format!("UI pidfile {} has no integer pid", pidfile.display()))?;
+    let pid = i32::try_from(pid)
+        .with_context(|| format!("UI pidfile {} has an invalid pid", pidfile.display()))?;
+    if pid <= 0 {
+        bail!("UI pidfile {} has an invalid pid", pidfile.display());
+    }
+    value
+        .get("host")
+        .and_then(Value::as_str)
+        .with_context(|| format!("UI pidfile {} has no host", pidfile.display()))?;
+    let port = value
+        .get("port")
+        .and_then(Value::as_u64)
+        .with_context(|| format!("UI pidfile {} has no integer port", pidfile.display()))?;
+    u16::try_from(port)
+        .with_context(|| format!("UI pidfile {} has an invalid port", pidfile.display()))?;
+    let url = value
+        .get("url")
+        .and_then(Value::as_str)
+        .with_context(|| format!("UI pidfile {} has no URL", pidfile.display()))?
+        .to_owned();
+    Ok(Some(UiState { pid, url }))
+}
+
+#[cfg(unix)]
+fn run_ui_stop(repo: &gix::Repository) -> Result<()> {
+    let Some(state) = read_ui_state(repo)? else {
+        println!("not running");
+        return Ok(());
+    };
+
+    let signal_error = if unsafe { libc::kill(state.pid as libc::pid_t, libc::SIGTERM) } == 0 {
+        None
+    } else {
+        Some(std::io::Error::last_os_error())
+    };
+    let pidfile = repo.git_dir().join("git-forge-ui.pid");
+    std::fs::remove_file(&pidfile)
+        .with_context(|| format!("failed to remove UI pidfile {}", pidfile.display()))?;
+
+    match signal_error {
+        None => println!("stopped {}", state.url),
+        Some(error) if error.raw_os_error() == Some(libc::ESRCH) => println!("not running"),
+        Some(error) => bail!("failed to stop UI process {}: {error}", state.pid),
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_ui_stop(_repo: &gix::Repository) -> Result<()> {
+    bail!("ui-stop is not supported on Windows")
+}
+
+#[cfg(unix)]
+fn run_ui_status(repo: &gix::Repository) -> Result<()> {
+    let Some(state) = read_ui_state(repo)? else {
+        println!("not running");
+        return Ok(());
+    };
+
+    let alive = if unsafe { libc::kill(state.pid as libc::pid_t, 0) } == 0 {
+        true
+    } else {
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => false,
+            Some(libc::EPERM) => true,
+            _ => {
+                return Err(std::io::Error::last_os_error())
+                    .with_context(|| format!("failed to check UI process {}", state.pid));
+            }
+        }
+    };
+    if alive {
+        println!("{}", state.url);
+        return Ok(());
+    }
+
+    let pidfile = repo.git_dir().join("git-forge-ui.pid");
+    std::fs::remove_file(&pidfile)
+        .with_context(|| format!("failed to remove stale UI pidfile {}", pidfile.display()))?;
+    println!("not running");
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_ui_status(_repo: &gix::Repository) -> Result<()> {
+    bail!("ui-status is not supported on Windows")
 }
 
 fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
