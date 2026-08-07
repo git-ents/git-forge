@@ -2,13 +2,12 @@
 //! (ARCHITECTURE.md, "git-forge": "comment = forge doc embedding a Binding
 //! subtree; anchor id falls out as the hash of its identity subtree").
 //!
-//! A comment is either a thread-level remark on some other entity
-//! (`binding: None`) or anchored to a specific location (`binding:
-//! Some(Binding::Position(anchor))`, captured with [`gix_anchor::capture`]).
-//! Every comment is grouped, at the store layer, under the `(kind, id)` of
-//! the entity it comments on -- [`Commentable`] is the sugar every commentable
-//! entity implements to get `add`/`show`/`list` for its own comments for
-//! free, on top of [`Comment`]'s own [`crate::entity::EntityOps`] CRUD.
+//! A comment may be free-floating, attached to a subject, anchored to a
+//! location, or both. A subject comment is grouped, at the store layer, under
+//! the `(kind, id)` of the entity it comments on -- [`Commentable`] is the
+//! sugar every commentable entity implements to get `add`/`show`/`list` for
+//! its own comments for free, on top of [`Comment`]'s own
+//! [`crate::entity::EntityOps`] CRUD.
 
 use facet::Facet;
 use gix::{ObjectId, Repository};
@@ -22,11 +21,12 @@ use crate::error::Error;
 pub struct Comment {
     pub id: String,
     /// The `(kind, id)` this comment is attached to, joined as
-    /// `"<kind>:<id>"` -- e.g. `"issue:42"`.
-    pub subject: String,
+    /// `"<kind>:<id>"` -- e.g. `"issue:42"`; `None` for a free-floating
+    /// comment.
+    pub subject: Option<String>,
     pub author: String,
     pub body: String,
-    /// Inline, per ARCHITECTURE.md: `None` for a thread-level comment,
+    /// Inline, per ARCHITECTURE.md: `None` when the comment has no anchor,
     /// `Some(Binding::Position(_))` for one anchored to a location.
     pub binding: Option<Binding>,
     pub edit: Option<String>,
@@ -34,6 +34,8 @@ pub struct Comment {
 
 #[derive(Debug, Facet)]
 pub struct StoredComment {
+    /// Empty means that the public comment has no subject; keeping this a
+    /// string preserves the encoding of existing subject comments.
     subject: String,
     author: String,
     body: String,
@@ -51,7 +53,7 @@ impl Entity for Comment {
 
     fn to_stored(&self) -> StoredComment {
         StoredComment {
-            subject: self.subject.clone(),
+            subject: self.subject.clone().unwrap_or_default(),
             author: self.author.clone(),
             body: self.body.clone(),
             binding: self.binding.clone(),
@@ -62,7 +64,7 @@ impl Entity for Comment {
     fn from_stored(id: String, stored: StoredComment) -> Self {
         Self {
             id,
-            subject: stored.subject,
+            subject: (!stored.subject.is_empty()).then_some(stored.subject),
             author: stored.author,
             body: stored.body,
             binding: stored.binding,
@@ -202,7 +204,7 @@ mod tests {
             .expect("comment exists");
         assert_eq!(loaded.author, "alice");
         assert_eq!(loaded.body, "looks good");
-        assert_eq!(loaded.subject, "issue:issue-1");
+        assert_eq!(loaded.subject.as_deref(), Some("issue:issue-1"));
         assert!(loaded.binding.is_none());
 
         let comments = issue.get_comments(&repo).expect("list comments");
@@ -239,7 +241,39 @@ mod tests {
             panic!("expected a Position binding, got {:?}", loaded.binding);
         };
         assert_eq!(anchor.identity.path, "file.txt");
+        assert_eq!(loaded.subject.as_deref(), Some("issue:issue-2"));
         assert!(binding_genesis(loaded.binding.as_ref().unwrap()).is_some());
+    }
+
+    #[test]
+    fn a_free_floating_anchor_has_no_subject() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::commit_file(dir.path(), "file.txt", "one\ntwo\nthree\n", "add file");
+        let repo = gix::open(dir.path()).expect("open repo");
+        let anchor = capture(
+            &repo,
+            "HEAD",
+            "file.txt",
+            Some(LineRange { start: 1, end: 1 }),
+        )
+        .expect("capture anchor");
+
+        let id = Comment {
+            id: String::new(),
+            subject: None,
+            author: "alice".to_owned(),
+            body: "file-level note".to_owned(),
+            binding: Some(Binding::Position(anchor)),
+            edit: None,
+        }
+        .create_in_repo(&repo)
+        .expect("create free-floating comment");
+
+        let loaded = Comment::load_from_repo(&repo, &id)
+            .expect("load comment")
+            .expect("comment exists");
+        assert!(loaded.subject.is_none());
+        assert!(matches!(loaded.binding, Some(Binding::Position(_))));
     }
 
     #[test]

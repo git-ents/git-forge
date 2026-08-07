@@ -220,7 +220,7 @@ fn predicate_entries() -> Vec<PredicateEntry> {
             &[Symbol, Symbol],
             enumerable,
             comments(),
-            "the `<kind>:<id>` the comment is attached to",
+            "the `<kind>:<id>` the comment is attached to, when it has a subject",
         ),
         PredicateEntry::edb(
             "comment_body_contains",
@@ -359,16 +359,16 @@ impl FactSource for ForgeFacts<'_> {
                     ]
                 })
                 .collect(),
-            ("comment_subject", 2) => self
-                .comments(key)?
-                .iter()
-                .map(|comment| {
-                    vec![
-                        Value::sym(comment.id.as_str()),
-                        Value::sym(comment.subject.as_str()),
-                    ]
-                })
-                .collect(),
+            ("comment_subject", 2) => {
+                self.comments(key)?
+                    .iter()
+                    .filter_map(|comment| {
+                        comment.subject.as_deref().map(|subject| {
+                            vec![Value::sym(comment.id.as_str()), Value::sym(subject)]
+                        })
+                    })
+                    .collect()
+            }
             ("comment_body_contains", 2) => {
                 let needle = needle_arg(key, bound)?;
                 self.comments(key)?
@@ -542,6 +542,30 @@ mod tests {
         )
         .expect("run goal");
         assert_eq!(rows, vec![vec![Value::sym(id.as_str())]]);
+    }
+
+    #[test]
+    fn comment_subject_omits_free_floating_comments() {
+        let (_dir, repo) = sample_repo();
+        let subject_id = Comment::create_under(&repo, "issue", "42", "alice", "subject", None)
+            .expect("create subject comment");
+        let free_id = Comment {
+            id: String::new(),
+            subject: None,
+            author: "bob".to_owned(),
+            body: "free-floating".to_owned(),
+            binding: None,
+            edit: None,
+        }
+        .create_in_repo(&repo)
+        .expect("create free-floating comment");
+
+        let rows = run_forge_goal(&repo, "comment_subject(Id, Subject)", &["Id", "Subject"])
+            .expect("run goal");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], Value::sym(subject_id.as_str()));
+        assert_eq!(rows[0][1], Value::sym("issue:42"));
+        assert_ne!(rows[0][0], Value::sym(free_id.as_str()));
     }
 
     #[test]

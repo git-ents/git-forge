@@ -1510,6 +1510,10 @@ fn display_entity_reference(reference: &str) -> String {
     format!("{kind}:{}", shorten_entity_id(id))
 }
 
+fn display_comment_subject(subject: Option<&str>) -> String {
+    subject.map_or_else(|| "(none)".to_owned(), display_entity_reference)
+}
+
 fn min_unique_prefix_len(id: &str, ids: &[String]) -> usize {
     for len in 1..=id.len() {
         let prefix = &id[..len];
@@ -1633,7 +1637,7 @@ fn print_member_list(repo: &gix::Repository) -> Result<()> {
 fn print_comment_list(repo: &gix::Repository, ids: &[String]) -> Result<()> {
     let rows = entity_rows::<Comment>(repo, ids, |comment| {
         (
-            display_entity_reference(&comment.subject),
+            display_comment_subject(comment.subject.as_deref()),
             comment.author.clone(),
             "-".to_owned(),
         )
@@ -1794,7 +1798,10 @@ fn print_member(member: &Member) {
 
 fn print_comment(comment: &Comment) {
     let mut meta = vec![
-        format!("subject: {}", display_entity_reference(&comment.subject)),
+        format!(
+            "subject: {}",
+            display_comment_subject(comment.subject.as_deref())
+        ),
         format!("author: {}", comment.author),
     ];
     if let Some(edit) = &comment.edit {

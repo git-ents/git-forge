@@ -91,7 +91,10 @@ impl LanguageServer for Backend {
             .filter(|comment| {
                 query.is_empty()
                     || comment.body.to_lowercase().contains(&query)
-                    || comment.subject.to_lowercase().contains(&query)
+                    || comment
+                        .subject
+                        .as_deref()
+                        .is_some_and(|subject| subject.to_lowercase().contains(&query))
                     || comment.author.to_lowercase().contains(&query)
             })
             .map(|comment| {
@@ -105,7 +108,7 @@ impl LanguageServer for Backend {
                 SymbolInformation {
                     name: format!(
                         "{}: {}",
-                        comment.subject,
+                        comment.subject.as_deref().unwrap_or("(none)"),
                         comment.body.lines().next().unwrap_or_default()
                     ),
 
@@ -158,7 +161,9 @@ impl LanguageServer for Backend {
                 kind: MarkupKind::Markdown,
                 value: format!(
                     "**{}** ({})\n\n{}",
-                    comment.author, comment.subject, comment.body
+                    comment.author,
+                    comment.subject.as_deref().unwrap_or("(none)"),
+                    comment.body
                 ),
             }),
             range: self.comment_location(&comment).map(|(_, range)| range),
