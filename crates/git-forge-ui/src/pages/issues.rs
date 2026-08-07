@@ -71,7 +71,7 @@ async fn issues(cx: &Cx) -> Result {
     view! { split_shell(active: Tab::Issues, title: "Issues", list: list, detail: detail) }
 }
 
-#[page("/issues/{id}")]
+#[page("/issues/{issue_id}")]
 async fn issue_detail(cx: &Cx) -> Result {
     let id = path_param::<IssueId>(cx)?.clone();
     let data = with_repo(cx, move |repo| {

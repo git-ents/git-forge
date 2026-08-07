@@ -71,7 +71,7 @@ async fn reviews(cx: &Cx) -> Result {
     view! { split_shell(active: Tab::Reviews, title: "Reviews", list: list, detail: detail) }
 }
 
-#[page("/reviews/{id}")]
+#[page("/reviews/{review_id}")]
 async fn review_detail(cx: &Cx) -> Result {
     let id = path_param::<ReviewId>(cx)?.clone();
     let data = with_repo(cx, move |repo| {
