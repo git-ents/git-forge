@@ -83,7 +83,17 @@ async fn directory_view(
                 <ul class="entity-list file-list">
                     for entry in entries {
                         <li>
-                            <a class="entity-link" href=(tree_href(&browse.reference.selector, &entry.path, None))>
+                            <a class="entity-link" href=(tree_href(
+                                &browse.reference.selector,
+                                &entry.path,
+                                if entry.kind == gix::objs::tree::EntryKind::Blob
+                                    || entry.kind == gix::objs::tree::EntryKind::BlobExecutable
+                                {
+                                    default_file_view(&entry.path)
+                                } else {
+                                    None
+                                },
+                            ))>
                                 <span>
                                     <strong>(entry.display_name.as_str())</strong>
                                     <small>(entry_kind_label(entry.kind))</small>
@@ -222,6 +232,21 @@ fn is_asciidoc(path: &str) -> bool {
                 || extension.eq_ignore_ascii_case("ad")
                 || extension.eq_ignore_ascii_case("asc")
     )
+}
+
+fn default_file_view(path: &str) -> Option<&'static str> {
+    is_readme(path).then_some("preview")
+}
+
+fn is_readme(path: &str) -> bool {
+    let Some(name) = path.rsplit('/').next() else {
+        return false;
+    };
+    let Some((stem, _)) = name.rsplit_once('.') else {
+        return false;
+    };
+
+    stem.eq_ignore_ascii_case("README") && is_markdown(path)
 }
 
 fn entry_kind_label(kind: gix::objs::tree::EntryKind) -> &'static str {
