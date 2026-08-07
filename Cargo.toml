@@ -8,6 +8,11 @@ exclude = [
     "vendor/acdc/acdc-parser",
     "vendor/acdc/converters/core",
     "vendor/acdc/converters/terminal",
+    "vendor/topcoat/crates/topcoat",
+    "vendor/topcoat/crates/topcoat-router",
+    "vendor/topcoat/crates/topcoat-view",
+    "vendor/topcoat/crates/topcoat-runtime",
+    "vendor/topcoat/crates/topcoat-asset",
 ]
 resolver = "3"
 
