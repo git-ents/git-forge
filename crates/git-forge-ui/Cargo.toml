@@ -9,3 +9,7 @@ gix = { workspace = true, features = ["parallel"] }
 topcoat = { path = "../../vendor/topcoat/crates/topcoat", default-features = false, features = ["asset", "router", "serve", "view", "discover"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 anyhow = "1"
+arborium = { version = "=2.18.1", features = ["all-languages"] }
+comrak = { version = "=0.54.0", default-features = false }
+asciidoc-html5 = "=0.1.5"
+ammonia = "=4.1.4"

@@ -1,4 +1,5 @@
 mod pages;
+pub mod render;
 mod shell;
 
 use std::sync::Arc;
