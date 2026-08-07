@@ -106,7 +106,7 @@ fn ui_crawls_every_internal_route() {
     }
     assert!(crawler.seen_post("/query", b"predicate=issue"));
     assert!(crawler.seen_post("/search", b"keyword=ui%20crawl"));
-    assert!(crawler.seen_path("/assets/"));
+    assert!(crawler.seen_path("/_topcoat/assets/"));
     assert!(crawler.seen_query("view=preview"));
     assert!(crawler.seen_query("view=source"));
 }
