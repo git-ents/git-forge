@@ -68,5 +68,5 @@ async fn dashboard(cx: &Cx) -> Result {
         }
     };
 
-    view! { shell(active: Tab::Dashboard, title: "Dashboard", child: content) }
+    view! { shell(active: Tab::Dashboard, title: "Dashboard", keyword: None, child: content) }
 }

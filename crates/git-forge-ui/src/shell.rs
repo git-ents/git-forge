@@ -59,7 +59,7 @@ impl Tab {
 }
 
 #[component]
-pub(crate) async fn shell(active: Tab, title: &str, child: View) -> Result {
+pub(crate) async fn shell(active: Tab, title: &str, keyword: Option<&str>, child: View) -> Result {
     view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -90,7 +90,7 @@ pub(crate) async fn shell(active: Tab, title: &str, child: View) -> Result {
                             <a class="repo-name" href="/">"git forge"</a>
                             <form class="search-form" action="/search" method="post">
                                 <label class="sr-only" for="shell-search">"Search"</label>
-                                <input id="shell-search" name="keyword" placeholder="Search issues and reviews" type="search">
+                                <input id="shell-search" name="keyword" value=(keyword.unwrap_or_default()) placeholder="Search issues and reviews" type="search">
                                 <button type="submit">"Search"</button>
                             </form>
                         </header>

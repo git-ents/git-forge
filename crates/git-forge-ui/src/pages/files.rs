@@ -39,7 +39,7 @@ async fn files(cx: &Cx) -> Result {
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
-    view! { shell(active: Tab::Files, title: "Files", child: content) }
+    view! { shell(active: Tab::Files, title: "Files", keyword: None, child: content) }
 }
 
 async fn browse_view(cx: &Cx, browse: &Browse, source: bool) -> Result {

@@ -57,5 +57,5 @@ async fn members(cx: &Cx) -> Result {
         }
     };
 
-    view! { shell(active: Tab::Members, title: "Members", child: content) }
+    view! { shell(active: Tab::Members, title: "Members", keyword: None, child: content) }
 }

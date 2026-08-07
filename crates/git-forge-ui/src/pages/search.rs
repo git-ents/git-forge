@@ -24,8 +24,7 @@ async fn search_form(cx: &Cx, form: &SearchForm, hits: Option<&[(String, String)
     view! { cx =>
         <section class="panel query-panel">
             <form class="stack-form" action="/search" method="post">
-                <label for="keyword">"Keyword"</label>
-                <input id="keyword" name="keyword" value=(form.keyword.as_deref().unwrap_or_default()) placeholder="text in an issue or review">
+                <input type="hidden" name="keyword" value=(form.keyword.as_deref().unwrap_or_default())>
                 <label for="assignee">"Assignee"</label>
                 <input id="assignee" name="assignee" value=(form.assignee.as_deref().unwrap_or_default())>
                 <label for="reviewer">"Reviewer"</label>
@@ -56,7 +55,7 @@ async fn search_form(cx: &Cx, form: &SearchForm, hits: Option<&[(String, String)
 async fn search_page(cx: &Cx) -> Result {
     let form = SearchForm::default();
     let content = search_form(cx, &form, None).await?;
-    view! { shell(active: Tab::Query, title: "Search", child: content) }
+    view! { shell(active: Tab::Query, title: "Search", keyword: form.keyword.as_deref(), child: content) }
 }
 
 #[page(POST "/search")]
@@ -112,5 +111,5 @@ async fn search_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             })?
         }
     };
-    view! { shell(active: Tab::Query, title: "Search", child: content) }
+    view! { shell(active: Tab::Query, title: "Search", keyword: form.keyword.as_deref(), child: content) }
 }
