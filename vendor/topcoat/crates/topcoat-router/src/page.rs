@@ -1,0 +1,173 @@
+use std::borrow::Cow;
+use std::pin::Pin;
+
+use topcoat_core::{context::Cx, error::Result};
+use topcoat_view::View;
+
+use crate::{Body, IntoPath, IntoResponse, Methods, OwnedMethods, Path, Route, RouteFuture};
+
+/// The async render function backing a [`PageFn`].
+pub type PageRenderFn = for<'cx> fn(
+    cx: &'cx Cx,
+    body: Body,
+) -> Pin<Box<dyn Future<Output = Result<View>> + Send + 'cx>>;
+
+/// A page handler, backed by a plain render function, that renders a [`View`]
+/// for a specific URL path.
+///
+/// Created either manually via `#[page("/path")]` or by the module router
+/// (which derives the path from the module tree). Registered into a
+/// [`RouterBuilder`](crate::RouterBuilder) alongside [`LayoutFn`]s, which wrap
+/// it when their path is a prefix of the page's.
+///
+/// A page serves `GET` unless it declares other methods, either in the macro
+/// (`#[page(POST "/path")]`) or through [`PageFn::new`].
+#[derive(Debug, Clone)]
+pub struct PageFn {
+    /// The HTTP methods this page responds to.
+    methods: OwnedMethods,
+    /// The URL path this page handles.
+    path: Cow<'static, Path>,
+    /// The async render function that produces the page [`View`].
+    render: PageRenderFn,
+}
+
+impl PageFn {
+    /// Creates a new page with explicit methods, path, and render function.
+    ///
+    /// The methods are anything convertible into [`OwnedMethods`]: a single
+    /// [`Method`](crate::Method), a `&'static [Method]`, a `Vec<Method>`, or
+    /// [`Methods::Any`] to respond to every method.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` is a string that is not a well-formed route path.
+    pub fn new(
+        methods: impl Into<OwnedMethods>,
+        path: impl IntoPath,
+        render: PageRenderFn,
+    ) -> Self {
+        Self::const_new(methods.into(), path.into_path(), render)
+    }
+
+    /// Const-context constructor used by macro-generated code.
+    pub const fn const_new(
+        methods: OwnedMethods,
+        path: Cow<'static, Path>,
+        render: PageRenderFn,
+    ) -> Self {
+        Self {
+            methods,
+            path,
+            render,
+        }
+    }
+
+    /// Returns the HTTP methods this page responds to.
+    #[must_use]
+    pub fn methods(&self) -> Methods<'_> {
+        self.methods.as_methods()
+    }
+
+    /// Returns the URL path this page handles.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Renders the page, returning a [`Result`].
+    pub fn render<'cx>(
+        &self,
+        cx: &'cx Cx,
+        body: Body,
+    ) -> Pin<Box<dyn Future<Output = Result<View>> + Send + 'cx>> {
+        (self.render)(cx, body)
+    }
+}
+
+#[cfg(feature = "discover")]
+inventory::collect!(PageFn);
+
+/// The async render function backing a [`LayoutFn`], receiving the rendered child content as a
+/// [`Result`]`<`[`View`]`>`.
+pub type LayoutRenderFn = for<'cx> fn(
+    cx: &'cx Cx,
+    slot: Result<View>,
+) -> Pin<Box<dyn Future<Output = Result<View>> + Send + 'cx>>;
+
+/// A layout handler, backed by a plain render function, that wraps pages whose
+/// path starts with the layout's path prefix.
+///
+/// When multiple layouts match a page, they nest from most-specific (innermost)
+/// to least-specific (outermost). For example, layouts at `/` and `/settings`
+/// both match `/settings/profile`, rendering as: root -> settings -> page.
+#[derive(Debug, Clone)]
+pub struct LayoutFn {
+    /// The path prefix this layout applies to.
+    path: Cow<'static, Path>,
+    /// The async render function that wraps the child content [`Result`]`<`[`View`]`>`.
+    render: LayoutRenderFn,
+}
+
+impl LayoutFn {
+    /// Creates a new layout with an explicit path and render function.
+    pub const fn new(path: Cow<'static, Path>, render: LayoutRenderFn) -> Self {
+        Self { path, render }
+    }
+
+    /// Returns the path prefix this layout applies to.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Renders the layout, embedding the given child content [`Result`]`<`[`View`]`>` as its slot.
+    pub fn render<'cx>(
+        &self,
+        cx: &'cx Cx,
+        slot: Result<View>,
+    ) -> Pin<Box<dyn Future<Output = Result<View>> + Send + 'cx>> {
+        (self.render)(cx, slot)
+    }
+}
+
+#[cfg(feature = "discover")]
+inventory::collect!(LayoutFn);
+
+/// A [`PageFn`] paired with the [`LayoutFn`]s that wrap it.
+pub struct PageWithLayouts {
+    page: PageFn,
+    /// The matching layouts, ordered by ascending path length (outermost first).
+    layouts: Vec<LayoutFn>,
+}
+
+impl PageWithLayouts {
+    /// Pairs `page` with the `layouts` that wrap it.
+    ///
+    /// `layouts` must be ordered from least- to most-specific (ascending path
+    /// length); they are applied from the innermost (most specific) outward.
+    #[must_use]
+    pub fn new(page: PageFn, layouts: Vec<LayoutFn>) -> Self {
+        Self { page, layouts }
+    }
+}
+
+impl Route for PageWithLayouts {
+    fn methods(&self) -> Methods<'_> {
+        self.page.methods()
+    }
+
+    fn path(&self) -> &Path {
+        &self.page.path
+    }
+
+    fn handle<'cx>(&'cx self, cx: &'cx Cx, body: Body) -> RouteFuture<'cx> {
+        Box::pin(async move {
+            let mut slot = self.page.render(cx, body).await;
+            for layout in self.layouts.iter().rev() {
+                slot = layout.render(cx, slot).await;
+            }
+            slot.into_response(cx)
+        })
+    }
+}

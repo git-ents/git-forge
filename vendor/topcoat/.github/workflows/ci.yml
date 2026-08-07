@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# release-plz pushes two commits to its release branch in quick succession (the
+# version bump, then the docs-version sync), which would otherwise start two CI
+# runs on the same PR. Cancel a superseded run when a newer push lands — but
+# only for PRs, so a rapid second push to `main` never cancels a run that
+# Release-plz gates on via `workflow_run`.
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-features
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - run: cargo fmt --all -- --check
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update nightly && rustup default nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +nightly doc --workspace --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -Dwarnings
+
+  features:
+    name: features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo fetch --locked
+      # `stage-icons` only affects the build script's network fetch, which this
+      # offline job must not trigger; it adds no lib coverage, so skip it.
+      - run: cargo hack clippy --workspace --each-feature --exclude-features stage-icons --no-dev-deps --offline -- -D warnings
+
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p topcoat --target wasm32-unknown-unknown --no-default-features --features router,view,runtime,asset,cookie,session,discover,multipart,tower --locked
+
+  runtime:
+    name: runtime
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/topcoat-runtime/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: crates/topcoat-runtime/browser/yarn.lock
+      - run: yarn install --frozen-lockfile
+      # Rebuild the bundle and fail if it drifts from the committed
+      # `dist/index.js` that the runtime crate serves via `asset!`.
+      - run: yarn build
+      - run: git diff --exit-code -- dist/index.js
+      - run: yarn test
+
+  udeps:
+    name: udeps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `cargo-udeps` needs nightly for `-Z binary-dep-depinfo`. The `+nightly`
+      # override outranks the `stable` pin in `rust-toolchain.toml`, and cargo
+      # passes its own toolchain to `cargo-udeps`' child builds via `$CARGO`.
+      - run: rustup toolchain install nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-udeps
+      - run: cargo +nightly udeps --workspace --all-targets --all-features --locked

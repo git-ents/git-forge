@@ -1,0 +1,46 @@
+# The built-in component registry, shipped by the `topcoat-ui-registry` crate.
+# Each theme and component names its source file; hashes are computed from the
+# source at runtime. The registry's identity is its crate name
+# (`topcoat-ui-registry`), so the manifest records only the format version, the
+# themes, and the components.
+
+version = 1
+
+[themes.neutral]
+source = "themes/neutral.css"
+
+[components.badge]
+source = "src/components/badge.rs"
+
+[components.button]
+source = "src/components/button.rs"
+
+[components.card]
+source = "src/components/card.rs"
+
+[components.checkbox]
+source = "src/components/checkbox.rs"
+
+[components.dropdown_menu]
+source = "src/components/dropdown_menu.rs"
+
+[components.input]
+source = "src/components/input.rs"
+
+[components.label]
+source = "src/components/label.rs"
+
+[components.progress]
+source = "src/components/progress.rs"
+
+[components.select]
+source = "src/components/select.rs"
+
+[components.spinner]
+source = "src/components/spinner.rs"
+
+[components.switch]
+source = "src/components/switch.rs"
+
+[components.textarea]
+source = "src/components/textarea.rs"

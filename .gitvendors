@@ -8,3 +8,8 @@
 	pattern = converters/terminal/src/**:vendor/acdc/converters/terminal/src/
 	pattern = converters/terminal/Cargo.toml:vendor/acdc/converters/terminal/Cargo.toml
 	pattern = LICENSE:vendor/acdc/LICENSE
+[vendor "topcoat"]
+	url = https://github.com/tokio-rs/topcoat.git
+	ref = be297413fe2df8773633b206fa2fd6026ca8d954
+	base = be297413fe2df8773633b206fa2fd6026ca8d954
+	pattern = **:vendor/topcoat/
