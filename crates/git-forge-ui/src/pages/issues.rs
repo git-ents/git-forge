@@ -3,11 +3,12 @@ use topcoat::{
     Result,
     context::Cx,
     router::{page, path_param},
-    view::view,
+    view::{Unescaped, view},
 };
 
 use crate::{
     pages::with_repo,
+    render::render_asciidoc,
     shell::{Tab, split_shell},
 };
 
@@ -104,7 +105,7 @@ async fn issue_detail(cx: &Cx) -> Result {
                         <span class="muted">"#" (issue.id.as_str())</span>
                     </div>
                     <h2>(issue.title.as_str())</h2>
-                    <p class="body-copy">(issue.body.as_str())</p>
+                    <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&issue.body)))</div>
                     <div class="tag-row">
                         for label in &issue.labels {
                             <span class="tag">(label.as_str())</span>

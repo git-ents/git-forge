@@ -3,11 +3,12 @@ use topcoat::{
     Result,
     context::Cx,
     router::{page, path_param},
-    view::view,
+    view::{Unescaped, view},
 };
 
 use crate::{
     pages::with_repo,
+    render::render_asciidoc,
     shell::{Tab, split_shell},
 };
 
@@ -104,7 +105,7 @@ async fn review_detail(cx: &Cx) -> Result {
                         <span class="muted">"#" (review.id.as_str())</span>
                     </div>
                     <h2>"Review " (review.id.as_str())</h2>
-                    <p class="body-copy">(review.body.as_str())</p>
+                    <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&review.body)))</div>
                     <dl class="facts">
                         <dt>"Requesters"</dt>
                         <dd>(review.requesters.join(", "))</dd>
