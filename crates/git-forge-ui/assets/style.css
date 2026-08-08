@@ -70,7 +70,7 @@
 body { margin: 0; }
 a { color: inherit; text-decoration: none; }
 button, input, select, textarea { font: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .source-view:focus-visible { outline: 3px solid var(--color-accent); outline-offset: 2px; }
 
 .app-shell { display: grid; grid-template-columns: 9rem 1fr; min-height: 100vh; }
 .rail { padding: 1.25rem .75rem; background: var(--color-rail); color: var(--color-rail-text); }
@@ -244,10 +244,16 @@ code { overflow-wrap: anywhere; }
     .app-shell { grid-template-columns: 4.5rem 1fr; }
     .topbar, .content { padding-left: 1rem; padding-right: 1rem; }
     .topbar { height: auto; padding-top: .8rem; padding-bottom: .8rem; align-items: flex-start; flex-direction: column; }
-    .auth-state { margin-left: 0; }
+    .auth-state { width: 100%; min-width: 0; margin-left: 0; grid-template-columns: auto minmax(0, 1fr); }
+    .auth-state strong, .auth-state small { min-width: 0; overflow-wrap: anywhere; }
     .split-pane { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .form-layout { grid-template-columns: 1fr; gap: 1rem; }
     .form-intro { position: static; }
     .detail-heading { display: grid; }
+    .source-view { width: 100%; min-width: 0; }
+    .source-lines, .source-line { width: 100%; min-width: 0; }
+    .line-content { display: block; min-width: 0; max-width: 100%; white-space: pre; }
+    .line-comment { opacity: 1; }
+    .inline-comment-form, .source-comment { width: 100%; max-width: 100%; }
 }

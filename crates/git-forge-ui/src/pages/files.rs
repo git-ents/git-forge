@@ -32,7 +32,7 @@ async fn files(cx: &Cx) -> Result {
     let query = query_params::<TreeQuery>(cx)?;
     let requested_ref = query.reference.clone();
     let requested_path = query.path.clone();
-    let source = query.view.as_deref() == Some("source");
+    let view = supported_view(query.view.as_deref());
     let comment_target = CommentTarget::parse(query.comment.as_deref());
     let browse = with_repo(cx, move |repo| {
         tree::load(repo, requested_ref.as_deref(), requested_path.as_deref())
@@ -41,7 +41,7 @@ async fn files(cx: &Cx) -> Result {
     .await;
 
     let content = match browse {
-        Ok(browse) => browse_view(cx, &browse, source, comment_target, None).await?,
+        Ok(browse) => browse_view(cx, &browse, view, comment_target, None).await?,
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
@@ -62,11 +62,15 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
         .map(String::as_str)
         .unwrap_or_default()
         .to_owned();
+    let view = supported_view(input.get("view").map(String::as_str))
+        .unwrap_or("source")
+        .to_owned();
     let Some(target) = CommentTarget::parse(input.get("comment").map(String::as_str)) else {
         return comment_failure(
             cx,
             &reference,
             &path,
+            &view,
             CommentTarget::File,
             "Choose a file or line range.",
         )
@@ -93,6 +97,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
             cx,
             &reference,
             &path,
+            &view,
             target,
             "A file path and comment are required.",
         )
@@ -122,7 +127,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
             let href = tree_href(
                 &percent_encode(reference.as_bytes()),
                 &encode_query_path(&path),
-                Some("source"),
+                Some(&view),
             );
             let content = (view! {
                 <section class="success-panel">
@@ -139,7 +144,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
             if let Some(error) = crate::auth::authorization_error(&error) {
                 return Err(error);
             }
-            comment_failure(cx, &reference, &path, target, &error).await
+            comment_failure(cx, &reference, &path, &view, target, &error).await
         }
     }
 }
@@ -147,19 +152,24 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
 async fn browse_view(
     cx: &Cx,
     browse: &Browse,
-    source: bool,
+    view: Option<&str>,
     comment_target: Option<CommentTarget>,
     comment_error: Option<&str>,
 ) -> Result {
     match &browse.view {
-        BrowseView::Directory { entries, .. } => directory_view(cx, browse, entries).await,
+        BrowseView::Directory { entries, .. } => directory_view(cx, browse, entries, view).await,
         BrowseView::File(file) => {
-            file_view(cx, browse, file, source, comment_target, comment_error).await
+            file_view(cx, browse, file, view, comment_target, comment_error).await
         }
     }
 }
 
-async fn directory_view(cx: &Cx, browse: &Browse, entries: &[tree::Entry]) -> Result {
+async fn directory_view(
+    cx: &Cx,
+    browse: &Browse,
+    entries: &[tree::Entry],
+    view: Option<&str>,
+) -> Result {
     let current_path = if browse.path.is_empty() {
         "/"
     } else {
@@ -169,7 +179,7 @@ async fn directory_view(cx: &Cx, browse: &Browse, entries: &[tree::Entry]) -> Re
         <section class="panel tree-panel">
             <nav class="breadcrumbs" aria-label="Breadcrumb">
                 for breadcrumb in &browse.breadcrumbs {
-                    <a href=(tree_href(&browse.reference.selector, &breadcrumb.path, None))>
+                    <a href=(tree_href(&browse.reference.selector, &breadcrumb.path, view))>
                         (breadcrumb.display.as_str())
                     </a>
                 }
@@ -191,9 +201,9 @@ async fn directory_view(cx: &Cx, browse: &Browse, entries: &[tree::Entry]) -> Re
                                 if entry.kind == gix::objs::tree::EntryKind::Blob
                                     || entry.kind == gix::objs::tree::EntryKind::BlobExecutable
                                 {
-                                    default_file_view(&entry.path)
+                                    view.or_else(|| default_file_view(&entry.path))
                                 } else {
-                                    None
+                                    view
                                 },
                             ))>
                                 <span>
@@ -220,11 +230,16 @@ async fn file_view(
     cx: &Cx,
     browse: &Browse,
     file: &File,
-    source: bool,
+    view: Option<&str>,
     comment_target: Option<CommentTarget>,
     comment_error: Option<&str>,
 ) -> Result {
     let current_path = browse.path.as_str();
+    let effective_view = view
+        .or_else(|| default_file_view(current_path))
+        .or_else(|| is_previewable(current_path).then_some("preview"))
+        .unwrap_or("source");
+    let source = effective_view == "source";
     let comment_path = current_path.to_owned();
     let commit_id = browse.reference.commit_id;
     let file_subject = format!("file:{}", file_subject_id(current_path));
@@ -257,7 +272,17 @@ async fn file_view(
         })
         .collect::<Vec<_>>();
     let file_comment_form = if comment_target == Some(CommentTarget::File) && can_comment {
-        Some(comment_form(cx, browse, CommentTarget::File, comment_error, None).await?)
+        Some(
+            comment_form(
+                cx,
+                browse,
+                CommentTarget::File,
+                effective_view,
+                comment_error,
+                None,
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -310,7 +335,7 @@ async fn file_view(
         <section class="panel tree-panel">
             <nav class="breadcrumbs" aria-label="Breadcrumb">
                 for breadcrumb in &browse.breadcrumbs {
-                    <a href=(tree_href(&browse.reference.selector, &breadcrumb.path, None))>
+                    <a href=(tree_href(&browse.reference.selector, &breadcrumb.path, view))>
                         (breadcrumb.display.as_str())
                     </a>
                 }
@@ -342,6 +367,7 @@ async fn file_view(
                             &browse.reference.selector,
                             &browse.route_path,
                             CommentTarget::File,
+                            effective_view,
                         ))>"Comment on file"</a>
                     }
                 </div>
@@ -383,6 +409,16 @@ async fn source_view(
         file.text.split_inclusive('\n').collect::<Vec<_>>()
     };
     let mut rendered_lines = Vec::with_capacity(lines.len());
+    let selected_range = comment_target.and_then(|target| match target {
+        CommentTarget::Lines { start, end } => Some((start, end)),
+        CommentTarget::File => None,
+    });
+    let selected_start = selected_range.map_or_else(String::new, |(start, _)| start.to_string());
+    let selected_end = selected_range.map_or_else(String::new, |(_, end)| end.to_string());
+    let source_label = selected_range.map_or_else(
+        || "Source code".to_owned(),
+        |(start, end)| format!("Source code, comment range lines {start} through {end} selected"),
+    );
     for (index, line) in lines.iter().enumerate() {
         let line_number = index as u64 + 1;
         let composer = if comment_target.is_some_and(|target| target.is_start(line_number)) {
@@ -391,6 +427,7 @@ async fn source_view(
                     cx,
                     browse,
                     comment_target.unwrap_or(CommentTarget::File),
+                    "source",
                     comment_error,
                     Some(lines.len() as u64),
                 )
@@ -399,8 +436,16 @@ async fn source_view(
         } else {
             None
         };
+        let line_comment_label = match selected_range {
+            Some((start, end)) if (start..=end).contains(&line_number) && start != end => {
+                format!(
+                    "Comment on line {line_number} (selected range: lines {start} through {end})"
+                )
+            }
+            _ => format!("Comment on line {line_number}"),
+        };
         rendered_lines.push((view! { cx =>
-            <li class=(if comment_target.is_some_and(|target| target.contains(line_number)) { "source-line selected" } else { "source-line" }) id=(format!("L{line_number}")) data-line=(line_number)>
+            <li class=(if comment_target.is_some_and(|target| target.contains(line_number)) { "source-line selected" } else { "source-line" }) id=(format!("L{line_number}")) data-line=(line_number) data-selected-start=(selected_start.as_str()) data-selected-end=(selected_end.as_str())>
                 <a class="line-number" href=(format!("#L{line_number}")) aria-label=(format!("Line {line_number}"))>(line_number)</a>
                 <code class="line-content">(line)</code>
                 if let Some(form) = composer {
@@ -412,7 +457,8 @@ async fn source_view(
                             &browse.reference.selector,
                             &browse.route_path,
                             CommentTarget::Lines { start: line_number, end: line_number },
-                        ))>"Comment"</a>
+                            "source",
+                        )) aria-label=(line_comment_label.as_str())>"Comment"</a>
                     </div>
                 }
                 for anchored in anchored_comments.iter() {
@@ -431,8 +477,8 @@ async fn source_view(
         })?);
     }
     view! { cx =>
-        <div class="source-view" data-source-path=(browse.path.as_str())>
-            <ol class="source-lines" aria-label="Source code">
+        <div class="source-view" tabindex="0" aria-label=(source_label.as_str()) data-source-path=(browse.path.as_str())>
+            <ol class="source-lines" aria-label=(source_label.as_str()) data-selected-start=(selected_start.as_str()) data-selected-end=(selected_end.as_str())>
                 for line in rendered_lines { (line) }
             </ol>
         </div>
@@ -443,6 +489,7 @@ async fn comment_form(
     cx: &Cx,
     browse: &Browse,
     target: CommentTarget,
+    view: &str,
     error: Option<&str>,
     line_count: Option<u64>,
 ) -> Result<View> {
@@ -456,12 +503,13 @@ async fn comment_form(
         <form class="comment-form inline-comment-form" action="/tree/comments" method="post" data-comment-target=(target_name.as_str())>
             <input type="hidden" name="reference" value=(reference)>
             <input type="hidden" name="path" value=(browse.path.as_str())>
+            <input type="hidden" name="view" value=(view)>
             <input type="hidden" name="comment" value=(target_name.as_str())>
             <label for=(format!("file-comment-body-{}", target_name))>
                 if let CommentTarget::File = target { "Comment on this file" } else { "Comment on selected lines" }
             </label>
             if let CommentTarget::Lines { start, end } = target {
-                <p class="form-context">"Starting at line " (start)</p>
+                <p class="form-context">"Selected lines: " (start) "–" (end)</p>
                 <label for=(format!("file-comment-end-{}", target_name))>"Through line"</label>
                 <select id=(format!("file-comment-end-{}", target_name)) name="end">
                     for end_line in start..=max_line {
@@ -476,7 +524,7 @@ async fn comment_form(
             if let Some(error) = error {
                 <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p></div>
             }
-            <textarea id=(format!("file-comment-body-{}", target_name)) name="body" rows="4" placeholder="Leave a helpful note." required=""></textarea>
+            <textarea id=(format!("file-comment-body-{}", target_name)) name="body" rows="4" placeholder="Leave a helpful note." required="" autofocus=""></textarea>
             <button type="submit">"Comment"</button>
         </form>
     }
@@ -486,6 +534,7 @@ async fn comment_failure(
     cx: &Cx,
     reference: &str,
     path: &str,
+    view: &str,
     target: CommentTarget,
     error: &str,
 ) -> Result {
@@ -493,6 +542,7 @@ async fn comment_failure(
         &percent_encode(reference.as_bytes()),
         &encode_query_path(path),
         target,
+        view,
     );
     let content = (view! { cx =>
         <div class="error-panel">
@@ -596,8 +646,8 @@ fn line_at_offset(source: &[u8], offset: usize) -> Option<u64> {
     Some(1 + source.iter().filter(|byte| **byte == b'\n').count() as u64)
 }
 
-fn comment_href(reference: &str, route_path: &str, target: CommentTarget) -> String {
-    let mut href = tree_href(reference, route_path, Some("source"));
+fn comment_href(reference: &str, route_path: &str, target: CommentTarget, view: &str) -> String {
+    let mut href = tree_href(reference, route_path, Some(view));
     href.push_str("&comment=");
     href.push_str(&target.query());
     if let CommentTarget::Lines { start, .. } = target {
@@ -674,6 +724,14 @@ fn entry_kind_label(kind: gix::objs::tree::EntryKind) -> &'static str {
         gix::objs::tree::EntryKind::Tree => "directory",
         gix::objs::tree::EntryKind::Blob | gix::objs::tree::EntryKind::BlobExecutable => "file",
         _ => "special entry",
+    }
+}
+
+fn supported_view(view: Option<&str>) -> Option<&'static str> {
+    match view {
+        Some("source") => Some("source"),
+        Some("preview") => Some("preview"),
+        _ => None,
     }
 }
 

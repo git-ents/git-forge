@@ -30,7 +30,7 @@ fn ui_crawls_every_internal_route() {
     commit_file(
         repo_dir.path(),
         "src/lib.rs",
-        "pub fn ui_crawl() -> &'static str { \"rust\" }\n",
+        "pub fn ui_crawl() -> &'static str {\n    \"rust\"\n}\n\n",
         "add rust source",
     );
     commit_file(
@@ -103,6 +103,117 @@ fn ui_crawls_every_internal_route() {
     crawler.enqueue("POST", "/query", b"predicate=issue".to_vec());
     crawler.enqueue("POST", "/search", b"keyword=ui%20crawl".to_vec());
     crawler.run();
+
+    let source_response = crawler
+        .client
+        .request_with_authorization(
+            &Request {
+                method: "GET".to_owned(),
+                target: "/tree?ref=HEAD&path=src%2Flib.rs&view=source".to_owned(),
+                body: Vec::new(),
+            },
+            Some("alice"),
+        )
+        .unwrap();
+    assert_eq!(source_response.status, 200);
+    let source_html = source_response.body_text().unwrap().to_owned();
+    let line_comment_hrefs = attribute_values(&source_html, "href")
+        .into_iter()
+        .filter(|href| href.contains("&comment=") && !href.contains("&comment=file"))
+        .collect::<Vec<_>>();
+    assert_eq!(line_comment_hrefs.len(), 4);
+    for line in 1..=4 {
+        assert!(
+            source_html.contains(&format!("aria-label=\"Line {line}\"")),
+            "source line {line} has no accessible line name"
+        );
+        assert_eq!(
+            line_comment_hrefs
+                .iter()
+                .filter(|href| {
+                    href.contains("?ref=")
+                        && href.contains("&path=src%2Flib.rs&view=source")
+                        && href.contains(&format!("&comment={line}-{line}#L{line}"))
+                })
+                .count(),
+            1,
+            "source line {line} has no line-specific comment context"
+        );
+    }
+
+    let selected_response = crawler
+        .client
+        .request_with_authorization(
+            &Request {
+                method: "GET".to_owned(),
+                target: "/tree?ref=HEAD&path=src%2Flib.rs&view=source&comment=2-4".to_owned(),
+                body: Vec::new(),
+            },
+            Some("alice"),
+        )
+        .unwrap();
+    assert_eq!(selected_response.status, 200);
+    let selected_html = selected_response.body_text().unwrap().to_owned();
+    assert_eq!(
+        selected_html
+            .matches(r#"class="source-line selected""#)
+            .count(),
+        3
+    );
+    for line in 2..=4 {
+        assert!(
+            selected_html.contains(&format!(
+                r#"class="source-line selected" id="L{line}" data-line="{line}""#
+            )),
+            "selected source range omits line {line}"
+        );
+    }
+    let composer = form_tags(&selected_html)
+        .into_iter()
+        .find(|tag| attribute_value(tag, "data-comment-target").as_deref() == Some("2-4"))
+        .expect("selected source range has no composer");
+    assert_eq!(
+        attribute_value(composer, "action").as_deref(),
+        Some("/tree/comments")
+    );
+    let composer_html = form_contents(&selected_html, composer).expect("composer has no body");
+    assert_eq!(
+        input_value(composer_html, "reference").as_deref(),
+        Some("HEAD")
+    );
+    assert_eq!(
+        input_value(composer_html, "path").as_deref(),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        input_value(composer_html, "view").as_deref(),
+        Some("source")
+    );
+    assert_eq!(
+        input_value(composer_html, "comment").as_deref(),
+        Some("2-4")
+    );
+    assert!(
+        composer_html.contains(r#"<option value="4" selected="">4</option>"#),
+        "composer does not select line 4 as the end of the range"
+    );
+
+    let directory_response = crawler
+        .client
+        .request(&Request {
+            method: "GET".to_owned(),
+            target: "/tree?ref=HEAD&path=src".to_owned(),
+            body: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(directory_response.status, 200);
+    let directory_html = directory_response.body_text().unwrap();
+    assert!(
+        attribute_values(directory_html, "href")
+            .iter()
+            .any(|href| href.contains("?ref=") && href.contains("&path=src%2Flib.rs")),
+        "file link does not preserve the selected ref and path context"
+    );
 
     let mutation = Request {
         method: "POST".to_owned(),
@@ -557,6 +668,12 @@ fn form_tags(html: &str) -> Vec<&str> {
     tags
 }
 
+fn form_contents<'a>(html: &'a str, form_tag: &str) -> Option<&'a str> {
+    let start = html.find(form_tag)?;
+    let end = html[start..].find("</form>")? + start;
+    Some(&html[start..end])
+}
+
 fn attribute_values(html: &str, name: &str) -> Vec<String> {
     let mut values = Vec::new();
     let mut offset = 0;
@@ -572,6 +689,23 @@ fn attribute_values(html: &str, name: &str) -> Vec<String> {
         offset = end;
     }
     values
+}
+
+fn input_value(html: &str, name: &str) -> Option<String> {
+    let mut offset = 0;
+    while let Some(relative) = html[offset..].find("<input") {
+        let start = offset + relative;
+        let end = html[start..]
+            .find('>')
+            .map(|relative_end| start + relative_end + 1)
+            .unwrap_or_else(|| panic!("input tag is not terminated"));
+        let tag = &html[start..end];
+        if attribute_value(tag, "name").as_deref() == Some(name) {
+            return attribute_value(tag, "value");
+        }
+        offset = end;
+    }
+    None
 }
 
 fn attribute_value(tag: &str, name: &str) -> Option<String> {
