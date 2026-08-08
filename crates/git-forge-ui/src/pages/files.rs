@@ -1,9 +1,13 @@
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    collections::HashMap,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
+use gix_forge::{Binding, Comment, Commentable, LineRange};
 use topcoat::{
     Result,
     context::Cx,
-    router::{page, query_params},
+    router::{content::Form, page, query_params},
     view::{Unescaped, View, view},
 };
 
@@ -20,6 +24,7 @@ struct TreeQuery {
     reference: Option<String>,
     path: Option<String>,
     view: Option<String>,
+    comment: Option<String>,
 }
 
 #[page("/tree")]
@@ -28,6 +33,7 @@ async fn files(cx: &Cx) -> Result {
     let requested_ref = query.reference.clone();
     let requested_path = query.path.clone();
     let source = query.view.as_deref() == Some("source");
+    let comment_target = CommentTarget::parse(query.comment.as_deref());
     let browse = with_repo(cx, move |repo| {
         tree::load(repo, requested_ref.as_deref(), requested_path.as_deref())
             .map_err(|error| gix_forge::Error::QueryRules(error.to_string()))
@@ -35,19 +41,112 @@ async fn files(cx: &Cx) -> Result {
     .await;
 
     let content = match browse {
-        Ok(browse) => browse_view(cx, &browse, source).await?,
+        Ok(browse) => browse_view(cx, &browse, source, comment_target, None).await?,
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
     view! { shell(active: Tab::Files, title: "Files", keyword: None, child: content) }
 }
 
-async fn browse_view(cx: &Cx, browse: &Browse, source: bool) -> Result {
+#[page(POST "/tree/comments")]
+async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = crate::auth::authorization(cx).await?;
+    let reference = input
+        .get("reference")
+        .map(String::as_str)
+        .filter(|reference| !reference.is_empty())
+        .unwrap_or("HEAD")
+        .to_owned();
+    let path = input
+        .get("path")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let Some(target) = CommentTarget::parse(input.get("comment").map(String::as_str)) else {
+        return comment_failure(
+            cx,
+            &reference,
+            &path,
+            CommentTarget::File,
+            "Choose a file or line range.",
+        )
+        .await;
+    };
+    let body = input
+        .get("body")
+        .map(String::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if path.is_empty() || body.is_empty() {
+        return comment_failure(
+            cx,
+            &reference,
+            &path,
+            target,
+            "A file path and comment are required.",
+        )
+        .await;
+    }
+
+    let subject_id = file_subject_id(&path);
+    let anchor_path = path.clone();
+    let result = with_repo(cx, move |repo| {
+        let subject = FileSubject { id: &subject_id };
+        match target {
+            CommentTarget::File => subject.add_comment_as(repo, &authorization, &body),
+            CommentTarget::Lines { start, end } => subject.add_anchored_comment_as(
+                repo,
+                &authorization,
+                &anchor_path,
+                Some(LineRange { start, end }),
+                &body,
+            ),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(_) => {
+            let href = tree_href(
+                &percent_encode(reference.as_bytes()),
+                &encode_query_path(&path),
+                Some("source"),
+            );
+            let content = (view! {
+                <section class="success-panel">
+                    <span class="success-icon">"✓"</span>
+                    <p class="eyebrow">"PUBLISHED"</p>
+                    <h2>"Your file comment is live"</h2>
+                    <p class="muted">"The source view now includes the comment anchor."</p>
+                    <a class="button-link" href=(href)>"Return to file"</a>
+                </section>
+            })?;
+            view! { shell(active: Tab::Files, title: "Comment published", keyword: None, child: content) }
+        }
+        Err(error) => {
+            if let Some(error) = crate::auth::authorization_error(&error) {
+                return Err(error);
+            }
+            comment_failure(cx, &reference, &path, target, &error).await
+        }
+    }
+}
+
+async fn browse_view(
+    cx: &Cx,
+    browse: &Browse,
+    source: bool,
+    comment_target: Option<CommentTarget>,
+    comment_error: Option<&str>,
+) -> Result {
     match &browse.view {
         BrowseView::Directory { object_id, entries } => {
             directory_view(cx, browse, *object_id, entries).await
         }
-        BrowseView::File(file) => file_view(cx, browse, file, source).await,
+        BrowseView::File(file) => {
+            file_view(cx, browse, file, source, comment_target, comment_error).await
+        }
     }
 }
 
@@ -116,12 +215,49 @@ async fn directory_view(
     }
 }
 
-async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Result {
+async fn file_view(
+    cx: &Cx,
+    browse: &Browse,
+    file: &File,
+    source: bool,
+    comment_target: Option<CommentTarget>,
+    comment_error: Option<&str>,
+) -> Result {
     let current_path = browse.path.as_str();
+    let file_subject = file_subject_id(current_path);
+    let comments = with_repo(cx, move |repo| {
+        Comment::list_under(repo, "file", &file_subject)
+    })
+    .await
+    .unwrap_or_default();
+    let can_comment = crate::auth::can_create::<Comment>(cx).await;
+    let anchored_comments = comments
+        .iter()
+        .filter_map(|comment| {
+            anchored_line_range(comment, current_path, file.text.as_bytes()).map(|range| {
+                AnchoredComment {
+                    comment: comment.clone(),
+                    range,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let file_comment_form = if comment_target == Some(CommentTarget::File) && can_comment {
+        Some(comment_form(cx, browse, CommentTarget::File, comment_error).await?)
+    } else {
+        None
+    };
     let body: View = if source {
-        (view! { cx =>
-            <pre class="source-view"><code>(file.text.as_str())</code></pre>
-        })?
+        source_view(
+            cx,
+            browse,
+            file,
+            &anchored_comments,
+            comment_target,
+            comment_error,
+            can_comment,
+        )
+        .await?
     } else if is_previewable(current_path) {
         match render_preview(current_path, &file.text) {
             Ok(Preview::RenderedHtml(html)) => {
@@ -182,9 +318,160 @@ async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Resul
                     "Source"
                 </a>
             </div>
+            <section class="file-comments" aria-label="File comments">
+                <div class="panel-heading">
+                    <div>
+                        <h3>"File comments"</h3>
+                        <span class="muted">"Notes attached to this file"</span>
+                    </div>
+                    if can_comment && comment_target != Some(CommentTarget::File) {
+                        <a class="button-link secondary" href=(comment_href(
+                            &browse.reference.selector,
+                            &browse.route_path,
+                            CommentTarget::File,
+                        ))>"Comment on file"</a>
+                    }
+                </div>
+                if let Some(form) = file_comment_form {
+                    (form)
+                } else if !can_comment {
+                    <p class="form-context">"Sign in as a forge member to comment on this file."</p>
+                }
+                for comment in comments.iter() {
+                    if comment.binding.is_none() {
+                        <article class="comment file-comment" id=(format!("comment-{}", comment.id))>
+                            <div class="comment-heading">
+                                <strong>(comment.author.as_str())</strong>
+                                <a class="muted" href=(format!("/comments/{}", comment.id))>"Permalink"</a>
+                            </div>
+                            <p>(comment.body.as_str())</p>
+                        </article>
+                    }
+                }
+            </section>
             (body)
         </section>
     }
+}
+
+async fn source_view(
+    cx: &Cx,
+    browse: &Browse,
+    file: &File,
+    anchored_comments: &[AnchoredComment],
+    comment_target: Option<CommentTarget>,
+    comment_error: Option<&str>,
+    can_comment: bool,
+) -> Result<View> {
+    let lines = if file.text.is_empty() {
+        vec![""]
+    } else {
+        file.text.split_inclusive('\n').collect::<Vec<_>>()
+    };
+    let mut rendered_lines = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let line_number = index as u64 + 1;
+        let composer = if comment_target.is_some_and(|target| target.is_start(line_number)) {
+            Some(
+                comment_form(
+                    cx,
+                    browse,
+                    comment_target.unwrap_or(CommentTarget::File),
+                    comment_error,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        rendered_lines.push((view! { cx =>
+            <li class=(if comment_target.is_some_and(|target| target.contains(line_number)) { "source-line selected" } else { "source-line" }) id=(format!("L{line_number}")) data-line=(line_number)>
+                <a class="line-number" href=(format!("#L{line_number}")) aria-label=(format!("Line {line_number}"))>(line_number)</a>
+                <code class="line-content">(line)</code>
+                if let Some(form) = composer {
+                    (form)
+                }
+                if can_comment {
+                    <div class="line-actions">
+                        <a class="line-comment" href=(comment_href(
+                            &browse.reference.selector,
+                            &browse.route_path,
+                            CommentTarget::Lines { start: line_number, end: line_number },
+                        ))>"Comment"</a>
+                    </div>
+                }
+                for anchored in anchored_comments.iter() {
+                    if anchored.range.start == line_number {
+                        <article class="source-comment" id=(format!("comment-{}", anchored.comment.id)) data-comment-start=(anchored.range.start) data-comment-end=(anchored.range.end)>
+                            <div class="comment-heading">
+                                <strong>(anchored.comment.author.as_str())</strong>
+                                <a class="muted" href=(format!("/comments/{}", anchored.comment.id))>"Permalink"</a>
+                            </div>
+                            <p class="comment-range">"Lines " (anchored.range.start) "–" (anchored.range.end)</p>
+                            <p>(anchored.comment.body.as_str())</p>
+                        </article>
+                    }
+                }
+            </li>
+        })?);
+    }
+    view! { cx =>
+        <div class="source-view" data-source-path=(browse.path.as_str())>
+            <ol class="source-lines" aria-label="Source code">
+                for line in rendered_lines { (line) }
+            </ol>
+        </div>
+    }
+}
+
+async fn comment_form(
+    cx: &Cx,
+    browse: &Browse,
+    target: CommentTarget,
+    error: Option<&str>,
+) -> Result<View> {
+    let reference = browse.reference.requested.as_deref().unwrap_or("HEAD");
+    let target_name = target.query();
+    view! { cx =>
+        <form class="comment-form inline-comment-form" action="/tree/comments" method="post" data-comment-target=(target_name.as_str())>
+            <input type="hidden" name="reference" value=(reference)>
+            <input type="hidden" name="path" value=(browse.path.as_str())>
+            <input type="hidden" name="comment" value=(target_name.as_str())>
+            <label for=(format!("file-comment-body-{}", target_name))>
+                if let CommentTarget::File = target { "Comment on this file" } else { "Comment on selected lines" }
+            </label>
+            if let CommentTarget::Lines { start, end } = target {
+                <p class="form-context">"Lines " (start) "–" (end)</p>
+            }
+            if let Some(error) = error {
+                <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p></div>
+            }
+            <textarea id=(format!("file-comment-body-{}", target_name)) name="body" rows="4" placeholder="Leave a helpful note." required=""></textarea>
+            <button type="submit">"Comment"</button>
+        </form>
+    }
+}
+
+async fn comment_failure(
+    cx: &Cx,
+    reference: &str,
+    path: &str,
+    target: CommentTarget,
+    error: &str,
+) -> Result {
+    let href = comment_href(
+        &percent_encode(reference.as_bytes()),
+        &encode_query_path(path),
+        target,
+    );
+    let content = (view! { cx =>
+        <div class="error-panel">
+            <strong>"Comment could not be saved"</strong>
+            <p>(error)</p>
+            <a href=(href)>"Return to comment composer"</a>
+        </div>
+    })?;
+    view! { cx => shell(active: Tab::Files, title: "File comment", keyword: None, child: content) }
 }
 
 async fn error_panel(cx: &Cx, title: &str, error: &str) -> Result {
@@ -195,6 +482,97 @@ async fn error_panel(cx: &Cx, title: &str, error: &str) -> Result {
             <p>"Try another ref or path."</p>
         </div>
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentTarget {
+    File,
+    Lines { start: u64, end: u64 },
+}
+
+impl CommentTarget {
+    fn parse(value: Option<&str>) -> Option<Self> {
+        let value = value?;
+        if value == "file" {
+            return Some(Self::File);
+        }
+        let (start, end) = value.split_once('-').unwrap_or((value, value));
+        let start = start.parse().ok()?;
+        let end = end.parse().ok()?;
+        (start > 0 && end >= start).then_some(Self::Lines { start, end })
+    }
+
+    fn query(self) -> String {
+        match self {
+            Self::File => "file".to_owned(),
+            Self::Lines { start, end } => format!("{start}-{end}"),
+        }
+    }
+
+    fn contains(self, line: u64) -> bool {
+        match self {
+            Self::File => false,
+            Self::Lines { start, end } => (start..=end).contains(&line),
+        }
+    }
+
+    fn is_start(self, line: u64) -> bool {
+        matches!(self, Self::Lines { start, .. } if start == line)
+    }
+}
+
+struct FileSubject<'a> {
+    id: &'a str,
+}
+
+impl Commentable for FileSubject<'_> {
+    fn comment_subject(&self) -> (&'static str, &str) {
+        ("file", self.id)
+    }
+}
+
+struct AnchoredComment {
+    comment: Comment,
+    range: LineRange,
+}
+
+fn file_subject_id(path: &str) -> String {
+    percent_encode(path.as_bytes())
+}
+
+fn anchored_line_range(comment: &Comment, path: &str, source: &[u8]) -> Option<LineRange> {
+    let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
+        return None;
+    };
+    if anchor.identity.path != path {
+        return None;
+    }
+    let start = usize::try_from(anchor.identity.span.start).ok()?;
+    let end = usize::try_from(anchor.identity.span.end).ok()?;
+    if start > end || end > source.len() {
+        return None;
+    }
+    let end_offset = if start == end { start } else { end - 1 };
+    Some(LineRange {
+        start: line_at_offset(source, start)?,
+        end: line_at_offset(source, end_offset)?,
+    })
+}
+
+fn line_at_offset(source: &[u8], offset: usize) -> Option<u64> {
+    let source = source.get(..offset)?;
+    Some(1 + source.iter().filter(|byte| **byte == b'\n').count() as u64)
+}
+
+fn comment_href(reference: &str, route_path: &str, target: CommentTarget) -> String {
+    let mut href = tree_href(reference, route_path, Some("source"));
+    href.push_str("&comment=");
+    href.push_str(&target.query());
+    if let CommentTarget::Lines { start, .. } = target {
+        href.push_str("#L");
+        href.push_str(&start.to_string());
+    }
+    href
 }
 
 enum Preview {
