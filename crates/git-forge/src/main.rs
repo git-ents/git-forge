@@ -195,6 +195,8 @@ struct MemberAddArgs {
     signing_key: Option<String>,
     #[arg(long)]
     role: Option<String>,
+    #[arg(long)]
+    bootstrap: bool,
 }
 
 #[derive(Args)]
@@ -350,12 +352,15 @@ fn main() -> Result<()> {
     // the same schema objects come back thousands of times per run, so give
     // gix's object cache -- off unless asked for -- something to hold them.
     repo.object_cache_size_if_unset(4 * 1024 * 1024);
-    let authorization = resolve_authorization(&repo, cli.as_member.as_deref())?;
+    let as_member = cli.as_member;
+    let authorization = resolve_authorization(&repo, as_member.as_deref())?;
 
     match cli.command {
         Command::Issue(command) => run_issue(&repo, &authorization, command)?,
         Command::Review(command) => run_review(&repo, &authorization, command)?,
-        Command::Member(command) => run_member(&repo, &authorization, command)?,
+        Command::Member(command) => {
+            run_member(&repo, &authorization, as_member.as_deref(), command)?
+        }
         Command::Comment(command) => run_comment(&repo, &authorization, command)?,
         Command::Query(command) => run_query(&repo, command)?,
         Command::Install(args) => run_install(&repo, &authorization, args)?,
@@ -757,33 +762,88 @@ fn run_issue(
 fn run_member(
     repo: &gix::Repository,
     authorization: &Authorization,
+    as_member: Option<&str>,
     command: MemberCommand,
 ) -> Result<()> {
     match command {
         MemberCommand::Add(args) => {
+            let members = load_members(repo)?;
+            if args.bootstrap && !members.is_empty() {
+                bail!("--bootstrap is only allowed when no members exist");
+            }
+            if args.bootstrap && args.role.is_some() {
+                bail!("--bootstrap forces the role to maintainer; omit --role");
+            }
+
+            let explicit_signing_key = args.signing_key.is_some();
+            let configured_signing_key = effective_signing_key()?;
             let interactive = resolve_interactive(
                 args.interactive,
                 args.signing_key.is_none() && args.role.is_none(),
             )?;
-            let (signing_key, role) = if interactive {
-                (
-                    prompt_required_text("Signing key")?,
-                    prompt_required_text("Role")?,
-                )
+            let signing_key = if let Some(signing_key) = args.signing_key {
+                signing_key
+            } else if interactive {
+                match configured_signing_key.as_deref() {
+                    Some(signing_key) => prompt_text_with_default("Signing key", signing_key)?,
+                    None => prompt_required_text("Signing key")?,
+                }
             } else {
-                (
-                    args.signing_key
-                        .context("--signing-key is required unless running interactively")?,
-                    args.role
-                        .context("--role is required unless running interactively")?,
-                )
+                configured_signing_key
+                    .as_ref()
+                    .context(
+                        "cannot determine signing key; set it with `git config user.signingKey ...` or pass `--signing-key KEY`",
+                    )?
+                    .to_owned()
+            };
+            let role = if args.bootstrap {
+                "maintainer".to_owned()
+            } else if interactive {
+                prompt_text_with_default("Role", args.role.as_deref().unwrap_or("member"))?
+            } else {
+                args.role.unwrap_or_else(|| "member".to_owned())
+            };
+            validate_member_role(&role)?;
+            if let Some(existing) = members
+                .iter()
+                .find(|member| member.signing_key == signing_key)
+            {
+                bail!(
+                    "signing key already belongs to member {}; choose a different key",
+                    existing.id
+                );
+            }
+
+            let authorization = if args.bootstrap {
+                Authorization::new(Principal::member_id("bootstrap")).administrator()
+            } else if as_member.is_some() {
+                authorization.clone()
+            } else {
+                let matches: Vec<_> = members
+                    .iter()
+                    .filter(|member| {
+                        configured_signing_key.as_deref() == Some(member.signing_key.as_str())
+                    })
+                    .collect();
+                if !explicit_signing_key && configured_signing_key.is_none() {
+                    bail!(
+                        "cannot infer the authorizing member from user.signingKey; pass `--as MEMBER_ID`"
+                    );
+                }
+                match matches.as_slice() {
+                    [member] => resolve_authorization(repo, Some(&member.id))?,
+                    [] => bail!(
+                        "cannot infer the authorizing member from user.signingKey; pass `--as MEMBER_ID`"
+                    ),
+                    _ => bail!("user.signingKey matches multiple members; pass `--as MEMBER_ID`"),
+                }
             };
             let member = Member {
                 id: String::new(),
                 signing_key,
                 role,
             };
-            println!("{}", member.create_in_repo_as(repo, authorization)?);
+            println!("{}", member.create_in_repo_as(repo, &authorization)?);
         }
         MemberCommand::Edit(args) => {
             let id = resolve_member_show_id(repo, &args.id)?
@@ -914,6 +974,33 @@ fn run_comment(
 
 fn resolve_member_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
     resolve_show_id("member", id, &Member::list(repo)?)
+}
+
+fn load_members(repo: &gix::Repository) -> Result<Vec<Member>> {
+    Member::list(repo)?
+        .into_iter()
+        .map(|id| Member::load_from_repo(repo, &id)?.with_context(|| format!("no member {id}")))
+        .collect()
+}
+
+fn effective_signing_key() -> Result<Option<String>> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--get", "user.signingKey"])
+        .output()
+        .context("failed to read effective Git config user.signingKey")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let signing_key = String::from_utf8(output.stdout)
+        .context("effective Git config user.signingKey is not valid UTF-8")?;
+    Ok((!signing_key.trim().is_empty()).then(|| signing_key.trim().to_owned()))
+}
+
+fn validate_member_role(role: &str) -> Result<()> {
+    if matches!(role, "member" | "reviewer" | "maintainer") {
+        return Ok(());
+    }
+    bail!("invalid member role `{role}`; choose member, reviewer, or maintainer")
 }
 
 fn resolve_comment_subject_id(
