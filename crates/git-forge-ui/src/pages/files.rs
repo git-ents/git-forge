@@ -3,7 +3,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use gix_forge::{Binding, Comment, Commentable, LineRange};
+use gix_forge::{Binding, Comment, LineRange, binding_genesis};
 use topcoat::{
     Result,
     context::Cx,
@@ -72,6 +72,16 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
         )
         .await;
     };
+    let target = match target {
+        CommentTarget::Lines { start, end } => input
+            .get("end")
+            .and_then(|value| value.parse().ok())
+            .filter(|candidate| *candidate >= start)
+            .map_or(CommentTarget::Lines { start, end }, |end| {
+                CommentTarget::Lines { start, end }
+            }),
+        target => target,
+    };
     let body = input
         .get("body")
         .map(String::as_str)
@@ -89,20 +99,21 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
         .await;
     }
 
-    let subject_id = file_subject_id(&path);
     let anchor_path = path.clone();
+    let anchor_reference = reference.clone();
     let result = with_repo(cx, move |repo| {
-        let subject = FileSubject { id: &subject_id };
-        match target {
-            CommentTarget::File => subject.add_comment_as(repo, &authorization, &body),
-            CommentTarget::Lines { start, end } => subject.add_anchored_comment_as(
-                repo,
-                &authorization,
-                &anchor_path,
-                Some(LineRange { start, end }),
-                &body,
-            ),
-        }
+        let lines = match target {
+            CommentTarget::File => None,
+            CommentTarget::Lines { start, end } => Some(LineRange { start, end }),
+        };
+        Comment::create_anchored_in_repo_as(
+            repo,
+            &authorization,
+            &anchor_reference,
+            &anchor_path,
+            lines,
+            &body,
+        )
     })
     .await;
 
@@ -141,21 +152,14 @@ async fn browse_view(
     comment_error: Option<&str>,
 ) -> Result {
     match &browse.view {
-        BrowseView::Directory { object_id, entries } => {
-            directory_view(cx, browse, *object_id, entries).await
-        }
+        BrowseView::Directory { entries, .. } => directory_view(cx, browse, entries).await,
         BrowseView::File(file) => {
             file_view(cx, browse, file, source, comment_target, comment_error).await
         }
     }
 }
 
-async fn directory_view(
-    cx: &Cx,
-    browse: &Browse,
-    object_id: gix::ObjectId,
-    entries: &[tree::Entry],
-) -> Result {
+async fn directory_view(cx: &Cx, browse: &Browse, entries: &[tree::Entry]) -> Result {
     let current_path = if browse.path.is_empty() {
         "/"
     } else {
@@ -174,7 +178,6 @@ async fn directory_view(
                 <span class="status">"directory"</span>
                 <span class="muted">"ref: " (browse.reference.name.as_str())</span>
                 <span class="muted">"path: " (current_path)</span>
-                <span class="muted">"tree: " (object_id.to_string())</span>
             </div>
             if entries.is_empty() {
                 <p class="empty">"This directory is empty."</p>
@@ -203,8 +206,6 @@ async fn directory_view(
                                     } else {
                                         "—"
                                     }
-                                    " · "
-                                    (entry.object_id.to_string())
                                 </span>
                             </a>
                         </li>
@@ -224,9 +225,22 @@ async fn file_view(
     comment_error: Option<&str>,
 ) -> Result {
     let current_path = browse.path.as_str();
-    let file_subject = file_subject_id(current_path);
+    let comment_path = current_path.to_owned();
+    let commit_id = browse.reference.commit_id;
+    let file_subject = format!("file:{}", file_subject_id(current_path));
     let comments = with_repo(cx, move |repo| {
-        Comment::list_under(repo, "file", &file_subject)
+        Ok(Comment::list_all(repo)?
+            .into_iter()
+            .filter(|comment| {
+                comment.subject.as_deref() == Some(file_subject.as_str())
+                    || matches!(
+                        comment.binding.as_ref(),
+                        Some(binding @ Binding::Position(anchor))
+                            if anchor.identity.path == comment_path
+                                && binding_genesis(binding) == Some(commit_id)
+                    )
+            })
+            .collect::<Vec<_>>())
     })
     .await
     .unwrap_or_default();
@@ -243,7 +257,7 @@ async fn file_view(
         })
         .collect::<Vec<_>>();
     let file_comment_form = if comment_target == Some(CommentTarget::File) && can_comment {
-        Some(comment_form(cx, browse, CommentTarget::File, comment_error).await?)
+        Some(comment_form(cx, browse, CommentTarget::File, comment_error, None).await?)
     } else {
         None
     };
@@ -306,7 +320,6 @@ async fn file_view(
                 <span class="muted">"ref: " (browse.reference.name.as_str())</span>
                 <span class="muted">"path: " (current_path)</span>
                 <span class="muted">(format!("{} bytes", file.size))</span>
-                <span class="muted">"blob: " (file.object_id.to_string())</span>
             </div>
             <div class="view-toggle" aria-label="File view">
                 if is_previewable(current_path) {
@@ -338,7 +351,8 @@ async fn file_view(
                     <p class="form-context">"Sign in as a forge member to comment on this file."</p>
                 }
                 for comment in comments.iter() {
-                    if comment.binding.is_none() {
+                    if comment.binding.is_none()
+                        || is_file_anchor(comment, current_path, file.text.as_bytes()) {
                         <article class="comment file-comment" id=(format!("comment-{}", comment.id))>
                             <div class="comment-heading">
                                 <strong>(comment.author.as_str())</strong>
@@ -378,6 +392,7 @@ async fn source_view(
                     browse,
                     comment_target.unwrap_or(CommentTarget::File),
                     comment_error,
+                    Some(lines.len() as u64),
                 )
                 .await?,
             )
@@ -429,9 +444,14 @@ async fn comment_form(
     browse: &Browse,
     target: CommentTarget,
     error: Option<&str>,
+    line_count: Option<u64>,
 ) -> Result<View> {
-    let reference = browse.reference.requested.as_deref().unwrap_or("HEAD");
+    let reference = browse.reference.name.as_str();
     let target_name = target.query();
+    let max_line = match target {
+        CommentTarget::Lines { end, .. } => line_count.unwrap_or(end),
+        CommentTarget::File => 0,
+    };
     view! { cx =>
         <form class="comment-form inline-comment-form" action="/tree/comments" method="post" data-comment-target=(target_name.as_str())>
             <input type="hidden" name="reference" value=(reference)>
@@ -441,7 +461,17 @@ async fn comment_form(
                 if let CommentTarget::File = target { "Comment on this file" } else { "Comment on selected lines" }
             </label>
             if let CommentTarget::Lines { start, end } = target {
-                <p class="form-context">"Lines " (start) "–" (end)</p>
+                <p class="form-context">"Starting at line " (start)</p>
+                <label for=(format!("file-comment-end-{}", target_name))>"Through line"</label>
+                <select id=(format!("file-comment-end-{}", target_name)) name="end">
+                    for end_line in start..=max_line {
+                        if end_line == end {
+                            <option value=(end_line) selected="">(end_line)</option>
+                        } else {
+                            <option value=(end_line)>(end_line)</option>
+                        }
+                    }
+                </select>
             }
             if let Some(error) = error {
                 <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p></div>
@@ -521,16 +551,6 @@ impl CommentTarget {
     }
 }
 
-struct FileSubject<'a> {
-    id: &'a str,
-}
-
-impl Commentable for FileSubject<'_> {
-    fn comment_subject(&self) -> (&'static str, &str) {
-        ("file", self.id)
-    }
-}
-
 struct AnchoredComment {
     comment: Comment,
     range: LineRange,
@@ -541,6 +561,9 @@ fn file_subject_id(path: &str) -> String {
 }
 
 fn anchored_line_range(comment: &Comment, path: &str, source: &[u8]) -> Option<LineRange> {
+    if is_file_anchor(comment, path, source) {
+        return None;
+    }
     let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
         return None;
     };
@@ -557,6 +580,15 @@ fn anchored_line_range(comment: &Comment, path: &str, source: &[u8]) -> Option<L
         start: line_at_offset(source, start)?,
         end: line_at_offset(source, end_offset)?,
     })
+}
+
+fn is_file_anchor(comment: &Comment, path: &str, source: &[u8]) -> bool {
+    let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
+        return false;
+    };
+    anchor.identity.path == path
+        && anchor.identity.span.start == 0
+        && anchor.identity.span.end == source.len() as u64
 }
 
 fn line_at_offset(source: &[u8], offset: usize) -> Option<u64> {

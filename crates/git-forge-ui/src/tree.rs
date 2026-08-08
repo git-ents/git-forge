@@ -20,8 +20,12 @@ pub fn load(
         .find_reference(ref_name)
         .map_err(|error| Error::Reference(error.to_string()))?;
     let reference_name = reference.name().as_bstr().as_bytes().to_owned();
-    let mut tree = reference
-        .peel_to_tree()
+    let commit = reference
+        .peel_to_commit()
+        .map_err(|error| Error::Reference(error.to_string()))?;
+    let commit_id = commit.id;
+    let mut tree = commit
+        .tree()
         .map_err(|error| Error::Reference(error.to_string()))?;
     let tree_id = tree.id;
 
@@ -60,6 +64,7 @@ pub fn load(
             name: display_name(&reference_name),
             name_bytes: reference_name,
             selector: percent_encode(reference.name().as_bstr().as_bytes()),
+            commit_id,
             tree_id,
         },
         path: path.to_owned(),
@@ -270,6 +275,7 @@ pub struct RefInfo {
     pub name: String,
     pub name_bytes: Vec<u8>,
     pub selector: String,
+    pub commit_id: gix::ObjectId,
     pub tree_id: gix::ObjectId,
 }
 

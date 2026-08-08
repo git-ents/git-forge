@@ -132,6 +132,32 @@ impl Comment {
         Ok(gix_store::entity_name_under(&group, commit).to_string())
     }
 
+    /// Create a free-floating anchored comment after authorization.
+    pub fn create_anchored_in_repo_as(
+        repo: &Repository,
+        authorization: &Authorization,
+        revision: &str,
+        path: &str,
+        lines: Option<LineRange>,
+        body: &str,
+    ) -> Result<String, Error> {
+        let anchor = capture(repo, revision, path, lines)?;
+        Self {
+            id: String::new(),
+            subject: None,
+            author: String::new(),
+            body: body.to_owned(),
+            binding: Some(Binding::Position(anchor)),
+            edit: None,
+        }
+        .create_in_repo_as(repo, authorization)
+    }
+
+    /// Every comment in the repository, ascending by id.
+    pub fn list_all(repo: &Repository) -> Result<Vec<Comment>, Error> {
+        Self::load_all(&crate::open_store(repo))
+    }
+
     /// Every comment stored under `<subject_kind>/<subject_id>`, ascending by
     /// id.
     pub fn list_under(
