@@ -122,7 +122,7 @@ async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Resul
         (view! { cx =>
             <pre class="source-view"><code>(file.text.as_str())</code></pre>
         })?
-    } else {
+    } else if is_previewable(current_path) {
         match render_preview(current_path, &file.text) {
             Ok(Preview::RenderedHtml(html)) => {
                 (view! { cx =>
@@ -150,6 +150,10 @@ async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Resul
                 })?
             }
         }
+    } else {
+        (view! { cx =>
+            <pre class="source-view"><code>(file.text.as_str())</code></pre>
+        })?
     };
 
     view! { cx =>
@@ -169,9 +173,11 @@ async fn file_view(cx: &Cx, browse: &Browse, file: &File, source: bool) -> Resul
                 <span class="muted">"blob: " (file.object_id.to_string())</span>
             </div>
             <div class="view-toggle" aria-label="File view">
-                <a href=(tree_href(&browse.reference.selector, &browse.route_path, Some("preview")))>
-                    "Preview"
-                </a>
+                if is_previewable(current_path) {
+                    <a href=(tree_href(&browse.reference.selector, &browse.route_path, Some("preview")))>
+                        "Preview"
+                    </a>
+                }
                 <a href=(tree_href(&browse.reference.selector, &browse.route_path, Some("source")))>
                     "Source"
                 </a>
@@ -232,6 +238,10 @@ fn is_asciidoc(path: &str) -> bool {
                 || extension.eq_ignore_ascii_case("ad")
                 || extension.eq_ignore_ascii_case("asc")
     )
+}
+
+fn is_previewable(path: &str) -> bool {
+    is_markdown(path) || is_asciidoc(path)
 }
 
 fn default_file_view(path: &str) -> Option<&'static str> {
