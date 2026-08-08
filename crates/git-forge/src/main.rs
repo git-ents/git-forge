@@ -379,6 +379,7 @@ fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
     }
 
     let repo_path = repo.path().to_owned();
+    let member_id = resolve_ui_member_id(repo);
     let host = args.host;
     let open = args.open;
     let port = args.port;
@@ -390,7 +391,7 @@ fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
     runtime.block_on(async move {
         let repo = gix::ThreadSafeRepository::open(repo_path)
             .context("failed to open the repository for the UI")?;
-        let router = git_forge_ui::build_router(Arc::new(repo)).await;
+        let router = git_forge_ui::build_router(Arc::new(repo), member_id).await;
         let listener = tokio::net::TcpListener::bind((host.as_str(), port.unwrap_or(0)))
             .await
             .with_context(|| format!("failed to bind the UI to {host}:{:?}", port))?;
@@ -981,6 +982,16 @@ fn load_members(repo: &gix::Repository) -> Result<Vec<Member>> {
         .into_iter()
         .map(|id| Member::load_from_repo(repo, &id)?.with_context(|| format!("no member {id}")))
         .collect()
+}
+
+fn resolve_ui_member_id(repo: &gix::Repository) -> Option<String> {
+    let signing_key = effective_signing_key().ok().flatten()?;
+    let members = load_members(repo).ok()?;
+    let mut matches = members
+        .into_iter()
+        .filter(|member| member.signing_key == signing_key);
+    let member = matches.next()?;
+    matches.next().is_none().then_some(member.id)
 }
 
 fn effective_signing_key() -> Result<Option<String>> {

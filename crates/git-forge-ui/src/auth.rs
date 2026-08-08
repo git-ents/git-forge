@@ -12,17 +12,25 @@ const BEARER_PREFIX: &str = "Bearer ";
 
 /// Extract the authenticated principal from a UI request.
 ///
-/// The UI is intentionally local: a bearer value is treated as the forge member
-/// id and is never compared with [`gix_forge::Member::signing_key`]. Missing,
-/// malformed, or empty credentials produce [`Principal::Anonymous`].
+/// Extract the explicit bearer principal, or the member selected when the UI
+/// router was built from the effective Git signing key.
 #[must_use]
 pub fn principal(cx: &Cx) -> Principal {
+    explicit_principal(cx)
+        .or_else(|| {
+            app_context::<Option<String>>(cx)
+                .as_deref()
+                .map(Principal::member_id)
+        })
+        .unwrap_or_else(Principal::anonymous)
+}
+
+fn explicit_principal(cx: &Cx) -> Option<Principal> {
     headers(cx)
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_bearer)
         .map(Principal::member_id)
-        .unwrap_or_else(Principal::anonymous)
 }
 
 /// Return the authenticated principal for a request, if it has one.

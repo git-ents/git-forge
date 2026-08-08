@@ -12,7 +12,10 @@ use topcoat::{
 };
 use topcoat_asset::{Bundler, BundlerConfig};
 
-pub async fn build_router(repo: Arc<gix::ThreadSafeRepository>) -> Router {
+pub async fn build_router(
+    repo: Arc<gix::ThreadSafeRepository>,
+    member_id: Option<String>,
+) -> Router {
     let executable = std::env::current_exe()
         .expect("failed to locate the current executable for asset bundling");
     let assets_dir = executable
@@ -46,6 +49,7 @@ pub async fn build_router(repo: Arc<gix::ThreadSafeRepository>) -> Router {
     Router::builder()
         .discover()
         .app_context(repo)
+        .app_context(member_id)
         .assets(assets)
         .build()
 }
