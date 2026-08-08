@@ -87,8 +87,8 @@ enum Command {
 #[derive(Args)]
 struct UiArgs {
     #[arg(long)] detach: bool,
-    #[arg(long)] port: Option<u16>,
-    #[arg(long, default_value = "127.0.0.1")] host: String,
+    #[arg(long, default_value = "5050")] port: Option<u16>,
+    #[arg(long, default_value = "git-forge.localhost")] host: String,
 }
 ----
 +

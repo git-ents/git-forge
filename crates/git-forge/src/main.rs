@@ -66,9 +66,9 @@ struct UiArgs {
     detach: bool,
     #[arg(long)]
     open: bool,
-    #[arg(long)]
+    #[arg(long, default_value = "5050")]
     port: Option<u16>,
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "git-forge.localhost")]
     host: String,
 }
 
