@@ -267,7 +267,7 @@ async fn review_detail(cx: &Cx) -> Result {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
                                 for comment in &comments {
-                                    <article class="comment"><div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/{}/edit", comment.id))>"Edit"</a></div><p>(comment.body.as_str())</p></article>
+                                    <article class="comment"><div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a></div><p>(comment.body.as_str())</p></article>
                                 }
                             }
                             <form class="comment-form" action=(format!("/reviews/{}/comments", review.id)) method="post">

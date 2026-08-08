@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gix_forge::{Comment, EntityOps};
+use gix_forge::{Comment, EntityOps, Issue, Review};
 use topcoat::{
     Result,
     context::Cx,
@@ -125,6 +125,16 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
             }
             .create_in_repo(repo)
         } else {
+            let exists = match subject_kind.as_str() {
+                "issue" => Issue::load_from_repo(repo, &subject_id)?.is_some(),
+                "review" => Review::load_from_repo(repo, &subject_id)?.is_some(),
+                _ => false,
+            };
+            if !exists {
+                return Err(gix_forge::Error::InvalidTarget(format!(
+                    "{subject_kind} `{subject_id}` was not found"
+                )));
+            }
             Comment::create_under(repo, &subject_kind, &subject_id, &author, &body, None)
         }
     })
@@ -151,7 +161,7 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     }
 }
 
-#[page("/comments/{comment_id}")]
+#[page("/comments/{*comment_id}")]
 async fn comment_detail(cx: &Cx) -> Result {
     let id = path_param::<CommentId>(cx)?.clone();
     let data = with_repo(cx, move |repo| Comment::load_from_repo(repo, &id)).await;
@@ -174,8 +184,8 @@ async fn comment_detail(cx: &Cx) -> Result {
                     <p class="body-copy">(comment.body.as_str())</p>
                     <div class="form-actions">
                         <a class="button-link secondary" href=(back)>"Back to discussion"</a>
-                        <a class="button-link" href=(format!("/comments/{}/edit", comment.id))>"Edit comment"</a>
-                        <form class="inline-form" action=(format!("/comments/{}/delete", comment.id)) method="post">
+                        <a class="button-link" href=(format!("/comments/edit/{}", comment.id))>"Edit comment"</a>
+                        <form class="inline-form" action=(format!("/comments/delete/{}", comment.id)) method="post">
                             <button class="danger-button" type="submit">"Delete"</button>
                         </form>
                     </div>
@@ -192,7 +202,7 @@ async fn comment_detail(cx: &Cx) -> Result {
     view! { shell(active: Tab::Dashboard, title: "Comment", keyword: None, child: content) }
 }
 
-#[page("/comments/{comment_id}/edit")]
+#[page("/comments/edit/{*comment_id}")]
 async fn comment_edit_page(cx: &Cx) -> Result {
     let id = path_param::<CommentId>(cx)?.clone();
     let data = with_repo(cx, move |repo| Comment::load_from_repo(repo, &id)).await;
@@ -205,7 +215,7 @@ async fn comment_edit_page(cx: &Cx) -> Result {
                         <h2>"Update your note"</h2>
                         <p class="muted">"Author and attachment stay fixed; only the message changes."</p>
                     </div>
-                    <form class="entity-form" action=(format!("/comments/{}/edit", comment.id)) method="post">
+                    <form class="entity-form" action=(format!("/comments/edit/{}", comment.id)) method="post">
                         <p class="form-context"><strong>(comment.author.as_str())</strong> " · " (comment.subject.as_deref().unwrap_or("free-floating"))</p>
                         <label for="comment-edit-body">"Comment"</label>
                         <textarea id="comment-edit-body" name="body" rows="8" required="">(comment.body.as_str())</textarea>
@@ -225,7 +235,7 @@ async fn comment_edit_page(cx: &Cx) -> Result {
     view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) }
 }
 
-#[page(POST "/comments/{comment_id}/edit")]
+#[page(POST "/comments/edit/{*comment_id}")]
 async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
     let id = path_param::<CommentId>(cx)?.clone();
     let body = input
@@ -235,7 +245,7 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
         .trim();
     if body.is_empty() {
         let content = (view! {
-            <div class="error-panel"><strong>"Comment could not be saved"</strong><p>"A comment cannot be empty."</p><a href=(format!("/comments/{id}/edit"))>"Return to editor"</a></div>
+            <div class="error-panel"><strong>"Comment could not be saved"</strong><p>"A comment cannot be empty."</p><a href=(format!("/comments/edit/{id}"))>"Return to editor"</a></div>
         })?;
         return view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) };
     }
@@ -264,13 +274,13 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
             view! { shell(active: Tab::Dashboard, title: "Comment updated", keyword: None, child: content) }
         }
         Err(error) => {
-            let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/comments/{id}/edit"))>"Return to editor"</a></div> })?;
+            let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/comments/edit/{id}"))>"Return to editor"</a></div> })?;
             view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) }
         }
     }
 }
 
-#[page(POST "/comments/{comment_id}/delete")]
+#[page(POST "/comments/delete/{*comment_id}")]
 async fn comment_delete(cx: &Cx) -> Result {
     let id = path_param::<CommentId>(cx)?.clone();
     let lookup_id = id.clone();

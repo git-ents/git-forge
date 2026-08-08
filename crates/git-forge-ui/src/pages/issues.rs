@@ -288,7 +288,7 @@ async fn issue_detail(cx: &Cx) -> Result {
                             } else {
                                 for comment in &comments {
                                     <article class="comment">
-                                        <div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/{}/edit", comment.id))>"Edit"</a></div>
+                                        <div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a></div>
                                         <p>(comment.body.as_str())</p>
                                     </article>
                                 }
