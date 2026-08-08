@@ -205,7 +205,8 @@ pub trait Commentable {
         Comment::create_under_as(repo, authorization, kind, id, body, None)
     }
 
-    /// Attach an anchored comment after authorization.
+    /// Attach an anchored comment after authorization, against `HEAD`.
+    /// `lines: None` anchors the whole file.
     fn add_anchored_comment_as(
         &self,
         repo: &Repository,
@@ -214,8 +215,22 @@ pub trait Commentable {
         lines: Option<LineRange>,
         body: &str,
     ) -> Result<String, Error> {
+        self.add_anchored_comment_as_at(repo, authorization, "HEAD", path, lines, body)
+    }
+
+    /// Attach an anchored comment after authorization, against `revision`.
+    /// `lines: None` anchors the whole file.
+    fn add_anchored_comment_as_at(
+        &self,
+        repo: &Repository,
+        authorization: &Authorization,
+        revision: &str,
+        path: &str,
+        lines: Option<LineRange>,
+        body: &str,
+    ) -> Result<String, Error> {
         let (kind, id) = self.comment_subject();
-        let anchor = capture(repo, "HEAD", path, lines)?;
+        let anchor = capture(repo, revision, path, lines)?;
         Comment::create_under_as(
             repo,
             authorization,
