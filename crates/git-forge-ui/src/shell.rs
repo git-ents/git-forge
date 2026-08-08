@@ -1,8 +1,11 @@
 use topcoat::{
     Result,
     asset::asset,
+    context::Cx,
     view::{View, component, view},
 };
+
+use crate::auth::authenticated_member;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -59,7 +62,14 @@ impl Tab {
 }
 
 #[component]
-pub(crate) async fn shell(active: Tab, title: &str, keyword: Option<&str>, child: View) -> Result {
+pub(crate) async fn shell(
+    cx: &Cx,
+    active: Tab,
+    title: &str,
+    keyword: Option<&str>,
+    child: View,
+) -> Result {
+    let member = authenticated_member(cx).await;
     view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -88,6 +98,16 @@ pub(crate) async fn shell(active: Tab, title: &str, keyword: Option<&str>, child
                     <div class="workspace">
                         <header class="topbar">
                             <a class="repo-name" href="/">"git forge"</a>
+                            <div class="auth-state">
+                                if let Some(member) = &member {
+                                    <span class="status">"Signed in"</span>
+                                    <strong>(member.id.as_str())</strong>
+                                    <small>(member.role.as_str()) " · changes are attributed to you"</small>
+                                } else {
+                                    <span class="muted">"Read-only view"</span>
+                                    <small>"Authenticate to make changes"</small>
+                                }
+                            </div>
                             <form class="search-form" action="/search" method="post">
                                 <label class="sr-only" for="shell-search">"Search"</label>
                                 <input id="shell-search" name="keyword" value=(keyword.unwrap_or_default()) placeholder="Search issues and reviews" type="search">
@@ -109,7 +129,14 @@ pub(crate) async fn shell(active: Tab, title: &str, keyword: Option<&str>, child
 }
 
 #[component]
-pub(crate) async fn split_shell(active: Tab, title: &str, list: View, detail: View) -> Result {
+pub(crate) async fn split_shell(
+    cx: &Cx,
+    active: Tab,
+    title: &str,
+    list: View,
+    detail: View,
+) -> Result {
+    let member = authenticated_member(cx).await;
     view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -138,6 +165,16 @@ pub(crate) async fn split_shell(active: Tab, title: &str, list: View, detail: Vi
                     <div class="workspace">
                         <header class="topbar">
                             <a class="repo-name" href="/">"git forge"</a>
+                            <div class="auth-state">
+                                if let Some(member) = &member {
+                                    <span class="status">"Signed in"</span>
+                                    <strong>(member.id.as_str())</strong>
+                                    <small>(member.role.as_str()) " · changes are attributed to you"</small>
+                                } else {
+                                    <span class="muted">"Read-only view"</span>
+                                    <small>"Authenticate to make changes"</small>
+                                }
+                            </div>
                             <form class="search-form" action="/search" method="post">
                                 <label class="sr-only" for="split-search">"Search"</label>
                                 <input id="split-search" name="keyword" placeholder="Search issues and reviews" type="search">

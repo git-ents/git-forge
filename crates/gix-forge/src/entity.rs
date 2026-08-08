@@ -11,10 +11,10 @@ use facet::Facet;
 use gix::{ObjectId, Repository};
 use gix_store::{GixRefStore, Kind, NamedEntries, RefPath, RefSegment, RepoStore, Typed};
 
-use crate::{Error, open_store};
+use crate::{Authorization, Capability, Error, Ownership, Principal, open_store};
 
 /// What one forge entity kind must declare.
-pub trait Entity: Sized {
+pub trait Entity: Sized + Clone {
     /// The `gix-store` kind name: entities live under `refs/forge/<KIND>/*`.
     const KIND: &'static str;
 
@@ -30,6 +30,24 @@ pub trait Entity: Sized {
 
     /// Rebuild the public entity from a stored value read back under `id`.
     fn from_stored(id: String, stored: Self::Stored) -> Self;
+
+    /// Whether `authorization` owns this entity.
+    fn ownership(&self, authorization: &Authorization) -> Ownership {
+        match authorization.principal() {
+            Principal::Member(member) if self.owner_ids().contains(&member.as_str()) => {
+                Ownership::Owned
+            }
+            _ => Ownership::NotOwned,
+        }
+    }
+
+    /// Existing entity fields that identify its owners.
+    fn owner_ids(&self) -> Vec<&str> {
+        Vec::new()
+    }
+
+    /// Add the authenticated principal to an existing attribution field.
+    fn attribute_to(&mut self, _principal: &str) {}
 }
 
 type EntityKind<'s, 'r, T> =
@@ -43,22 +61,94 @@ pub trait EntityOps: Entity {
         store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
     }
 
+    /// The capability required to create this entity kind.
+    fn create_capability() -> Capability {
+        match Self::KIND {
+            "issue" => Capability::IssueCreate,
+            "review" => Capability::ReviewCreate,
+            "comment" => Capability::CommentCreate,
+            "member" => Capability::MemberCreate,
+            _ => unreachable!("built-in entity kind has a capability"),
+        }
+    }
+
+    /// The capability required to update this entity kind.
+    fn update_capability() -> Capability {
+        match Self::KIND {
+            "issue" => Capability::IssueUpdate,
+            "review" => Capability::ReviewUpdate,
+            "comment" => Capability::CommentUpdate,
+            "member" => Capability::MemberUpdate,
+            _ => unreachable!("built-in entity kind has a capability"),
+        }
+    }
+
+    /// The capability required to delete this entity kind.
+    fn delete_capability() -> Capability {
+        match Self::KIND {
+            "issue" => Capability::IssueDelete,
+            "review" => Capability::ReviewDelete,
+            "comment" => Capability::CommentDelete,
+            "member" => Capability::MemberDelete,
+            _ => unreachable!("built-in entity kind has a capability"),
+        }
+    }
+
     /// Publish (or evolve) this entity's schema.
-    fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+    fn ensure_schema(_store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Err(Error::Unauthorized {
+            capability: Self::create_capability(),
+        })
+    }
+
+    /// Publish (or evolve) this entity's schema after authorization.
+    fn ensure_schema_as(
+        store: &RepoStore<'_>,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(Self::create_capability(), Ownership::NotApplicable)?;
         Ok(Self::kind(store).publish()?)
     }
 
     /// Store this entity at its own id.
-    fn save(&self, store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+    fn save(&self, _store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Err(Error::Unauthorized {
+            capability: Self::update_capability(),
+        })
+    }
+
+    /// Store this entity at its own id after authorization.
+    fn save_as(
+        &self,
+        store: &RepoStore<'_>,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(Self::update_capability(), self.ownership(authorization))?;
         let name = RefPath::new(self.id())?;
         Ok(Self::kind(store).put(&name, &self.to_stored())?)
     }
 
-    /// Create a new entity at a fresh, store-assigned id. Returns the id.
-    fn create_in_repo(&self, repo: &Repository) -> Result<String, Error> {
+    /// Legacy creation entry point. Anonymous writes are rejected.
+    fn create_in_repo(&self, _repo: &Repository) -> Result<String, Error> {
+        Err(Error::Unauthorized {
+            capability: Self::create_capability(),
+        })
+    }
+
+    /// Create a new entity after authorization. Returns the assigned id.
+    fn create_in_repo_as(
+        &self,
+        repo: &Repository,
+        authorization: &Authorization,
+    ) -> Result<String, Error> {
+        authorization.check(Self::create_capability(), Ownership::NotApplicable)?;
         let store = open_store(repo);
-        Self::ensure_schema(&store)?;
-        let commit = Self::kind(&store).write(&self.to_stored()).anonymous()?;
+        Self::ensure_schema_as(&store, authorization)?;
+        let mut entity = self.clone();
+        if let Principal::Member(member) = authorization.principal() {
+            entity.attribute_to(member.as_str());
+        }
+        let commit = Self::kind(&store).write(&entity.to_stored()).anonymous()?;
         Ok(gix_store::entity_name(commit).to_string())
     }
 
@@ -70,12 +160,23 @@ pub trait EntityOps: Entity {
             .map(|stored| Self::from_stored(id.to_owned(), stored)))
     }
 
-    /// [`ensure_schema`](Self::ensure_schema) then [`save`](Self::save)
-    /// against the repository-backed store.
-    fn save_in_repo(&self, repo: &Repository) -> Result<ObjectId, Error> {
+    /// Legacy update entry point. Anonymous writes are rejected.
+    fn save_in_repo(&self, _repo: &Repository) -> Result<ObjectId, Error> {
+        Err(Error::Unauthorized {
+            capability: Self::update_capability(),
+        })
+    }
+
+    /// Publish the schema and store this entity after authorization.
+    fn save_in_repo_as(
+        &self,
+        repo: &Repository,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(Self::update_capability(), self.ownership(authorization))?;
         let store = open_store(repo);
-        Self::ensure_schema(&store)?;
-        self.save(&store)
+        Self::ensure_schema_as(&store, authorization)?;
+        self.save_as(&store, authorization)
     }
 
     /// [`load`](Self::load) against the repository-backed store.
@@ -121,10 +222,26 @@ pub trait EntityOps: Entity {
         Ok(Self::kind(&store).history(&name)?)
     }
 
-    /// Delete by id. Returns whether it existed.
-    fn delete(repo: &Repository, id: &str) -> Result<bool, Error> {
+    /// Legacy deletion entry point. Anonymous writes are rejected.
+    fn delete(_repo: &Repository, _id: &str) -> Result<bool, Error> {
+        Err(Error::Unauthorized {
+            capability: Self::delete_capability(),
+        })
+    }
+
+    /// Delete by id after authorization. Returns whether it existed.
+    fn delete_as(
+        repo: &Repository,
+        id: &str,
+        authorization: &Authorization,
+    ) -> Result<bool, Error> {
         let store = open_store(repo);
         let name = RefPath::new(id)?;
+        let entity = Self::load(&store, id)?;
+        let ownership = entity
+            .as_ref()
+            .map_or(Ownership::Owned, |entity| entity.ownership(authorization));
+        authorization.check(Self::delete_capability(), ownership)?;
         Ok(Self::kind(&store).remove(&name)?)
     }
 }

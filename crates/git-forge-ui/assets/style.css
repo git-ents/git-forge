@@ -82,6 +82,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workspace { min-width: 0; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; height: 4.5rem; padding: 0 2.5rem; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
 .repo-name { font-weight: 700; letter-spacing: -.02em; }
+.auth-state { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 0 .45rem; margin-left: auto; font-size: .78rem; }
+.auth-state .status { grid-row: span 2; }
+.auth-state small { color: var(--color-text-muted); }
 .search-form { display: flex; gap: .5rem; max-width: 28rem; width: 100%; }
 .search-form input { min-width: 0; flex: 1; }
 input, select, textarea { width: 100%; padding: .65rem .75rem; border: 1px solid var(--color-border-strong); border-radius: .45rem; background: var(--color-surface-raised); color: var(--color-text); }
@@ -109,6 +112,7 @@ h3 { margin-bottom: 0; font-size: 1rem; }
 .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 1rem 0 1.25rem; }
 .detail-heading h2 { margin-bottom: .2rem; }
 .detail-actions, .form-actions, .table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.action-note { color: var(--color-text-muted); font-size: .8rem; }
 .button-link { display: inline-flex; align-items: center; justify-content: center; padding: .65rem .9rem; border-radius: .45rem; background: var(--color-accent); color: var(--color-on-accent); font-weight: 700; }
 .button-link:hover { background: var(--color-accent-hover); }
 .button-link.secondary { border: 1px solid var(--color-border-strong); background: var(--color-surface-raised); color: var(--color-accent); }
@@ -223,6 +227,7 @@ code { overflow-wrap: anywhere; }
     .app-shell { grid-template-columns: 4.5rem 1fr; }
     .topbar, .content { padding-left: 1rem; padding-right: 1rem; }
     .topbar { height: auto; padding-top: .8rem; padding-bottom: .8rem; align-items: flex-start; flex-direction: column; }
+    .auth-state { margin-left: 0; }
     .split-pane { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .form-layout { grid-template-columns: 1fr; gap: 1rem; }

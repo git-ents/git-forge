@@ -480,6 +480,11 @@ mod tests {
     use super::*;
     use crate::entity::EntityOps;
     use crate::review::ReviewTarget;
+    use crate::{Authorization, Principal};
+
+    fn auth() -> Authorization {
+        Authorization::new(Principal::member_id("alice"))
+    }
 
     fn sample_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -501,7 +506,9 @@ mod tests {
             reporters: vec!["bob".to_string()],
             edit: None,
         };
-        let id = issue.create_in_repo(&repo).expect("create issue");
+        let id = issue
+            .create_in_repo_as(&repo, &auth())
+            .expect("create issue");
 
         let rows = run_forge_goal(
             &repo,
@@ -533,7 +540,9 @@ mod tests {
             reporters: vec![],
             edit: None,
         };
-        let id = issue.create_in_repo(&repo).expect("create issue");
+        let id = issue
+            .create_in_repo_as(&repo, &auth())
+            .expect("create issue");
 
         let rows = run_forge_goal(
             &repo,
@@ -547,7 +556,7 @@ mod tests {
     #[test]
     fn comment_subject_omits_free_floating_comments() {
         let (_dir, repo) = sample_repo();
-        let subject_id = Comment::create_under(&repo, "issue", "42", "alice", "subject", None)
+        let subject_id = Comment::create_under_as(&repo, &auth(), "issue", "42", "subject", None)
             .expect("create subject comment");
         let free_id = Comment {
             id: String::new(),
@@ -557,7 +566,7 @@ mod tests {
             binding: None,
             edit: None,
         }
-        .create_in_repo(&repo)
+        .create_in_repo_as(&repo, &auth())
         .expect("create free-floating comment");
 
         let rows = run_forge_goal(&repo, "comment_subject(Id, Subject)", &["Id", "Subject"])
@@ -582,7 +591,9 @@ mod tests {
             },
             edit: None,
         };
-        let id = review.create_in_repo(&repo).expect("create review");
+        let id = review
+            .create_in_repo_as(&repo, &auth())
+            .expect("create review");
 
         let rows = run_forge_goal(
             &repo,

@@ -9,6 +9,7 @@ use topcoat::{
 };
 
 use crate::{
+    auth::{authorization, authorization_error, can_manage_members},
     pages::with_repo,
     shell::{Tab, shell},
 };
@@ -82,11 +83,22 @@ async fn member_form(cx: &Cx, action: &str, form: &MemberForm, error: Option<&st
 }
 
 async fn member_list(cx: &Cx, items: &[Member]) -> Result {
+    let can_manage = can_manage_members(cx).await;
     view! { cx =>
         <section class="panel">
-            <div class="panel-heading"><div><h2>"Members"</h2><span class="muted">(items.len())</span></div><a class="button-link" href="/members/new">"Add member"</a></div>
+            <div class="panel-heading"><div><h2>"Members"</h2><span class="muted">(items.len())</span></div>
+                if can_manage {
+                    <a class="button-link" href="/members/new">"Add member"</a>
+                }
+            </div>
             if items.is_empty() {
-                <div class="empty-panel"><p>"No members found."</p><a class="button-link" href="/members/new">"Add the first member"</a></div>
+                <div class="empty-panel"><p>"No members found."</p>
+                    if can_manage {
+                        <a class="button-link" href="/members/new">"Add the first member"</a>
+                    } else {
+                        <p class="form-help">"Member management is limited to maintainers."</p>
+                    }
+                </div>
             } else {
                 <div class="table-wrap">
                     <table>
@@ -96,7 +108,13 @@ async fn member_list(cx: &Cx, items: &[Member]) -> Result {
                                 <tr>
                                     <td><a href=(format!("/members/{}/edit", member.id))><code>(member.signing_key.as_str())</code></a><small>(member.id.as_str())</small></td>
                                     <td><span class="tag">(member.role.as_str())</span></td>
-                                    <td><div class="table-actions"><a class="button-link secondary" href=(format!("/members/{}/edit", member.id))>"Edit"</a><form class="inline-form" action=(format!("/members/{}/delete", member.id)) method="post"><button class="danger-button" type="submit">"Remove"</button></form></div></td>
+                                    <td>
+                                        if can_manage {
+                                            <div class="table-actions"><a class="button-link secondary" href=(format!("/members/{}/edit", member.id))>"Edit"</a><form class="inline-form" action=(format!("/members/{}/delete", member.id)) method="post"><button class="danger-button" type="submit">"Remove"</button></form></div>
+                                        } else {
+                                            <span class="muted">"Maintainer only"</span>
+                                        }
+                                    </td>
                                 </tr>
                             }
                         </tbody>
@@ -130,6 +148,10 @@ async fn members(cx: &Cx) -> Result {
 
 #[page("/members/new")]
 async fn member_new(cx: &Cx) -> Result {
+    if !can_manage_members(cx).await {
+        let content = (view! { <div class="empty-panel"><h2>"Maintainer access required"</h2><p class="muted">"Member management is intentionally limited to maintainers; the directory remains readable."</p><a class="button-link secondary" href="/members">"Back to members"</a></div> })?;
+        return view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) };
+    }
     let form = MemberForm {
         signing_key: String::new(),
         role: "member".to_owned(),
@@ -140,6 +162,7 @@ async fn member_new(cx: &Cx) -> Result {
 
 #[page(POST "/members")]
 async fn member_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let form = MemberForm::from_input(&input);
     if form.signing_key.trim().is_empty() || form.role.trim().is_empty() {
         let content = member_form(
@@ -156,13 +179,19 @@ async fn member_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         signing_key: form.signing_key.trim().to_owned(),
         role: form.role.trim().to_owned(),
     };
-    let result = with_repo(cx, move |repo| member.create_in_repo(repo)).await;
+    let result = with_repo(cx, move |repo| {
+        member.create_in_repo_as(repo, &authorization)
+    })
+    .await;
     match result {
         Ok(_id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"MEMBER ADDED"</p><h2>"Trusted identity added"</h2><p class="muted">"This member is now available in the repository forge."</p><a class="button-link" href="/members">"View members"</a></section> })?;
             view! { shell(active: Tab::Members, title: "Member added", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = member_form(cx, "/members", &form, Some(&error)).await?;
             view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) }
         }
@@ -175,13 +204,17 @@ async fn member_edit_page(cx: &Cx) -> Result {
     let data = with_repo(cx, move |repo| Member::load_from_repo(repo, &id)).await;
     let content = match data {
         Ok(Some(member)) => {
-            member_form(
-                cx,
-                &format!("/members/{}/edit", member.id),
-                &MemberForm::from_member(&member),
-                None,
-            )
-            .await?
+            if can_manage_members(cx).await {
+                member_form(
+                    cx,
+                    &format!("/members/{}/edit", member.id),
+                    &MemberForm::from_member(&member),
+                    None,
+                )
+                .await?
+            } else {
+                (view! { <div class="empty-panel"><h2>"Maintainer access required"</h2><p class="muted">"The member directory is readable, but only maintainers can change identities or roles."</p><a class="button-link secondary" href="/members">"Back to members"</a></div> })?
+            }
         }
         Ok(None) => {
             (view! { <div class="empty-panel"><h2>"Member not found"</h2><a href="/members">"Back to members"</a></div> })?
@@ -195,6 +228,7 @@ async fn member_edit_page(cx: &Cx) -> Result {
 
 #[page(POST "/members/{member_id}/edit")]
 async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<MemberId>(cx)?.clone();
     let form = MemberForm::from_input(&input);
     if form.signing_key.trim().is_empty() || form.role.trim().is_empty() {
@@ -214,7 +248,9 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
         })?;
         member.signing_key = form.signing_key.trim().to_owned();
         member.role = form.role.trim().to_owned();
-        member.save_in_repo(repo).map(|_| member.id)
+        member
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| member.id)
     })
     .await;
     match result {
@@ -223,6 +259,9 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
             view! { shell(active: Tab::Members, title: "Member updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Member could not be saved"</strong><p>(error)</p><a href=(format!("/members/{id}/edit"))>"Return to editor"</a></div> })?;
             view! { shell(active: Tab::Members, title: "Edit member", keyword: None, child: content) }
         }
@@ -231,8 +270,9 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
 
 #[page(POST "/members/{member_id}/delete")]
 async fn member_delete(cx: &Cx) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<MemberId>(cx)?.clone();
-    let result = with_repo(cx, move |repo| Member::delete(repo, &id)).await;
+    let result = with_repo(cx, move |repo| Member::delete_as(repo, &id, &authorization)).await;
     let content = match result {
         Ok(true) => {
             (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Member removed"</h2><a class="button-link" href="/members">"Return to members"</a></section> })?
@@ -241,6 +281,9 @@ async fn member_delete(cx: &Cx) -> Result {
             (view! { <div class="empty-panel"><h2>"Member not found"</h2><a href="/members">"Return to members"</a></div> })?
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             (view! { <div class="error-panel"><strong>"Member could not be removed"</strong><p>(error)</p><a href="/members">"Return to members"</a></div> })?
         }
     };

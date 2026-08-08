@@ -8,6 +8,7 @@ use facet::Facet;
 use crate::comment::Commentable;
 use crate::entity::Entity;
 use crate::error::Error;
+use crate::{Authorization, Ownership};
 
 #[derive(Debug, Clone, Facet)]
 pub struct Review {
@@ -47,6 +48,23 @@ impl Entity for Review {
             target: self.target.clone(),
             edit: self.edit.clone(),
         }
+    }
+
+    fn ownership(&self, authorization: &Authorization) -> Ownership {
+        if let crate::Principal::Member(member) = authorization.principal()
+            && self
+                .requesters
+                .iter()
+                .any(|requester| requester == member.as_str())
+        {
+            Ownership::Owned
+        } else {
+            Ownership::NotOwned
+        }
+    }
+
+    fn attribute_to(&mut self, principal: &str) {
+        self.requesters = vec![principal.to_owned()];
     }
 
     fn from_stored(id: String, stored: StoredReview) -> Self {
@@ -166,7 +184,11 @@ impl fmt::Display for ReviewTarget {
 mod tests {
     use super::*;
     use crate::entity::EntityOps;
-    use crate::open_store;
+    use crate::{Authorization, Principal, open_store};
+
+    fn auth() -> Authorization {
+        Authorization::new(Principal::member_id("alice"))
+    }
 
     #[test]
     fn review_round_trip_through_store() {
@@ -175,14 +197,14 @@ mod tests {
         let repo = gix::open(dir.path()).expect("open repo");
         let store = open_store(&repo);
 
-        Review::ensure_schema(&store).expect("publish review schema");
+        Review::ensure_schema_as(&store, &auth()).expect("publish review schema");
 
         let review = Review {
             id: "review-1".to_string(),
             status: "open".to_string(),
             body: "round trip review".to_string(),
             reviewers: vec!["carol".to_string()],
-            requesters: vec!["dave".to_string()],
+            requesters: vec!["alice".to_string()],
             target: ReviewTarget::CommitRange {
                 start: gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
                 end: gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
@@ -190,7 +212,7 @@ mod tests {
             edit: Some("initial edit note".to_string()),
         };
 
-        review.save(&store).expect("save review");
+        review.save_as(&store, &auth()).expect("save review");
         let loaded = Review::load(&store, &review.id)
             .expect("load review")
             .expect("review exists");
@@ -202,6 +224,32 @@ mod tests {
         assert_eq!(loaded.requesters, review.requesters);
         assert_eq!(loaded.edit, review.edit);
         assert_eq!(loaded.target, review.target);
+    }
+
+    #[test]
+    fn creation_attributes_the_requester_to_the_principal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::init_repo(dir.path());
+        let repo = gix::open(dir.path()).expect("open repo");
+        let review = Review {
+            id: String::new(),
+            status: "open".to_owned(),
+            body: "review body".to_owned(),
+            reviewers: vec![],
+            requesters: vec!["spoofed".to_owned()],
+            target: ReviewTarget::Commit {
+                oid: "deadbeef".to_owned(),
+            },
+            edit: None,
+        };
+
+        let id = review
+            .create_in_repo_as(&repo, &auth())
+            .expect("create review");
+        let loaded = Review::load_from_repo(&repo, &id)
+            .expect("load review")
+            .expect("review exists");
+        assert_eq!(loaded.requesters, vec!["alice"]);
     }
 
     #[test]

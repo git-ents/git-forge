@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gix_forge::{Commentable, EntityOps, Review, ReviewTarget, Status};
+use gix_forge::{Comment, Commentable, EntityOps, Review, ReviewTarget, Status};
 use topcoat::{
     Result,
     context::Cx,
@@ -9,6 +9,7 @@ use topcoat::{
 };
 
 use crate::{
+    auth::{authorization, authorization_error, can_create, can_update},
     pages::{csv_values, with_repo},
     render::render_asciidoc,
     shell::{Tab, shell, split_shell},
@@ -98,13 +99,23 @@ async fn review_form(cx: &Cx, action: &str, form: &ReviewForm, error: Option<&st
 }
 
 async fn review_list(cx: &Cx, items: &[Review]) -> Result {
+    let can_create = can_create::<Review>(cx).await;
     view! { cx =>
         <div class="list-heading">
             <div><h2>"Reviews"</h2><span class="muted">(items.len())</span></div>
-            <a class="button-link" href="/reviews/new">"New review"</a>
+            if can_create {
+                <a class="button-link" href="/reviews/new">"New review"</a>
+            }
         </div>
         if items.is_empty() {
-            <div class="empty-panel"><p>"No reviews found."</p><a class="button-link" href="/reviews/new">"Request a review"</a></div>
+            <div class="empty-panel">
+                <p>"No reviews found."</p>
+                if can_create {
+                    <a class="button-link" href="/reviews/new">"Request a review"</a>
+                } else {
+                    <p class="form-help">"Authenticate as a forge member to request a review."</p>
+                }
+            </div>
         } else {
             <ul class="entity-list">
                 for review in items {
@@ -156,6 +167,10 @@ async fn reviews(cx: &Cx) -> Result {
 
 #[page("/reviews/new")]
 async fn review_new(cx: &Cx) -> Result {
+    if !can_create::<Review>(cx).await {
+        let content = (view! { <div class="empty-panel"><h2>"Sign in to request a review"</h2><p class="muted">"Reads stay available without an account; creating a review requires a forge member identity."</p><a class="button-link secondary" href="/reviews">"Back to reviews"</a></div> })?;
+        return view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) };
+    }
     let form = ReviewForm {
         body: String::new(),
         status: "open".to_owned(),
@@ -169,6 +184,7 @@ async fn review_new(cx: &Cx) -> Result {
 
 #[page(POST "/reviews")]
 async fn review_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let form = ReviewForm::from_input(&input);
     if form.target.trim().is_empty() || ReviewTarget::parse(form.target.trim()).is_err() {
         let content = review_form(
@@ -199,13 +215,19 @@ async fn review_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         target: ReviewTarget::parse(form.target.trim()).expect("validated review target"),
         edit: None,
     };
-    let result = with_repo(cx, move |repo| review.create_in_repo(repo)).await;
+    let result = with_repo(cx, move |repo| {
+        review.create_in_repo_as(repo, &authorization)
+    })
+    .await;
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"REVIEW CREATED"</p><h2>"Your review request is ready"</h2><p class="muted">"Reviewers can now find the target and leave feedback."</p><a class="button-link" href=(format!("/reviews/{id}"))>"View review"</a></section> })?;
             view! { shell(active: Tab::Reviews, title: "Review created", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = review_form(cx, "/reviews", &form, Some(&error)).await?;
             view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) }
         }
@@ -237,6 +259,8 @@ async fn review_detail(cx: &Cx) -> Result {
 
     let (list, detail) = match data {
         Ok(Some((review_items, review, comments))) => {
+            let can_edit = can_update(cx, &review).await;
+            let can_comment = can_create::<Comment>(cx).await;
             let next_status = if review.status == "open" {
                 "closed"
             } else {
@@ -250,9 +274,13 @@ async fn review_detail(cx: &Cx) -> Result {
                         <div class="detail-heading">
                             <div><h2>"Review " (review.id.as_str())</h2><p class="muted">"A request for focused feedback"</p></div>
                             <div class="detail-actions">
-                                <a class="button-link secondary" href=(format!("/reviews/{}/edit", review.id))>"Edit"</a>
-                                <form class="inline-form" action=(format!("/reviews/{}/status", review.id)) method="post"><input type="hidden" name="status" value=(next_status)><button type="submit">if next_status == "closed" { "Close review" } else { "Reopen review" }</button></form>
-                                <form class="inline-form" action=(format!("/reviews/{}/delete", review.id)) method="post"><button class="danger-button" type="submit">"Delete"</button></form>
+                                if can_edit {
+                                    <a class="button-link secondary" href=(format!("/reviews/{}/edit", review.id))>"Edit"</a>
+                                    <form class="inline-form" action=(format!("/reviews/{}/status", review.id)) method="post"><input type="hidden" name="status" value=(next_status)><button type="submit">if next_status == "closed" { "Close review" } else { "Reopen review" }</button></form>
+                                    <form class="inline-form" action=(format!("/reviews/{}/delete", review.id)) method="post"><button class="danger-button" type="submit">"Delete"</button></form>
+                                } else {
+                                    <span class="action-note">"Only the requester or a maintainer can change this review."</span>
+                                }
                             </div>
                         </div>
                         <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&review.body)))</div>
@@ -262,20 +290,24 @@ async fn review_detail(cx: &Cx) -> Result {
                             <dt>"Target"</dt><dd><code>(review.target.to_string())</code></dd>
                         </dl>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div><a class="button-link secondary" href="/comments/new">"Free-floating comment"</a></div>
+                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
                             if comments.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
                                 for comment in &comments {
-                                    <article class="comment"><div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a></div><p>(comment.body.as_str())</p></article>
+                                    <article class="comment"><div class="comment-heading"><strong>(comment.author.as_str())</strong> if can_update(cx, comment).await { <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a> }</div><p>(comment.body.as_str())</p></article>
                                 }
                             }
-                            <form class="comment-form" action=(format!("/reviews/{}/comments", review.id)) method="post">
-                                <label for="review-comment-author">"Add a comment"</label>
-                                <input id="review-comment-author" name="author" placeholder="Your name" required="">
-                                <textarea name="body" rows="5" placeholder="Leave a helpful update or question." required=""></textarea>
-                                <button type="submit">"Comment"</button>
-                            </form>
+                            if can_comment {
+                                <form class="comment-form" action=(format!("/reviews/{}/comments", review.id)) method="post">
+                                    <label for="review-comment-author">"Add a comment"</label>
+                                    <input id="review-comment-author" name="author" value="authenticated member" type="hidden">
+                                    <textarea name="body" rows="5" placeholder="Leave a helpful update or question." required=""></textarea>
+                                    <button type="submit">"Comment"</button>
+                                </form>
+                            } else {
+                                <p class="form-context">"Sign in as a forge member to join this discussion."</p>
+                            }
                         </section>
                     </article>
                 })?,
@@ -300,13 +332,17 @@ async fn review_edit_page(cx: &Cx) -> Result {
     let data = with_repo(cx, move |repo| Review::load_from_repo(repo, &id)).await;
     let content = match data {
         Ok(Some(review)) => {
-            review_form(
-                cx,
-                &format!("/reviews/{}/edit", review.id),
-                &ReviewForm::from_review(&review),
-                None,
-            )
-            .await?
+            if can_update(cx, &review).await {
+                review_form(
+                    cx,
+                    &format!("/reviews/{}/edit", review.id),
+                    &ReviewForm::from_review(&review),
+                    None,
+                )
+                .await?
+            } else {
+                (view! { <div class="empty-panel"><h2>"This review is read-only for you"</h2><p class="muted">"Only the requester or a maintainer can edit or delete it."</p><a class="button-link secondary" href=(format!("/reviews/{}", review.id))>"Back to review"</a></div> })?
+            }
         }
         Ok(None) => {
             (view! { <div class="empty-panel"><h2>"Review not found"</h2><a href="/reviews">"Back to reviews"</a></div> })?
@@ -320,6 +356,7 @@ async fn review_edit_page(cx: &Cx) -> Result {
 
 #[page(POST "/reviews/{review_id}/edit")]
 async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<ReviewId>(cx)?.clone();
     let form = ReviewForm::from_input(&input);
     if form.target.trim().is_empty()
@@ -343,9 +380,10 @@ async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
         review.body = form.body.trim().to_owned();
         review.status = form.status.trim().to_ascii_lowercase();
         review.reviewers = csv_values(&form.reviewers);
-        review.requesters = csv_values(&form.requesters);
         review.target = ReviewTarget::parse(form.target.trim()).expect("validated review target");
-        review.save_in_repo(repo).map(|_| review.id)
+        review
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| review.id)
     })
     .await;
     match result {
@@ -354,6 +392,9 @@ async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
             view! { shell(active: Tab::Reviews, title: "Review updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Review could not be saved"</strong><p>(error)</p><a href=(format!("/reviews/{id}/edit"))>"Return to editor"</a></div> })?;
             view! { shell(active: Tab::Reviews, title: "Edit review", keyword: None, child: content) }
         }
@@ -362,6 +403,7 @@ async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
 
 #[page(POST "/reviews/{review_id}/status")]
 async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<ReviewId>(cx)?.clone();
     let status = input
         .get("status")
@@ -379,7 +421,9 @@ async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             ));
         }
         review.status = status;
-        review.save_in_repo(repo).map(|_| review.id)
+        review
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| review.id)
     })
     .await;
     match result {
@@ -388,6 +432,9 @@ async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             view! { shell(active: Tab::Reviews, title: "Review updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Could not update review"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
             view! { shell(active: Tab::Reviews, title: "Review action failed", keyword: None, child: content) }
         }
@@ -396,6 +443,7 @@ async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
 
 #[page(POST "/reviews/{review_id}/comments")]
 async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<ReviewId>(cx)?.clone();
     let author = input
         .get("author")
@@ -418,7 +466,7 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
         let review = Review::load_from_repo(repo, &lookup_id)?.ok_or_else(|| {
             gix_forge::Error::InvalidTarget(format!("review `{lookup_id}` was not found"))
         })?;
-        review.add_comment(repo, &author, &body)
+        review.add_comment_as(repo, &authorization, &body)
     })
     .await;
     match result {
@@ -427,6 +475,9 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
             view! { shell(active: Tab::Reviews, title: "Comment added", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
             view! { shell(active: Tab::Reviews, title: "Comment failed", keyword: None, child: content) }
         }
@@ -435,9 +486,13 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
 
 #[page(POST "/reviews/{review_id}/delete")]
 async fn review_delete(cx: &Cx) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<ReviewId>(cx)?.clone();
     let lookup_id = id.clone();
-    let result = with_repo(cx, move |repo| Review::delete(repo, &lookup_id)).await;
+    let result = with_repo(cx, move |repo| {
+        Review::delete_as(repo, &lookup_id, &authorization)
+    })
+    .await;
     let content = match result {
         Ok(true) => {
             (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Review deleted"</h2><a class="button-link" href="/reviews">"Return to reviews"</a></section> })?
@@ -446,6 +501,9 @@ async fn review_delete(cx: &Cx) -> Result {
             (view! { <div class="empty-panel"><h2>"Review not found"</h2><a href="/reviews">"Return to reviews"</a></div> })?
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             (view! { <div class="error-panel"><strong>"Review could not be deleted"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?
         }
     };

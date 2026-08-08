@@ -16,6 +16,7 @@ use gix_store::{RefPath, RefSegment};
 
 use crate::entity::{Entity, EntityOps};
 use crate::error::Error;
+use crate::{Authorization, Ownership, Principal};
 
 #[derive(Debug, Clone, Facet)]
 pub struct Comment {
@@ -61,6 +62,20 @@ impl Entity for Comment {
         }
     }
 
+    fn ownership(&self, authorization: &Authorization) -> Ownership {
+        if let Principal::Member(member) = authorization.principal()
+            && self.author == member.as_str()
+        {
+            Ownership::Owned
+        } else {
+            Ownership::NotOwned
+        }
+    }
+
+    fn attribute_to(&mut self, principal: &str) {
+        self.author = principal.to_owned();
+    }
+
     fn from_stored(id: String, stored: StoredComment) -> Self {
         Self {
             id,
@@ -74,19 +89,38 @@ impl Entity for Comment {
 }
 
 impl Comment {
-    /// Create a comment grouped under `<subject_kind>/<subject_id>`, at a
-    /// fresh store-assigned id. Returns the assigned id.
+    /// Legacy anonymous creation entry point; always fails closed. Use
+    /// [`Self::create_under_as`] for an authenticated write.
     pub fn create_under(
+        _repo: &Repository,
+        _subject_kind: &str,
+        _subject_id: &str,
+        _author: &str,
+        _body: &str,
+        _binding: Option<Binding>,
+    ) -> Result<String, Error> {
+        Err(Error::Unauthorized {
+            capability: crate::Capability::CommentCreate,
+        })
+    }
+
+    /// Create a comment under a subject after authorization.
+    pub fn create_under_as(
         repo: &Repository,
+        authorization: &Authorization,
         subject_kind: &str,
         subject_id: &str,
-        author: &str,
         body: &str,
         binding: Option<Binding>,
     ) -> Result<String, Error> {
+        authorization.check(crate::Capability::CommentCreate, Ownership::NotApplicable)?;
         let store = crate::open_store(repo);
-        Self::ensure_schema(&store)?;
+        Self::ensure_schema_as(&store, authorization)?;
         let group = subject_group(subject_kind, subject_id)?;
+        let author = match authorization.principal() {
+            Principal::Member(member) => member.as_str(),
+            Principal::Anonymous => unreachable!("anonymous authorization was rejected"),
+        };
         let stored = StoredComment {
             subject: format!("{subject_kind}:{subject_id}"),
             author: author.to_owned(),
@@ -125,15 +159,15 @@ pub trait Commentable {
     /// e.g. `("issue", "42")`. `kind` is that entity's own [`Entity::KIND`].
     fn comment_subject(&self) -> (&'static str, &str);
 
-    /// Attach a thread-level comment (no binding) to this entity. Returns the
-    /// new comment's id.
+    /// Legacy anonymous comment entry point; always fails closed. Use
+    /// [`Self::add_comment_as`] for an authenticated write.
     fn add_comment(&self, repo: &Repository, author: &str, body: &str) -> Result<String, Error> {
         let (kind, id) = self.comment_subject();
         Comment::create_under(repo, kind, id, author, body, None)
     }
 
-    /// Attach a comment anchored to `lines` of `path` at `HEAD` (the whole
-    /// file when `lines` is `None`). Returns the new comment's id.
+    /// Legacy anonymous anchored-comment entry point; always fails closed. Use
+    /// [`Self::add_anchored_comment_as`] for an authenticated write.
     fn add_anchored_comment(
         &self,
         repo: &Repository,
@@ -159,6 +193,38 @@ pub trait Commentable {
         let (kind, id) = self.comment_subject();
         Comment::list_under(repo, kind, id)
     }
+
+    /// Attach a thread-level comment after authorization.
+    fn add_comment_as(
+        &self,
+        repo: &Repository,
+        authorization: &Authorization,
+        body: &str,
+    ) -> Result<String, Error> {
+        let (kind, id) = self.comment_subject();
+        Comment::create_under_as(repo, authorization, kind, id, body, None)
+    }
+
+    /// Attach an anchored comment after authorization.
+    fn add_anchored_comment_as(
+        &self,
+        repo: &Repository,
+        authorization: &Authorization,
+        path: &str,
+        lines: Option<LineRange>,
+        body: &str,
+    ) -> Result<String, Error> {
+        let (kind, id) = self.comment_subject();
+        let anchor = capture(repo, "HEAD", path, lines)?;
+        Comment::create_under_as(
+            repo,
+            authorization,
+            kind,
+            id,
+            body,
+            Some(Binding::Position(anchor)),
+        )
+    }
 }
 
 /// The genesis commit a [`Binding::Position`] anchor was captured against, or
@@ -177,6 +243,11 @@ pub fn binding_genesis(binding: &Binding) -> Option<ObjectId> {
 mod tests {
     use super::*;
     use crate::issue::Issue;
+    use crate::{Authorization, Principal};
+
+    fn auth() -> Authorization {
+        Authorization::new(Principal::member_id("alice"))
+    }
 
     #[test]
     fn thread_comment_round_trips_with_no_binding() {
@@ -196,7 +267,7 @@ mod tests {
         };
 
         let id = issue
-            .add_comment(&repo, "alice", "looks good")
+            .add_comment_as(&repo, &auth(), "looks good")
             .expect("add comment");
 
         let loaded = Comment::load_from_repo(&repo, &id)
@@ -231,7 +302,7 @@ mod tests {
 
         let range = LineRange { start: 2, end: 2 };
         let id = issue
-            .add_anchored_comment(&repo, "file.txt", Some(range), "bob", "what is this?")
+            .add_anchored_comment_as(&repo, &auth(), "file.txt", Some(range), "what is this?")
             .expect("add anchored comment");
 
         let loaded = Comment::load_from_repo(&repo, &id)
@@ -261,18 +332,19 @@ mod tests {
         let id = Comment {
             id: String::new(),
             subject: None,
-            author: "alice".to_owned(),
+            author: "spoofed".to_owned(),
             body: "file-level note".to_owned(),
             binding: Some(Binding::Position(anchor)),
             edit: None,
         }
-        .create_in_repo(&repo)
+        .create_in_repo_as(&repo, &auth())
         .expect("create free-floating comment");
 
         let loaded = Comment::load_from_repo(&repo, &id)
             .expect("load comment")
             .expect("comment exists");
         assert!(loaded.subject.is_none());
+        assert_eq!(loaded.author, "alice");
         assert!(matches!(loaded.binding, Some(Binding::Position(_))));
     }
 
@@ -303,8 +375,8 @@ mod tests {
             edit: None,
         };
 
-        a.add_comment(&repo, "alice", "on a").expect("comment a");
-        b.add_comment(&repo, "bob", "on b").expect("comment b");
+        a.add_comment_as(&repo, &auth(), "on a").expect("comment a");
+        b.add_comment_as(&repo, &auth(), "on b").expect("comment b");
 
         assert_eq!(a.get_comments(&repo).expect("comments a").len(), 1);
         assert_eq!(b.get_comments(&repo).expect("comments b").len(), 1);

@@ -9,6 +9,7 @@
 //! compiles to the same Datalog goals `query` runs -- never an in-memory
 //! scan.
 
+mod authorization;
 mod comment;
 mod entity;
 mod error;
@@ -22,6 +23,7 @@ mod status;
 use gix::{ObjectId, Repository};
 use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
+pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
 pub use comment::{Comment, Commentable, binding_genesis};
 pub use entity::{Entity, EntityOps};
 pub use error::Error;
@@ -59,13 +61,30 @@ fn open_store(repo: &Repository) -> RepoStore<'_> {
 
 /// Publish (or evolve) the `issue` schema.
 ///
+/// This legacy entry point fails closed; use [`ensure_issue_schema_as`] for an
+/// authenticated write.
+///
 /// # Errors
 /// See [`Error`].
 pub fn ensure_issue_schema(repo: &Repository) -> Result<ObjectId, Error> {
     Issue::ensure_schema(&open_store(repo))
 }
 
+/// Publish (or evolve) the `issue` schema after authorization.
+///
+/// # Errors
+/// See [`Error`].
+pub fn ensure_issue_schema_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<ObjectId, Error> {
+    Issue::ensure_schema_as(&open_store(repo), authorization)
+}
+
 /// Publish (or evolve) the `review` schema.
+///
+/// This legacy entry point fails closed; use [`ensure_review_schema_as`] for an
+/// authenticated write.
 ///
 /// # Errors
 /// See [`Error`].
@@ -73,7 +92,21 @@ pub fn ensure_review_schema(repo: &Repository) -> Result<ObjectId, Error> {
     Review::ensure_schema(&open_store(repo))
 }
 
+/// Publish (or evolve) the `review` schema after authorization.
+///
+/// # Errors
+/// See [`Error`].
+pub fn ensure_review_schema_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<ObjectId, Error> {
+    Review::ensure_schema_as(&open_store(repo), authorization)
+}
+
 /// Publish (or evolve) the `member` schema.
+///
+/// This legacy entry point fails closed; use [`ensure_member_schema_as`] for an
+/// authenticated write.
 ///
 /// # Errors
 /// See [`Error`].
@@ -81,7 +114,21 @@ pub fn ensure_member_schema(repo: &Repository) -> Result<ObjectId, Error> {
     Member::ensure_schema(&open_store(repo))
 }
 
+/// Publish (or evolve) the `member` schema after authorization.
+///
+/// # Errors
+/// See [`Error`].
+pub fn ensure_member_schema_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<ObjectId, Error> {
+    Member::ensure_schema_as(&open_store(repo), authorization)
+}
+
 /// Publish (or evolve) the `comment` schema.
+///
+/// This legacy entry point fails closed; use [`ensure_comment_schema_as`] for
+/// an authenticated write.
 ///
 /// # Errors
 /// See [`Error`].
@@ -89,12 +136,40 @@ pub fn ensure_comment_schema(repo: &Repository) -> Result<ObjectId, Error> {
     Comment::ensure_schema(&open_store(repo))
 }
 
-/// Install the built-in `review` rule module and validate the whole program
-/// -- including every predicate [`ForgeFacts`] declares -- against it.
+/// Publish (or evolve) the `comment` schema after authorization.
 ///
 /// # Errors
 /// See [`Error`].
-pub fn install_builtin_query_rules(repo: &Repository) -> Result<(), Error> {
+pub fn ensure_comment_schema_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<ObjectId, Error> {
+    Comment::ensure_schema_as(&open_store(repo), authorization)
+}
+
+/// Install the built-in `review` rule module and validate the whole program
+/// -- including every predicate [`ForgeFacts`] declares -- against it.
+///
+/// This legacy entry point fails closed; use [`install_builtin_query_rules_as`]
+/// for an authenticated write.
+///
+/// # Errors
+/// See [`Error`].
+pub fn install_builtin_query_rules(_repo: &Repository) -> Result<(), Error> {
+    Err(Error::Unauthorized {
+        capability: Capability::ForgeInstall,
+    })
+}
+
+/// Install the built-in query rules after authorization.
+///
+/// # Errors
+/// See [`Error`].
+pub fn install_builtin_query_rules_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<(), Error> {
+    authorization.check(Capability::ForgeInstall, Ownership::NotApplicable)?;
     let store = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
     store
         .put("review", BUILTIN_REVIEW_RULES)

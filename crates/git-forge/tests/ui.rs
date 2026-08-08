@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use gix_forge::{EntityOps, Issue, Review, ReviewTarget};
+use gix_forge::{Authorization, EntityOps, Issue, Member, Principal, Review, ReviewTarget};
 use test_support::{commit_file, init_repo};
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-forge");
@@ -41,6 +41,22 @@ fn ui_crawls_every_internal_route() {
     );
 
     let repo = gix::open(repo_dir.path()).unwrap();
+    let admin = Authorization::new(Principal::member_id("alice")).administrator();
+    Member {
+        id: "alice".to_owned(),
+        signing_key: "alice".to_owned(),
+        role: "maintainer".to_owned(),
+    }
+    .save_in_repo_as(&repo, &admin)
+    .unwrap();
+    Member {
+        id: "bob".to_owned(),
+        signing_key: "bob".to_owned(),
+        role: "member".to_owned(),
+    }
+    .save_in_repo_as(&repo, &admin)
+    .unwrap();
+    let alice = Authorization::new(Principal::member_id("alice"));
     Issue {
         id: "ui-issue-1".to_owned(),
         status: "open".to_owned(),
@@ -48,23 +64,23 @@ fn ui_crawls_every_internal_route() {
         body: "searchable ui crawl issue".to_owned(),
         labels: vec![],
         assignees: vec![],
-        reporters: vec![],
+        reporters: vec!["alice".to_owned()],
         edit: None,
     }
-    .save_in_repo(&repo)
+    .save_in_repo_as(&repo, &alice)
     .unwrap();
     Review {
         id: "ui-review-1".to_owned(),
         status: "open".to_owned(),
         body: "searchable ui crawl review".to_owned(),
         reviewers: vec![],
-        requesters: vec![],
+        requesters: vec!["alice".to_owned()],
         target: ReviewTarget::Commit {
             oid: "deadbeef".to_owned(),
         },
         edit: None,
     }
-    .save_in_repo(&repo)
+    .save_in_repo_as(&repo, &alice)
     .unwrap();
 
     let server = Server::spawn(repo_dir.path());
@@ -87,6 +103,45 @@ fn ui_crawls_every_internal_route() {
     crawler.enqueue("POST", "/query", b"predicate=issue".to_vec());
     crawler.enqueue("POST", "/search", b"keyword=ui%20crawl".to_vec());
     crawler.run();
+
+    let mutation = Request {
+        method: "POST".to_owned(),
+        target: "/issues".to_owned(),
+        body: b"title=authorized&body=from%20ui&status=open".to_vec(),
+    };
+    assert_eq!(crawler.client.request(&mutation).unwrap().status, 401);
+    assert_eq!(
+        crawler
+            .client
+            .request_with_authorization(&mutation, Some("unknown"))
+            .unwrap()
+            .status,
+        401
+    );
+    assert_eq!(
+        crawler
+            .client
+            .request_with_authorization(
+                &Request {
+                    method: "POST".to_owned(),
+                    target: "/issues/ui-issue-1/delete".to_owned(),
+                    body: Vec::new(),
+                },
+                Some("bob"),
+            )
+            .unwrap()
+            .status,
+        403
+    );
+    assert!(
+        (200..300).contains(
+            &crawler
+                .client
+                .request_with_authorization(&mutation, Some("alice"))
+                .unwrap()
+                .status
+        )
+    );
 
     for target in [
         "/",
@@ -239,7 +294,8 @@ impl Crawler {
                 panic!("{} {} failed: {error}", request.method, request.target)
             });
             assert!(
-                (200..300).contains(&response.status),
+                (200..300).contains(&response.status)
+                    || (request.method == "POST" && matches!(response.status, 401 | 403)),
                 "{} {} returned HTTP {}",
                 request.method,
                 request.target,
@@ -337,6 +393,14 @@ struct HttpClient {
 
 impl HttpClient {
     fn request(&self, request: &Request) -> io::Result<Response> {
+        self.request_with_authorization(request, None)
+    }
+
+    fn request_with_authorization(
+        &self,
+        request: &Request,
+        authorization: Option<&str>,
+    ) -> io::Result<Response> {
         let mut stream = TcpStream::connect_timeout(&self.address, Duration::from_secs(2))?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -346,6 +410,9 @@ impl HttpClient {
             "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
             request.method, request.target, self.address
         )?;
+        if let Some(authorization) = authorization {
+            write!(stream, "Authorization: Bearer {authorization}\r\n")?;
+        }
         if request.method == "POST" {
             write!(
                 stream,

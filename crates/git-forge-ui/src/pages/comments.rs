@@ -9,6 +9,7 @@ use topcoat::{
 };
 
 use crate::{
+    auth::{authorization, authorization_error, can_create, can_update},
     pages::with_repo,
     shell::{Tab, shell},
 };
@@ -86,12 +87,17 @@ async fn comment_form(cx: &Cx, form: &CommentForm, error: Option<&str>) -> Resul
 
 #[page("/comments/new")]
 async fn comment_new(cx: &Cx) -> Result {
-    let content = comment_form(cx, &CommentForm::default(), None).await?;
+    let content = if can_create::<Comment>(cx).await {
+        comment_form(cx, &CommentForm::default(), None).await?
+    } else {
+        (view! { <div class="empty-panel"><h2>"Sign in to start a discussion"</h2><p class="muted">"Reads stay available without an account; publishing requires a forge member identity."</p></div> })?
+    };
     view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) }
 }
 
 #[page(POST "/comments")]
 async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let form = CommentForm::from_input(&input);
     let author = form.author.trim();
     let body = form.body.trim();
@@ -123,7 +129,7 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
                 binding: None,
                 edit: None,
             }
-            .create_in_repo(repo)
+            .create_in_repo_as(repo, &authorization)
         } else {
             let exists = match subject_kind.as_str() {
                 "issue" => Issue::load_from_repo(repo, &subject_id)?.is_some(),
@@ -135,7 +141,14 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
                     "{subject_kind} `{subject_id}` was not found"
                 )));
             }
-            Comment::create_under(repo, &subject_kind, &subject_id, &author, &body, None)
+            Comment::create_under_as(
+                repo,
+                &authorization,
+                &subject_kind,
+                &subject_id,
+                &body,
+                None,
+            )
         }
     })
     .await;
@@ -155,6 +168,9 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
             view! { shell(active: Tab::Dashboard, title: "Comment published", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = comment_form(cx, &form, Some(&error)).await?;
             view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) }
         }
@@ -184,10 +200,14 @@ async fn comment_detail(cx: &Cx) -> Result {
                     <p class="body-copy">(comment.body.as_str())</p>
                     <div class="form-actions">
                         <a class="button-link secondary" href=(back)>"Back to discussion"</a>
-                        <a class="button-link" href=(format!("/comments/edit/{}", comment.id))>"Edit comment"</a>
-                        <form class="inline-form" action=(format!("/comments/delete/{}", comment.id)) method="post">
-                            <button class="danger-button" type="submit">"Delete"</button>
-                        </form>
+                        if can_update(cx, &comment).await {
+                            <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a>
+                            <form class="inline-form" action=(format!("/comments/delete/{}", comment.id)) method="post">
+                                <button class="danger-button" type="submit">"Delete"</button>
+                            </form>
+                        } else {
+                            <span class="action-note">"Only the author or a maintainer can change this comment."</span>
+                        }
                     </div>
                 </article>
             })?
@@ -208,7 +228,10 @@ async fn comment_edit_page(cx: &Cx) -> Result {
     let data = with_repo(cx, move |repo| Comment::load_from_repo(repo, &id)).await;
     let content = match data {
         Ok(Some(comment)) => {
-            (view! {
+            if !can_update(cx, &comment).await {
+                (view! { <div class="empty-panel"><h2>"This comment is read-only for you"</h2><p class="muted">"Only the author or a maintainer can edit or delete it."</p><a class="button-link secondary" href=(format!("/comments/{}", comment.id))>"Back to comment"</a></div> })?
+            } else {
+                (view! {
                 <section class="form-layout">
                     <div class="form-intro">
                         <p class="eyebrow">"EDIT COMMENT"</p>
@@ -225,7 +248,8 @@ async fn comment_edit_page(cx: &Cx) -> Result {
                         </div>
                     </form>
                 </section>
-            })?
+                })?
+            }
         }
         Ok(None) => (view! { <div class="empty-panel"><h2>"Comment not found"</h2></div> })?,
         Err(error) => {
@@ -237,6 +261,7 @@ async fn comment_edit_page(cx: &Cx) -> Result {
 
 #[page(POST "/comments/edit/{*comment_id}")]
 async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<CommentId>(cx)?.clone();
     let body = input
         .get("body")
@@ -257,7 +282,9 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
             gix_forge::Error::InvalidTarget(format!("comment `{lookup_id}` was not found"))
         })?;
         comment.body = body;
-        comment.save_in_repo(repo).map(|_| comment.id)
+        comment
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| comment.id)
     })
     .await;
 
@@ -274,6 +301,9 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
             view! { shell(active: Tab::Dashboard, title: "Comment updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/comments/edit/{id}"))>"Return to editor"</a></div> })?;
             view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) }
         }
@@ -282,9 +312,13 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
 
 #[page(POST "/comments/delete/{*comment_id}")]
 async fn comment_delete(cx: &Cx) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<CommentId>(cx)?.clone();
     let lookup_id = id.clone();
-    let result = with_repo(cx, move |repo| Comment::delete(repo, &lookup_id)).await;
+    let result = with_repo(cx, move |repo| {
+        Comment::delete_as(repo, &lookup_id, &authorization)
+    })
+    .await;
     let content = match result {
         Ok(true) => {
             (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment deleted"</h2><a class="button-link" href="/">"Return home"</a></section> })?
@@ -293,6 +327,9 @@ async fn comment_delete(cx: &Cx) -> Result {
             (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/">"Return home"</a></div> })?
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             (view! { <div class="error-panel"><strong>"Comment could not be deleted"</strong><p>(error)</p><a href=(format!("/comments/{id}"))>"Return to comment"</a></div> })?
         }
     };

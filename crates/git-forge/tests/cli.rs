@@ -7,17 +7,39 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use gix_forge::{EntityOps, Issue, Review, ReviewTarget};
+use gix_forge::{Authorization, EntityOps, Issue, Member, Principal, Review, ReviewTarget};
 use proptest::prelude::*;
 use test_support::init_repo;
 
 const BIN: &str = env!("CARGO_BIN_EXE_git-forge");
 
 /// Run the binary in `dir`, returning `(stdout, stderr, ok)`.
+fn seed_member(dir: &Path, id: &str, role: &str) {
+    let repo = gix::open(dir).unwrap();
+    let member = Member {
+        id: id.to_owned(),
+        signing_key: String::new(),
+        role: role.to_owned(),
+    };
+    member
+        .save_in_repo_as(
+            &repo,
+            &Authorization::new(Principal::member_id("alice")).administrator(),
+        )
+        .unwrap();
+}
+
+fn authenticate_cli(dir: &Path) {
+    seed_member(dir, "alice", "maintainer");
+}
+
 fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
+    authenticate_cli(dir);
     let out = Command::new(BIN)
         .current_dir(dir)
         .args(args)
+        .arg("--as")
+        .arg("alice")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -35,18 +57,37 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
 /// waits until `wait_for` has appeared in the child's output before writing
 /// `text` to stdin, avoiding races with the pty setup. Returns `(stdout,
 /// stderr, ok)` of the `script` process.
+fn run_without_identity(dir: &Path, args: &[&str]) -> (String, String, bool) {
+    let out = Command::new(BIN)
+        .current_dir(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
 fn run_with_pty_env(
     dir: &Path,
     args: &[&str],
     inputs: &[(&str, &str)],
     envs: &[(&str, &str)],
 ) -> (String, String, bool) {
+    authenticate_cli(dir);
     let mut cmd = Command::new("script");
     cmd.current_dir(dir)
         .arg("-q")
         .arg("/dev/null")
         .arg(BIN)
         .args(args)
+        .arg("--as")
+        .arg("alice")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -155,7 +196,12 @@ fn put_issue(dir: &Path, id: &str, body: &str) {
         reporters: vec![],
         edit: None,
     };
-    issue.save_in_repo(&repo).unwrap();
+    issue
+        .save_in_repo_as(
+            &repo,
+            &Authorization::new(Principal::member_id("alice")).administrator(),
+        )
+        .unwrap();
 }
 
 fn put_review(dir: &Path, id: &str, body: &str) {
@@ -171,7 +217,12 @@ fn put_review(dir: &Path, id: &str, body: &str) {
         },
         edit: None,
     };
-    review.save_in_repo(&repo).unwrap();
+    review
+        .save_in_repo_as(
+            &repo,
+            &Authorization::new(Principal::member_id("alice")).administrator(),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -182,9 +233,78 @@ fn bare_cli_lists_groups() {
     let (_, err, ok) = run(dir.path(), &[]);
     assert!(!ok, "bare command should fail without subcommand");
     assert!(
-        err.contains("Usage: git-forge <COMMAND>"),
+        err.contains("Usage: git-forge [OPTIONS] <COMMAND>"),
         "bare command stderr: {err}"
     );
+}
+
+#[test]
+fn mutations_require_an_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+
+    let (_, err, ok) = run_without_identity(dir.path(), &["issue", "new", "--body", "body"]);
+    assert!(!ok);
+    assert!(err.contains("unauthorized: authentication is required to create issue"));
+}
+
+#[test]
+fn reads_remain_available_without_an_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    seed_member(dir.path(), "alice", "maintainer");
+
+    let (_, err, ok) = run_without_identity(dir.path(), &["member", "ls"]);
+    assert!(ok, "read failed without --as: {err}");
+}
+
+#[test]
+fn unknown_identity_is_unauthorized() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    seed_member(dir.path(), "alice", "maintainer");
+
+    let out = Command::new(BIN)
+        .current_dir(dir.path())
+        .args(["issue", "new", "--body", "body", "--as", "unknown"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unauthorized: unknown member"));
+}
+
+#[test]
+fn non_owner_mutations_are_forbidden() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    seed_member(dir.path(), "alice", "maintainer");
+    seed_member(dir.path(), "bob", "contributor");
+    let repo = gix::open(dir.path()).unwrap();
+    Issue {
+        id: "issue-1".to_owned(),
+        status: "open".to_owned(),
+        title: String::new(),
+        body: "body".to_owned(),
+        labels: vec![],
+        assignees: vec![],
+        reporters: vec!["alice".to_owned()],
+        edit: None,
+    }
+    .save_in_repo_as(
+        &repo,
+        &Authorization::new(Principal::member_id("alice")).administrator(),
+    )
+    .unwrap();
+
+    let out = Command::new(BIN)
+        .current_dir(dir.path())
+        .args([
+            "issue", "edit", "issue-1", "--body", "changed", "--as", "bob",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("forbidden: cannot update issue"));
 }
 
 #[test]
@@ -205,12 +325,19 @@ fn uninstall_removes_forge_schemas() {
 
     let (_, err, ok) = run(dir.path(), &["install"]);
     assert!(ok, "install failed: {err}");
+    let repo = gix::open(dir.path()).unwrap();
+    Member::delete_as(
+        &repo,
+        "alice",
+        &Authorization::new(Principal::member_id("alice")).administrator(),
+    )
+    .unwrap();
 
-    let (out, err, ok) = run(dir.path(), &["uninstall"]);
+    let (out, err, ok) = run_without_identity(dir.path(), &["uninstall"]);
     assert!(ok, "uninstall failed: {err}");
     assert!(out.contains("forge uninstalled"), "uninstall output: {out}");
 
-    let (_, err, ok) = run(dir.path(), &["uninstall"]);
+    let (_, err, ok) = run_without_identity(dir.path(), &["uninstall"]);
     assert!(ok, "second uninstall failed: {err}");
 }
 
@@ -250,7 +377,7 @@ fn issue_new_show_list_log_and_remove() {
     assert!(out.contains("first body"), "issue show output: {out}");
     assert!(out.contains("bug, p1"), "issue show output: {out}");
     assert!(out.contains("alice"), "issue show output: {out}");
-    assert!(out.contains("bob"), "issue show output: {out}");
+    assert!(out.contains("alice"), "issue show output: {out}");
 
     let (out, err, ok) = run(path, &["issue", "ls"]);
     assert!(ok, "issue ls failed: {err}");
@@ -561,7 +688,7 @@ fn review_new_show_list_log_and_remove() {
     assert!(out.contains("Open"), "review show output: {out}");
     assert!(out.contains("looks good"), "review show output: {out}");
     assert!(out.contains("carol"), "review show output: {out}");
-    assert!(out.contains("dave"), "review show output: {out}");
+    assert!(out.contains("alice"), "review show output: {out}");
     assert!(out.contains("commit:deadbeef"), "review show output: {out}");
 
     let (out, err, ok) = run(path, &["review", "ls"]);
@@ -905,7 +1032,7 @@ fn review_search_filters_by_reviewer_requester_and_keyword() {
         vec![format!("#{}", display_id(&review_id))]
     );
 
-    let (out, err, ok) = run(path, &["review", "search", "--requester", "dave"]);
+    let (out, err, ok) = run(path, &["review", "search", "--requester", "alice"]);
     assert!(ok, "review search failed: {err}");
     assert_eq!(
         table_ids(&out),
@@ -1043,7 +1170,7 @@ fn query_sugar_filters_by_people_and_keyword() {
         vec![format!("#{}", display_id(&review_id))]
     );
 
-    let (out, err, ok) = run(path, &["query", "requester", "dave"]);
+    let (out, err, ok) = run(path, &["query", "requester", "alice"]);
     assert!(ok, "query requester failed: {err}");
     assert!(out.contains("ID"), "query requester output: {out}");
     assert_eq!(
@@ -1091,7 +1218,7 @@ fn query_sugar_filters_by_people_and_keyword() {
             "--reviewer",
             "carol",
             "--requester",
-            "dave",
+            "alice",
             "--title",
             "reviewed",
         ],
@@ -1143,7 +1270,10 @@ proptest! {
                 reporters: vec![],
                 edit: None,
             }
-            .save_in_repo(&repo)
+            .save_in_repo_as(
+                &repo,
+                &Authorization::new(Principal::member_id("alice")).administrator(),
+            )
             .unwrap();
         }
 
@@ -1163,7 +1293,10 @@ proptest! {
                 },
                 edit: None,
             }
-            .save_in_repo(&repo)
+            .save_in_repo_as(
+                &repo,
+                &Authorization::new(Principal::member_id("alice")).administrator(),
+            )
             .unwrap();
         }
 

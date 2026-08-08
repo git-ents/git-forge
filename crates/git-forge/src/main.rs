@@ -18,13 +18,17 @@ use dialoguer::{
     theme::ColorfulTheme,
 };
 use gix_forge::{
-    Comment, Entity, EntityOps, HitKind, Issue, Member, QueryValue, Review, ReviewTarget, Status,
+    Authorization, Comment, Entity, EntityOps, HitKind, Issue, Member, Principal, QueryValue,
+    Review, ReviewTarget, Status,
 };
 use owo_colors::OwoColorize;
 
 #[derive(Parser)]
 #[command(name = "git-forge", about = "Forge software on Git", version)]
 struct Cli {
+    /// Member identity used for mutations. Reads do not require an identity.
+    #[arg(long = "as", global = true, value_name = "MEMBER_ID")]
+    as_member: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -346,14 +350,15 @@ fn main() -> Result<()> {
     // the same schema objects come back thousands of times per run, so give
     // gix's object cache -- off unless asked for -- something to hold them.
     repo.object_cache_size_if_unset(4 * 1024 * 1024);
+    let authorization = resolve_authorization(&repo, cli.as_member.as_deref())?;
 
     match cli.command {
-        Command::Issue(command) => run_issue(&repo, command)?,
-        Command::Review(command) => run_review(&repo, command)?,
-        Command::Member(command) => run_member(&repo, command)?,
-        Command::Comment(command) => run_comment(&repo, command)?,
+        Command::Issue(command) => run_issue(&repo, &authorization, command)?,
+        Command::Review(command) => run_review(&repo, &authorization, command)?,
+        Command::Member(command) => run_member(&repo, &authorization, command)?,
+        Command::Comment(command) => run_comment(&repo, &authorization, command)?,
         Command::Query(command) => run_query(&repo, command)?,
-        Command::Install(args) => run_install(&repo, args)?,
+        Command::Install(args) => run_install(&repo, &authorization, args)?,
         Command::Uninstall(args) => run_uninstall(&repo, args)?,
         Command::Ui(args) => run_ui(&repo, args)?,
         Command::UiStop => run_ui_stop(&repo)?,
@@ -622,7 +627,30 @@ fn run_ui_status(_repo: &gix::Repository) -> Result<()> {
     bail!("ui-status is not supported on Windows")
 }
 
-fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
+fn resolve_authorization(repo: &gix::Repository, member_id: Option<&str>) -> Result<Authorization> {
+    let Some(member_id) = member_id else {
+        return Ok(Authorization::new(Principal::anonymous()));
+    };
+    let member = Member::load_from_repo(repo, member_id)
+        .with_context(|| format!("cannot validate identity `{member_id}` against repository members"))?
+        .with_context(|| {
+            format!(
+                "unauthorized: unknown member `{member_id}`; use `git forge member ls` to choose a repository member"
+            )
+        })?;
+    let authorization = Authorization::new(Principal::member(&member));
+    Ok(if member.role == "maintainer" {
+        authorization.administrator()
+    } else {
+        authorization
+    })
+}
+
+fn run_issue(
+    repo: &gix::Repository,
+    authorization: &Authorization,
+    command: IssueCommand,
+) -> Result<()> {
     match command {
         IssueCommand::Add(args) => {
             let interactive = resolve_interactive(
@@ -644,7 +672,6 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                         .context("--body is required unless running interactively")?,
                     labels: args.labels,
                     assignees: args.assignees,
-                    reporters: args.reporters,
                 }
             };
             let issue = Issue {
@@ -659,10 +686,10 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 body: fields.body,
                 labels: fields.labels,
                 assignees: fields.assignees,
-                reporters: fields.reporters,
+                reporters: Vec::new(),
                 edit: None,
             };
-            println!("{}", issue.create_in_repo(repo)?);
+            println!("{}", issue.create_in_repo_as(repo, authorization)?);
         }
         IssueCommand::Edit(args) => {
             let id = resolve_issue_show_id(repo, &args.id)?
@@ -699,7 +726,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
                 }
                 issue.edit = None;
             }
-            println!("{}", issue.save_in_repo(repo)?);
+            println!("{}", issue.save_in_repo_as(repo, authorization)?);
         }
         IssueCommand::Show { id } => {
             let id = resolve_issue_show_id(repo, &id)?.with_context(|| format!("no issue {id}"))?;
@@ -713,7 +740,7 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
         }
         IssueCommand::Log { id } => print_log("issue", &id, repo, Issue::history(repo, &id)?)?,
         IssueCommand::Rm { id } => {
-            if !Issue::delete(repo, &id)? {
+            if !Issue::delete_as(repo, &id, authorization)? {
                 bail!("no issue {id}");
             }
         }
@@ -727,7 +754,11 @@ fn run_issue(repo: &gix::Repository, command: IssueCommand) -> Result<()> {
     Ok(())
 }
 
-fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
+fn run_member(
+    repo: &gix::Repository,
+    authorization: &Authorization,
+    command: MemberCommand,
+) -> Result<()> {
     match command {
         MemberCommand::Add(args) => {
             let interactive = resolve_interactive(
@@ -752,7 +783,7 @@ fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
                 signing_key,
                 role,
             };
-            println!("{}", member.create_in_repo(repo)?);
+            println!("{}", member.create_in_repo_as(repo, authorization)?);
         }
         MemberCommand::Edit(args) => {
             let id = resolve_member_show_id(repo, &args.id)?
@@ -775,7 +806,7 @@ fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
                     member.role = role;
                 }
             }
-            println!("{}", member.save_in_repo(repo)?);
+            println!("{}", member.save_in_repo_as(repo, authorization)?);
         }
         MemberCommand::Show { id } => {
             let id =
@@ -787,7 +818,7 @@ fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
         MemberCommand::List => print_member_list(repo)?,
         MemberCommand::Log { id } => print_log("member", &id, repo, Member::history(repo, &id)?)?,
         MemberCommand::Rm { id } => {
-            if !Member::delete(repo, &id)? {
+            if !Member::delete_as(repo, &id, authorization)? {
                 bail!("no member {id}");
             }
         }
@@ -795,7 +826,11 @@ fn run_member(repo: &gix::Repository, command: MemberCommand) -> Result<()> {
     Ok(())
 }
 
-fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
+fn run_comment(
+    repo: &gix::Repository,
+    authorization: &Authorization,
+    command: CommentCommand,
+) -> Result<()> {
     match command {
         CommentCommand::Add(args) => {
             let interactive = resolve_interactive(
@@ -805,7 +840,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
                     && args.author.is_none()
                     && args.body.is_none(),
             )?;
-            let (kind, subject_id, author, body) = if interactive {
+            let (kind, subject_id, body) = if interactive {
                 prompt_comment_fields(repo)?
             } else {
                 let kind = args
@@ -820,13 +855,12 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
                 (
                     kind.to_owned(),
                     subject_id,
-                    args.author
-                        .context("--author is required unless running interactively")?,
                     args.body
                         .context("--body is required unless running interactively")?,
                 )
             };
-            let id = Comment::create_under(repo, &kind, &subject_id, &author, &body, None)?;
+            let id =
+                Comment::create_under_as(repo, authorization, &kind, &subject_id, &body, None)?;
             println!("{id}");
         }
         CommentCommand::Edit(args) => {
@@ -847,7 +881,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
                 }
             }
             comment.edit = None;
-            println!("{}", comment.save_in_repo(repo)?);
+            println!("{}", comment.save_in_repo_as(repo, authorization)?);
         }
         CommentCommand::Show { id } => {
             let id =
@@ -864,7 +898,7 @@ fn run_comment(repo: &gix::Repository, command: CommentCommand) -> Result<()> {
             print_log("comment", &id, repo, Comment::history(repo, &id)?)?;
         }
         CommentCommand::Rm { id } => {
-            if !Comment::delete(repo, &id)? {
+            if !Comment::delete_as(repo, &id, authorization)? {
                 bail!("no comment {id}");
             }
         }
@@ -898,7 +932,7 @@ fn resolve_comment_show_id(repo: &gix::Repository, id: &str) -> Result<Option<St
     resolve_show_id("comment", id, &Comment::list(repo)?)
 }
 
-fn prompt_comment_fields(repo: &gix::Repository) -> Result<(String, String, String, String)> {
+fn prompt_comment_fields(repo: &gix::Repository) -> Result<(String, String, String)> {
     require_terminal_for_interactive()?;
     let kinds = ["issue", "review"];
     let choice = Select::with_theme(&interactive_theme())
@@ -914,16 +948,23 @@ fn prompt_comment_fields(repo: &gix::Repository) -> Result<(String, String, Stri
     let subject_input = prompt_required_text(&format!("{} id", kinds[choice]))?;
     let subject_id = resolve_comment_subject_id(repo, &kind, &subject_input)?
         .with_context(|| format!("no {} {subject_input}", kinds[choice]))?;
-    let author = prompt_required_text("Author")?;
     let body = prompt_body("")?;
-    Ok((kind, subject_id, author, body))
+    Ok((kind, subject_id, body))
 }
 
-fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
+fn run_install(
+    repo: &gix::Repository,
+    authorization: &Authorization,
+    args: InstallArgs,
+) -> Result<()> {
     let mut installed = false;
 
     if should_install(args.interactive, "issue schema")? {
-        println!("{} {}", Issue::KIND, gix_forge::ensure_issue_schema(repo)?);
+        println!(
+            "{} {}",
+            Issue::KIND,
+            gix_forge::ensure_issue_schema_as(repo, authorization)?
+        );
         installed = true;
     }
 
@@ -931,7 +972,7 @@ fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
         println!(
             "{} {}",
             Review::KIND,
-            gix_forge::ensure_review_schema(repo)?
+            gix_forge::ensure_review_schema_as(repo, authorization)?
         );
         installed = true;
     }
@@ -940,13 +981,13 @@ fn run_install(repo: &gix::Repository, args: InstallArgs) -> Result<()> {
         println!(
             "{} {}",
             Member::KIND,
-            gix_forge::ensure_member_schema(repo)?
+            gix_forge::ensure_member_schema_as(repo, authorization)?
         );
         installed = true;
     }
 
     if should_install(args.interactive, "query rules")? {
-        gix_forge::install_builtin_query_rules(repo)?;
+        gix_forge::install_builtin_query_rules_as(repo, authorization)?;
         println!("query rules review");
         installed = true;
     }
@@ -1125,7 +1166,6 @@ struct IssueFields {
     body: String,
     labels: Vec<String>,
     assignees: Vec<String>,
-    reporters: Vec<String>,
 }
 
 fn prompt_issue_fields(repo: &gix::Repository) -> Result<IssueFields> {
@@ -1136,16 +1176,11 @@ fn prompt_issue_fields(repo: &gix::Repository) -> Result<IssueFields> {
         "Assignees",
         &known_issue_values(repo, |issue| &issue.assignees)?,
     )?;
-    let reporters = prompt_multi_values(
-        "Reporters",
-        &known_issue_values(repo, |issue| &issue.reporters)?,
-    )?;
     Ok(IssueFields {
         title,
         body,
         labels,
         assignees,
-        reporters,
     })
 }
 
@@ -1178,20 +1213,14 @@ fn prompt_issue_edit_fields(
     Ok((title, body, status))
 }
 
-fn prompt_review_fields(
-    repo: &gix::Repository,
-) -> Result<(String, Vec<String>, Vec<String>, String)> {
+fn prompt_review_fields(repo: &gix::Repository) -> Result<(String, Vec<String>, String)> {
     let body = prompt_body("")?;
     let reviewers = prompt_multi_values(
         "Reviewers",
         &known_review_values(repo, |review| &review.reviewers)?,
     )?;
-    let requesters = prompt_multi_values(
-        "Requesters",
-        &known_review_values(repo, |review| &review.requesters)?,
-    )?;
     let target = prompt_required_text("Target (e.g. commit:<oid>, blob:<path>:<oid>)")?;
-    Ok((body, reviewers, requesters, target))
+    Ok((body, reviewers, target))
 }
 
 fn prompt_review_edit_fields(
@@ -1350,7 +1379,11 @@ fn print_rows(rows: &[Vec<QueryValue>]) {
     }
 }
 
-fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
+fn run_review(
+    repo: &gix::Repository,
+    authorization: &Authorization,
+    command: ReviewCommand,
+) -> Result<()> {
     match command {
         ReviewCommand::Add(args) => {
             let interactive = resolve_interactive(
@@ -1361,14 +1394,13 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     && args.requesters.is_empty()
                     && args.target.is_none(),
             )?;
-            let (body, reviewers, requesters, target) = if interactive {
+            let (body, reviewers, target) = if interactive {
                 prompt_review_fields(repo)?
             } else {
                 (
                     args.body
                         .context("--body is required unless running interactively")?,
                     args.reviewers,
-                    args.requesters,
                     args.target
                         .context("--target is required unless running interactively")?,
                 )
@@ -1383,11 +1415,11 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                     .to_owned(),
                 body,
                 reviewers,
-                requesters,
+                requesters: Vec::new(),
                 target: ReviewTarget::parse(&target)?,
                 edit: None,
             };
-            println!("{}", review.create_in_repo(repo)?);
+            println!("{}", review.create_in_repo_as(repo, authorization)?);
         }
         ReviewCommand::Edit(args) => {
             let id = resolve_review_show_id(repo, &args.id)?
@@ -1424,7 +1456,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
                 }
                 review.edit = None;
             }
-            println!("{}", review.save_in_repo(repo)?);
+            println!("{}", review.save_in_repo_as(repo, authorization)?);
         }
         ReviewCommand::Show { id } => {
             let id =
@@ -1439,7 +1471,7 @@ fn run_review(repo: &gix::Repository, command: ReviewCommand) -> Result<()> {
         }
         ReviewCommand::Log { id } => print_log("review", &id, repo, Review::history(repo, &id)?)?,
         ReviewCommand::Rm { id } => {
-            if !Review::delete(repo, &id)? {
+            if !Review::delete_as(repo, &id, authorization)? {
                 bail!("no review {id}");
             }
         }

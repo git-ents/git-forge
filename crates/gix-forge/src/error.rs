@@ -27,4 +27,13 @@ pub enum Error {
     /// A `--target`/review-target string did not parse.
     #[error("invalid review target `{0}`")]
     InvalidTarget(String),
+    /// Authentication is required for the requested mutation.
+    #[error("unauthorized: authentication is required to {capability}; provide --as <member-id>")]
+    Unauthorized { capability: crate::Capability },
+    /// The authenticated principal lacks the requested capability.
+    #[error("forbidden: cannot {capability}; {reason}")]
+    Forbidden {
+        capability: crate::Capability,
+        reason: &'static str,
+    },
 }

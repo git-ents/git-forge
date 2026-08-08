@@ -1,3 +1,4 @@
+pub mod auth;
 mod pages;
 pub mod render;
 mod shell;

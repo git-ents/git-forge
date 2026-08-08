@@ -215,6 +215,15 @@ mod tests {
     use crate::entity::EntityOps;
     use crate::issue::Issue;
     use crate::review::{Review, ReviewTarget};
+    use crate::{Authorization, Principal};
+
+    fn auth() -> Authorization {
+        Authorization::new(Principal::member_id("alice"))
+    }
+
+    fn bob() -> Authorization {
+        Authorization::new(Principal::member_id("bob"))
+    }
 
     fn sample_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -254,9 +263,11 @@ mod tests {
     fn search_assignee_finds_only_matching_issues() {
         let (_dir, repo) = sample_repo();
         let matching = issue("a", &["alice"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
-        issue("b", &["bob"]).create_in_repo(&repo).expect("create");
+        issue("b", &["bob"])
+            .create_in_repo_as(&repo, &auth())
+            .expect("create");
 
         let hits = search_assignee(&repo, "alice").expect("search");
         assert_eq!(hits, vec![matching]);
@@ -266,10 +277,10 @@ mod tests {
     fn search_keyword_covers_both_issues_and_reviews() {
         let (_dir, repo) = sample_repo();
         let issue_id = issue("has the Widget bug", &[])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create issue");
         let review_id = review("touches the widget code", &[], &[])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create review");
 
         let mut hits = search_keyword(&repo, "widget").expect("search");
@@ -292,10 +303,10 @@ mod tests {
     fn search_find_excludes_issues_when_a_review_filter_is_given() {
         let (_dir, repo) = sample_repo();
         issue("a", &["alice"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
         let review_id = review("b", &["carol"], &[])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create review");
 
         let hits = search_find(&repo, None, Some("carol"), None, None).expect("search");
@@ -312,10 +323,10 @@ mod tests {
     fn search_find_excludes_reviews_when_assignee_is_given() {
         let (_dir, repo) = sample_repo();
         let issue_id = issue("a", &["alice"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
         review("b", &["carol"], &[])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create review");
 
         let hits = search_find(&repo, Some("alice"), None, None, None).expect("search");
@@ -332,13 +343,13 @@ mod tests {
     fn search_issue_combines_assignee_and_keyword() {
         let (_dir, repo) = sample_repo();
         let matching = issue("has the widget bug", &["alice"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
         issue("has the widget bug", &["bob"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
         issue("unrelated", &["alice"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
 
         let ids = search_issue(&repo, Some("alice"), Some("widget")).expect("search");
@@ -348,7 +359,9 @@ mod tests {
     #[test]
     fn search_issue_with_no_filters_lists_every_issue() {
         let (_dir, repo) = sample_repo();
-        let id = issue("a", &[]).create_in_repo(&repo).expect("create");
+        let id = issue("a", &[])
+            .create_in_repo_as(&repo, &auth())
+            .expect("create");
 
         let ids = search_issue(&repo, None, None).expect("search");
         assert_eq!(ids, vec![id]);
@@ -358,27 +371,29 @@ mod tests {
     fn search_review_combines_reviewer_requester_and_keyword() {
         let (_dir, repo) = sample_repo();
         let matching = review("please review the widget", &["carol"], &["dave"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &auth())
             .expect("create");
         review("please review the widget", &["carol"], &["erin"])
-            .create_in_repo(&repo)
+            .create_in_repo_as(&repo, &bob())
             .expect("create");
 
         let ids =
-            search_review(&repo, Some("carol"), Some("dave"), Some("widget")).expect("search");
+            search_review(&repo, Some("carol"), Some("alice"), Some("widget")).expect("search");
         assert_eq!(ids, vec![matching]);
     }
 
     #[test]
     fn search_comment_combines_author_and_keyword() {
         let (_dir, repo) = sample_repo();
-        let issue_id = issue("a", &[]).create_in_repo(&repo).expect("create issue");
+        let issue_id = issue("a", &[])
+            .create_in_repo_as(&repo, &auth())
+            .expect("create issue");
         let matching =
-            Comment::create_under(&repo, "issue", &issue_id, "alice", "the widget broke", None)
+            Comment::create_under_as(&repo, &auth(), "issue", &issue_id, "the widget broke", None)
                 .expect("create comment");
-        Comment::create_under(&repo, "issue", &issue_id, "bob", "the widget broke", None)
+        Comment::create_under_as(&repo, &bob(), "issue", &issue_id, "the widget broke", None)
             .expect("create comment");
-        Comment::create_under(&repo, "issue", &issue_id, "alice", "unrelated", None)
+        Comment::create_under_as(&repo, &auth(), "issue", &issue_id, "unrelated", None)
             .expect("create comment");
 
         let ids = search_comment(&repo, Some("alice"), Some("widget")).expect("search");
@@ -388,8 +403,10 @@ mod tests {
     #[test]
     fn search_comment_with_no_filters_lists_every_comment() {
         let (_dir, repo) = sample_repo();
-        let issue_id = issue("a", &[]).create_in_repo(&repo).expect("create issue");
-        let id = Comment::create_under(&repo, "issue", &issue_id, "alice", "b", None)
+        let issue_id = issue("a", &[])
+            .create_in_repo_as(&repo, &auth())
+            .expect("create issue");
+        let id = Comment::create_under_as(&repo, &auth(), "issue", &issue_id, "b", None)
             .expect("create comment");
 
         let ids = search_comment(&repo, None, None).expect("search");

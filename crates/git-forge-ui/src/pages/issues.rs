@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gix_forge::{Commentable, EntityOps, Issue, Status};
+use gix_forge::{Comment, Commentable, EntityOps, Issue, Status};
 use topcoat::{
     Result,
     context::Cx,
@@ -9,6 +9,7 @@ use topcoat::{
 };
 
 use crate::{
+    auth::{authorization, authorization_error, can_create, can_update},
     pages::{csv_values, with_repo},
     render::render_asciidoc,
     shell::{Tab, shell, split_shell},
@@ -102,13 +103,23 @@ async fn issue_form(cx: &Cx, action: &str, form: &IssueForm, error: Option<&str>
 }
 
 async fn issue_list(cx: &Cx, items: &[Issue]) -> Result {
+    let can_create = can_create::<Issue>(cx).await;
     view! { cx =>
         <div class="list-heading">
             <div><h2>"Issues"</h2><span class="muted">(items.len())</span></div>
-            <a class="button-link" href="/issues/new">"New issue"</a>
+            if can_create {
+                <a class="button-link" href="/issues/new">"New issue"</a>
+            }
         </div>
         if items.is_empty() {
-            <div class="empty-panel"><p>"No issues found."</p><a class="button-link" href="/issues/new">"Open the first issue"</a></div>
+            <div class="empty-panel">
+                <p>"No issues found."</p>
+                if can_create {
+                    <a class="button-link" href="/issues/new">"Open the first issue"</a>
+                } else {
+                    <p class="form-help">"Authenticate as a forge member to open the first issue."</p>
+                }
+            </div>
         } else {
             <ul class="entity-list">
                 for issue in items {
@@ -160,6 +171,10 @@ async fn issues(cx: &Cx) -> Result {
 
 #[page("/issues/new")]
 async fn issue_new(cx: &Cx) -> Result {
+    if !can_create::<Issue>(cx).await {
+        let content = (view! { <div class="empty-panel"><h2>"Sign in to open an issue"</h2><p class="muted">"Reads stay available without an account; creating an issue requires a forge member identity."</p><a class="button-link secondary" href="/issues">"Back to issues"</a></div> })?;
+        return view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) };
+    }
     let form = IssueForm {
         title: String::new(),
         body: String::new(),
@@ -174,6 +189,7 @@ async fn issue_new(cx: &Cx) -> Result {
 
 #[page(POST "/issues")]
 async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let form = IssueForm::from_input(&input);
     let title = form.title.trim();
     if title.is_empty() {
@@ -201,7 +217,10 @@ async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
         reporters: csv_values(&form.reporters),
         edit: None,
     };
-    let result = with_repo(cx, move |repo| issue.create_in_repo(repo)).await;
+    let result = with_repo(cx, move |repo| {
+        issue.create_in_repo_as(repo, &authorization)
+    })
+    .await;
     match result {
         Ok(id) => {
             let content = (view! {
@@ -216,6 +235,9 @@ async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
             view! { shell(active: Tab::Issues, title: "Issue created", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = issue_form(cx, "/issues", &form, Some(&error)).await?;
             view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) }
         }
@@ -247,6 +269,8 @@ async fn issue_detail(cx: &Cx) -> Result {
 
     let (list, detail) = match data {
         Ok(Some((issue_items, issue, comments))) => {
+            let can_edit = can_update(cx, &issue).await;
+            let can_comment = can_create::<Comment>(cx).await;
             let next_status = if issue.status == "open" {
                 "closed"
             } else {
@@ -263,14 +287,18 @@ async fn issue_detail(cx: &Cx) -> Result {
                         <div class="detail-heading">
                             <div><h2>(issue.title.as_str())</h2><p class="muted">"Issue " (issue.id.as_str())</p></div>
                             <div class="detail-actions">
-                                <a class="button-link secondary" href=(format!("/issues/{}/edit", issue.id))>"Edit"</a>
-                                <form class="inline-form" action=(format!("/issues/{}/status", issue.id)) method="post">
-                                    <input type="hidden" name="status" value=(next_status)>
-                                    <button type="submit">if next_status == "closed" { "Close issue" } else { "Reopen issue" }</button>
-                                </form>
-                                <form class="inline-form" action=(format!("/issues/{}/delete", issue.id)) method="post">
-                                    <button class="danger-button" type="submit">"Delete"</button>
-                                </form>
+                                if can_edit {
+                                    <a class="button-link secondary" href=(format!("/issues/{}/edit", issue.id))>"Edit"</a>
+                                    <form class="inline-form" action=(format!("/issues/{}/status", issue.id)) method="post">
+                                        <input type="hidden" name="status" value=(next_status)>
+                                        <button type="submit">if next_status == "closed" { "Close issue" } else { "Reopen issue" }</button>
+                                    </form>
+                                    <form class="inline-form" action=(format!("/issues/{}/delete", issue.id)) method="post">
+                                        <button class="danger-button" type="submit">"Delete"</button>
+                                    </form>
+                                } else {
+                                    <span class="action-note">"Only the reporter or a maintainer can change this issue."</span>
+                                }
                             </div>
                         </div>
                         <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&issue.body)))</div>
@@ -282,23 +310,32 @@ async fn issue_detail(cx: &Cx) -> Result {
                             <dt>"Reporters"</dt><dd>(if issue.reporters.is_empty() { "None".to_owned() } else { issue.reporters.join(", ") })</dd>
                         </dl>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div><a class="button-link secondary" href="/comments/new">"Free-floating comment"</a></div>
+                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
                             if comments.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
                                 for comment in &comments {
                                     <article class="comment">
-                                        <div class="comment-heading"><strong>(comment.author.as_str())</strong><a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a></div>
+                                        <div class="comment-heading">
+                                            <strong>(comment.author.as_str())</strong>
+                                            if can_update(cx, comment).await {
+                                                <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a>
+                                            }
+                                        </div>
                                         <p>(comment.body.as_str())</p>
                                     </article>
                                 }
                             }
-                            <form class="comment-form" action=(format!("/issues/{}/comments", issue.id)) method="post">
-                                <label for="issue-comment-author">"Add a comment"</label>
-                                <input id="issue-comment-author" name="author" placeholder="Your name" required="">
-                                <textarea name="body" rows="5" placeholder="Leave a helpful update or question." required=""></textarea>
-                                <button type="submit">"Comment"</button>
-                            </form>
+                            if can_comment {
+                                <form class="comment-form" action=(format!("/issues/{}/comments", issue.id)) method="post">
+                                    <label for="issue-comment-author">"Add a comment"</label>
+                                    <input id="issue-comment-author" name="author" value="authenticated member" type="hidden">
+                                    <textarea name="body" rows="5" placeholder="Leave a helpful update or question." required=""></textarea>
+                                    <button type="submit">"Comment"</button>
+                                </form>
+                            } else {
+                                <p class="form-context">"Sign in as a forge member to join this discussion."</p>
+                            }
                         </section>
                     </article>
                 })?,
@@ -323,13 +360,17 @@ async fn issue_edit_page(cx: &Cx) -> Result {
     let data = with_repo(cx, move |repo| Issue::load_from_repo(repo, &id)).await;
     let content = match data {
         Ok(Some(issue)) => {
-            issue_form(
-                cx,
-                &format!("/issues/{}/edit", issue.id),
-                &IssueForm::from_issue(&issue),
-                None,
-            )
-            .await?
+            if can_update(cx, &issue).await {
+                issue_form(
+                    cx,
+                    &format!("/issues/{}/edit", issue.id),
+                    &IssueForm::from_issue(&issue),
+                    None,
+                )
+                .await?
+            } else {
+                (view! { <div class="empty-panel"><h2>"This issue is read-only for you"</h2><p class="muted">"Only the reporter or a maintainer can edit or delete it."</p><a class="button-link secondary" href=(format!("/issues/{}", issue.id))>"Back to issue"</a></div> })?
+            }
         }
         Ok(None) => {
             (view! { <div class="empty-panel"><h2>"Issue not found"</h2><a href="/issues">"Back to issues"</a></div> })?
@@ -343,6 +384,7 @@ async fn issue_edit_page(cx: &Cx) -> Result {
 
 #[page(POST "/issues/{issue_id}/edit")]
 async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<IssueId>(cx)?.clone();
     let form = IssueForm::from_input(&input);
     if form.title.trim().is_empty() || Status::parse(&form.status).is_none() {
@@ -365,8 +407,9 @@ async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) 
         issue.status = form.status.trim().to_ascii_lowercase();
         issue.labels = csv_values(&form.labels);
         issue.assignees = csv_values(&form.assignees);
-        issue.reporters = csv_values(&form.reporters);
-        issue.save_in_repo(repo).map(|_| issue.id)
+        issue
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| issue.id)
     })
     .await;
     match result {
@@ -375,6 +418,9 @@ async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) 
             view! { shell(active: Tab::Issues, title: "Issue updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Issue could not be saved"</strong><p>(error)</p><a href=(format!("/issues/{id}/edit"))>"Return to editor"</a></div> })?;
             view! { shell(active: Tab::Issues, title: "Edit issue", keyword: None, child: content) }
         }
@@ -383,6 +429,7 @@ async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) 
 
 #[page(POST "/issues/{issue_id}/status")]
 async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<IssueId>(cx)?.clone();
     let status = input
         .get("status")
@@ -400,7 +447,9 @@ async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
             ));
         }
         issue.status = status;
-        issue.save_in_repo(repo).map(|_| issue.id)
+        issue
+            .save_in_repo_as(repo, &authorization)
+            .map(|_| issue.id)
     })
     .await;
     match result {
@@ -409,6 +458,9 @@ async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
             view! { shell(active: Tab::Issues, title: "Issue updated", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Could not update issue"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
             view! { shell(active: Tab::Issues, title: "Issue action failed", keyword: None, child: content) }
         }
@@ -417,6 +469,7 @@ async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
 
 #[page(POST "/issues/{issue_id}/comments")]
 async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<IssueId>(cx)?.clone();
     let author = input
         .get("author")
@@ -439,7 +492,7 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         let issue = Issue::load_from_repo(repo, &lookup_id)?.ok_or_else(|| {
             gix_forge::Error::InvalidTarget(format!("issue `{lookup_id}` was not found"))
         })?;
-        issue.add_comment(repo, &author, &body)
+        issue.add_comment_as(repo, &authorization, &body)
     })
     .await;
     match result {
@@ -448,6 +501,9 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             view! { shell(active: Tab::Issues, title: "Comment added", keyword: None, child: content) }
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
             view! { shell(active: Tab::Issues, title: "Comment failed", keyword: None, child: content) }
         }
@@ -456,9 +512,13 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
 
 #[page(POST "/issues/{issue_id}/delete")]
 async fn issue_delete(cx: &Cx) -> Result {
+    let authorization = authorization(cx).await?;
     let id = path_param::<IssueId>(cx)?.clone();
     let lookup_id = id.clone();
-    let result = with_repo(cx, move |repo| Issue::delete(repo, &lookup_id)).await;
+    let result = with_repo(cx, move |repo| {
+        Issue::delete_as(repo, &lookup_id, &authorization)
+    })
+    .await;
     let content = match result {
         Ok(true) => {
             (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Issue deleted"</h2><a class="button-link" href="/issues">"Return to issues"</a></section> })?
@@ -467,6 +527,9 @@ async fn issue_delete(cx: &Cx) -> Result {
             (view! { <div class="empty-panel"><h2>"Issue not found"</h2><a href="/issues">"Return to issues"</a></div> })?
         }
         Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
             (view! { <div class="error-panel"><strong>"Issue could not be deleted"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?
         }
     };

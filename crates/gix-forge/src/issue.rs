@@ -4,6 +4,7 @@ use facet::Facet;
 
 use crate::comment::Commentable;
 use crate::entity::Entity;
+use crate::{Authorization, Ownership};
 
 #[derive(Debug, Clone, Facet)]
 pub struct Issue {
@@ -48,6 +49,23 @@ impl Entity for Issue {
         }
     }
 
+    fn ownership(&self, authorization: &Authorization) -> Ownership {
+        if let crate::Principal::Member(member) = authorization.principal()
+            && self
+                .reporters
+                .iter()
+                .any(|reporter| reporter == member.as_str())
+        {
+            Ownership::Owned
+        } else {
+            Ownership::NotOwned
+        }
+    }
+
+    fn attribute_to(&mut self, principal: &str) {
+        self.reporters = vec![principal.to_owned()];
+    }
+
     fn from_stored(id: String, stored: StoredIssue) -> Self {
         Self {
             id,
@@ -72,7 +90,11 @@ impl Commentable for Issue {
 mod tests {
     use super::*;
     use crate::entity::EntityOps;
-    use crate::open_store;
+    use crate::{Authorization, Principal, open_store};
+
+    fn auth() -> Authorization {
+        Authorization::new(Principal::member_id("alice"))
+    }
 
     #[test]
     fn issue_round_trip_through_store() {
@@ -81,7 +103,7 @@ mod tests {
         let repo = gix::open(dir.path()).expect("open repo");
         let store = open_store(&repo);
 
-        Issue::ensure_schema(&store).expect("publish issue schema");
+        Issue::ensure_schema_as(&store, &auth()).expect("publish issue schema");
 
         let issue = Issue {
             id: "issue-1".to_string(),
@@ -90,11 +112,11 @@ mod tests {
             body: "round trip issue".to_string(),
             labels: vec!["bug".to_string(), "P1".to_string()],
             assignees: vec!["alice".to_string()],
-            reporters: vec!["bob".to_string()],
+            reporters: vec!["alice".to_string()],
             edit: Some("initial edit note".to_string()),
         };
 
-        issue.save(&store).expect("save issue");
+        issue.save_as(&store, &auth()).expect("save issue");
         let loaded = Issue::load(&store, &issue.id)
             .expect("load issue")
             .expect("issue exists");
@@ -122,15 +144,50 @@ mod tests {
             body: "body".to_string(),
             labels: vec![],
             assignees: vec![],
-            reporters: vec![],
+            reporters: vec!["spoofed".to_owned()],
             edit: None,
         };
-        let id = issue.create_in_repo(&repo).expect("create issue");
+        let id = issue
+            .create_in_repo_as(&repo, &auth())
+            .expect("create issue");
         assert!(Issue::list(&repo).expect("list issues").contains(&id));
         let loaded = Issue::load_from_repo(&repo, &id)
             .expect("load issue")
             .expect("issue exists");
         assert_eq!(loaded.title, "Anonymous issue");
+        assert_eq!(loaded.reporters, vec!["alice"]);
+    }
+
+    #[test]
+    fn unauthorized_mutations_fail_and_authorized_mutations_succeed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::init_repo(dir.path());
+        let repo = gix::open(dir.path()).expect("open repo");
+        let anonymous = Authorization::new(Principal::Anonymous);
+        let alice = auth();
+        let bob = Authorization::new(Principal::member_id("bob"));
+        let mut issue = Issue {
+            id: String::new(),
+            status: "open".to_string(),
+            title: "authorized issue".to_string(),
+            body: "body".to_string(),
+            labels: vec![],
+            assignees: vec![],
+            reporters: vec![],
+            edit: None,
+        };
+
+        assert!(issue.create_in_repo_as(&repo, &anonymous).is_err());
+        let id = issue
+            .create_in_repo_as(&repo, &alice)
+            .expect("create issue");
+        issue.id = id.clone();
+        issue.reporters.push("alice".to_string());
+        issue.status = "closed".to_string();
+        assert!(issue.save_in_repo_as(&repo, &bob).is_err());
+        issue.save_in_repo_as(&repo, &alice).expect("update issue");
+        assert!(Issue::delete_as(&repo, &id, &bob).is_err());
+        assert!(Issue::delete_as(&repo, &id, &alice).expect("delete issue"));
     }
 
     #[test]
@@ -146,22 +203,22 @@ mod tests {
             body: "b".to_string(),
             labels: vec![],
             assignees: vec![],
-            reporters: vec![],
+            reporters: vec!["alice".to_string()],
             edit: None,
         };
-        issue.save_in_repo(&repo).expect("save");
+        issue.save_in_repo_as(&repo, &auth()).expect("save");
         issue.status = "closed".to_string();
-        issue.save_in_repo(&repo).expect("save again");
+        issue.save_in_repo_as(&repo, &auth()).expect("save again");
 
         let history = Issue::history(&repo, &issue.id).expect("history");
         assert_eq!(history.len(), 2);
 
-        assert!(Issue::delete(&repo, &issue.id).expect("delete"));
+        assert!(Issue::delete_as(&repo, &issue.id, &auth()).expect("delete"));
         assert!(
             Issue::load_from_repo(&repo, &issue.id)
                 .expect("load after delete")
                 .is_none()
         );
-        assert!(!Issue::delete(&repo, &issue.id).expect("delete missing"));
+        assert!(!Issue::delete_as(&repo, &issue.id, &auth()).expect("delete missing"));
     }
 }
