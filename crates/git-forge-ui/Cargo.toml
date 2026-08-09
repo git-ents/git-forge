@@ -10,7 +10,30 @@ topcoat = { path = "../../vendor/topcoat/crates/topcoat", default-features = fal
 topcoat-asset = { path = "../../vendor/topcoat/crates/topcoat-asset", features = ["bundler"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 anyhow = "1"
-arborium = { version = "=2.18.1", features = ["all-languages"] }
+# Keep the highlighter useful for the languages most likely to appear in a
+# repository without compiling every Arborium grammar.
+arborium = { version = "=2.18.1", default-features = false, features = [
+    "lang-bash",
+    "lang-c",
+    "lang-cpp",
+    "lang-css",
+    "lang-diff",
+    "lang-dockerfile",
+    "lang-go",
+    "lang-html",
+    "lang-java",
+    "lang-javascript",
+    "lang-json",
+    "lang-markdown",
+    "lang-python",
+    "lang-rust",
+    "lang-sql",
+    "lang-toml",
+    "lang-tsx",
+    "lang-typescript",
+    "lang-xml",
+    "lang-yaml",
+] }
 comrak = { version = "=0.54.0", default-features = false }
 asciidoc-html5 = "=0.1.5"
 ammonia = "=4.1.4"

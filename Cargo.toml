@@ -17,6 +17,15 @@ exclude = [
 ]
 resolver = "3"
 
+# Debug info from dependencies dominates local debug binaries (especially the
+# embedded syntax grammars). Keep line information for this workspace while
+# leaving third-party code debuggable only through its public interfaces.
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+debug = 0
+
 [workspace.dependencies]
 gix-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-store = { git = "https://github.com/git-ents/git-store.git" }
