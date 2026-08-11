@@ -12,6 +12,7 @@ use topcoat::{
 };
 
 use crate::{
+    confirm,
     pages::with_repo,
     render::{highlight_file, render_asciidoc, render_markdown},
     shell::{Tab, shell},
@@ -25,6 +26,7 @@ struct TreeQuery {
     path: Option<String>,
     view: Option<String>,
     comment: Option<String>,
+    blame: Option<String>,
 }
 
 #[page("/tree")]
@@ -34,6 +36,7 @@ async fn files(cx: &Cx) -> Result {
     let requested_path = query.path.clone();
     let view = supported_view(query.view.as_deref());
     let comment_target = CommentTarget::parse(query.comment.as_deref());
+    let blame = blame_on(query.blame.as_deref());
     let browse = with_repo(cx, move |repo| {
         tree::load(repo, requested_ref.as_deref(), requested_path.as_deref())
             .map_err(|error| gix_forge::Error::QueryRules(error.to_string()))
@@ -41,7 +44,16 @@ async fn files(cx: &Cx) -> Result {
     .await;
 
     let content = match browse {
-        Ok(browse) => browse_view(cx, &browse, view, comment_target, None).await?,
+        Ok(browse) => {
+            let refs_pane = refs_pane_view(cx, &browse, view).await?;
+            let main = browse_view(cx, &browse, view, comment_target, blame, None).await?;
+            (view! { cx =>
+                <div class="tree-layout">
+                    (refs_pane)
+                    <div class="tree-main">(main)</div>
+                </div>
+            })?
+        }
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
@@ -104,6 +116,51 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
         .await;
     }
 
+    // Every mutation routes through the shared confirm dialog before it
+    // touches the repository: `confirm_step` renders a screen showing the
+    // target pseudo-ref and the signing identity on the first submit, and
+    // only returns `None` (letting us fall through to the real write below)
+    // once the re-POST carries `confirmed=true`. See `src/confirm.rs`.
+    let target_ref = match target {
+        CommentTarget::File => "refs/meta/comments/file".to_owned(),
+        CommentTarget::Lines { start, end } if start == end => {
+            format!("refs/meta/comments/line-{start}")
+        }
+        CommentTarget::Lines { start, end } => format!("refs/meta/comments/line-{start}-{end}"),
+    };
+    let cancel_href = tree_href(
+        &percent_encode(reference.as_bytes()),
+        &encode_query_path(&path),
+        Some(&view),
+    );
+    let summary = (view! { cx =>
+        match target {
+            CommentTarget::File => {
+                "Post a new comment on " <code>(path.as_str())</code>
+            },
+            CommentTarget::Lines { start, end } if start == end => {
+                "Post a new comment on line " (start) " of " <code>(path.as_str())</code>
+            },
+            CommentTarget::Lines { start, end } => {
+                "Post a new comment on lines " (start) "\u{2013}" (end) " of " <code>(path.as_str())</code>
+            },
+        }
+    })?;
+    if let Some(confirm) = confirm::confirm_step(
+        cx,
+        &input,
+        "/tree/comments",
+        &target_ref,
+        &cancel_href,
+        summary,
+    )
+    .await?
+    {
+        return view! { cx =>
+            shell(active: Some(Tab::Files), title: "Confirm comment", keyword: None, child: confirm)
+        };
+    }
+
     let anchor_path = path.clone();
     let anchor_reference = reference.clone();
     let result = with_repo(cx, move |repo| {
@@ -149,17 +206,56 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
     }
 }
 
+/// The files route's 17rem refs pane: every local branch, sorted by
+/// most-recently-active, each with its real ahead-count and age (see
+/// `tree::list_refs`). No author-identity grouping or CI status -- the
+/// forge has neither, and fabricating either would misrepresent the data.
+async fn refs_pane_view(cx: &Cx, browse: &Browse, view: Option<&str>) -> Result {
+    let current_selector = browse.reference.selector.clone();
+    let refs = with_repo(cx, |repo| {
+        tree::list_refs(repo).map_err(|error| gix_forge::Error::QueryRules(error.to_string()))
+    })
+    .await
+    .unwrap_or_default();
+    view! { cx =>
+        <nav class="refs-pane" aria-label="Branches">
+            <h3 class="refs-pane-heading">"Branches"</h3>
+            if refs.is_empty() {
+                <p class="empty">"No branches found."</p>
+            } else {
+                <ul class="refs-list">
+                    for reference in &refs {
+                        let ref_class = if reference.selector == current_selector { "ref-link active" } else { "ref-link" };
+                        <li>
+                            <a class=(ref_class) href=(tree_href(&reference.selector, "", view))>
+                                <span class="ref-name">(reference.display_name.as_str())</span>
+                                <span class="ref-meta">
+                                    if reference.ahead > 0 {
+                                        <span class="ref-ahead">(format!("+{}", reference.ahead))</span>
+                                    }
+                                    <span class="ref-age">(format_age(reference.last_commit_seconds))</span>
+                                </span>
+                            </a>
+                        </li>
+                    }
+                </ul>
+            }
+        </nav>
+    }
+}
+
 async fn browse_view(
     cx: &Cx,
     browse: &Browse,
     view: Option<&str>,
     comment_target: Option<CommentTarget>,
+    blame: bool,
     comment_error: Option<&str>,
 ) -> Result {
     match &browse.view {
         BrowseView::Directory { entries, .. } => directory_view(cx, browse, entries, view).await,
         BrowseView::File(file) => {
-            file_view(cx, browse, file, view, comment_target, comment_error).await
+            file_view(cx, browse, file, view, comment_target, blame, comment_error).await
         }
     }
 }
@@ -232,6 +328,7 @@ async fn file_view(
     file: &File,
     view: Option<&str>,
     comment_target: Option<CommentTarget>,
+    blame: bool,
     comment_error: Option<&str>,
 ) -> Result {
     let current_path = browse.path.as_str();
@@ -243,6 +340,10 @@ async fn file_view(
     let comment_path = current_path.to_owned();
     let commit_id = browse.reference.commit_id;
     let file_subject = format!("file:{}", file_subject_id(current_path));
+    // Fetch every comment anchored to this path at *any* commit, not only
+    // the one currently being viewed: computing a real bound/rebound/
+    // orphaned confidence (below) requires seeing comments whose anchor was
+    // captured elsewhere and may have moved or broken since.
     let comments = with_repo(cx, move |repo| {
         Ok(Comment::list_all(repo)?
             .into_iter()
@@ -250,9 +351,7 @@ async fn file_view(
                 comment.subject.as_deref() == Some(file_subject.as_str())
                     || matches!(
                         comment.binding.as_ref(),
-                        Some(binding @ Binding::Position(anchor))
-                            if anchor.identity.path == comment_path
-                                && binding_genesis(binding) == Some(commit_id)
+                        Some(Binding::Position(anchor)) if anchor.identity.path == comment_path
                     )
             })
             .collect::<Vec<_>>())
@@ -260,13 +359,18 @@ async fn file_view(
     .await
     .unwrap_or_default();
     let can_comment = crate::auth::can_create::<Comment>(cx).await;
+    let source_bytes = file.text.as_bytes();
     let anchored_comments = comments
         .iter()
         .filter_map(|comment| {
-            anchored_line_range(comment, current_path, file.text.as_bytes()).map(|range| {
+            anchored_line_range(comment, current_path, source_bytes).map(|range| {
+                let confidence =
+                    comment_confidence(comment, commit_id, current_path, source_bytes)
+                        .unwrap_or(Confidence::Orphaned);
                 AnchoredComment {
                     comment: comment.clone(),
                     range,
+                    confidence,
                 }
             })
         })
@@ -286,15 +390,65 @@ async fn file_view(
     } else {
         None
     };
+    let line_count = if file.text.is_empty() {
+        1
+    } else {
+        file.text.lines().count()
+    };
+    let language_label = arborium::detect_language(current_path)
+        .map(capitalize)
+        .unwrap_or_else(|| "Plain text".to_owned());
+    let last_commit = with_repo(cx, move |repo| {
+        tree::commit_summary(repo, commit_id)
+            .map_err(|error| gix_forge::Error::QueryRules(error.to_string()))
+    })
+    .await
+    .ok();
+    let file_name = current_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(current_path)
+        .to_owned();
+    let blame_href = blame_toggle_href(&browse.reference.selector, &browse.route_path, view, blame);
+    let blob_header = (view! { cx =>
+        <div class="blob-header">
+            <span class="blob-name">(file_name.as_str())</span>
+            <span class="blob-meta">
+                (language_label.as_str()) " · " (line_count) " lines · " (file.size) " B"
+            </span>
+            if let Some(commit) = &last_commit {
+                <span class="blob-meta">
+                    "last: " <code class="blob-oid">(commit.short_oid.as_str())</code>
+                    " \u{201c}" (commit.subject.as_str()) "\u{201d} \u{00b7} "
+                    (commit.author.as_str()) " \u{00b7} " (format_age(commit.seconds))
+                </span>
+            }
+            <span class="blob-meta thread-count">(comments.len()) " threads"</span>
+            <div class="blob-actions">
+                if source {
+                    <a
+                        class=(if blame { "blame-toggle active" } else { "blame-toggle" })
+                        href=(blame_href)
+                    >
+                        if blame { "blame: on" } else { "blame" }
+                    </a>
+                }
+                <a class="stub-action" href="#" aria-disabled="true" title="Raw blob serving has no route yet">"raw"</a>
+                <a class="stub-action" href="#" aria-disabled="true" title="Per-file history has no route yet">"history"</a>
+            </div>
+        </div>
+    })?;
     let body: View = if source {
         source_view(
             cx,
             browse,
             file,
+            line_count,
             &anchored_comments,
             comment_target,
             comment_error,
             can_comment,
+            blame,
         )
         .await?
     } else if is_previewable(current_path) {
@@ -331,6 +485,40 @@ async fn file_view(
         })?
     };
 
+    // File-level thread cards: whole-file comments (or unanchored subject
+    // comments) always show here, and so do orphaned line-anchored comments
+    // -- they no longer resolve to any line, so the file panel is the only
+    // place left to surface them (previously they were silently dropped).
+    let mut file_threads = Vec::new();
+    for comment in comments.iter() {
+        let confidence = comment_confidence(comment, commit_id, current_path, source_bytes);
+        let is_whole_file = comment.binding.is_none()
+            || is_file_anchor(comment, current_path, source_bytes);
+        let is_orphaned = confidence == Some(Confidence::Orphaned);
+        if is_whole_file || is_orphaned {
+            file_threads.push((view! { cx =>
+                <article
+                    class=(match confidence {
+                        Some(c) => format!("comment file-comment {}", c.css_class()),
+                        None => "comment file-comment".to_owned(),
+                    })
+                    id=(format!("comment-{}", comment.id))
+                >
+                    <div class="comment-heading">
+                        <strong>(comment.author.as_str())</strong>
+                        if let Some(confidence) = confidence {
+                            <span class=(format!("confidence-label {}", confidence.css_class()))>
+                                (confidence.label())
+                            </span>
+                        }
+                        <a class="muted" href=(format!("/comments/{}", comment.id))>"Permalink"</a>
+                    </div>
+                    <p>(comment.body.as_str())</p>
+                </article>
+            })?);
+        }
+    }
+
     view! { cx =>
         <section class="panel tree-panel">
             <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -356,6 +544,7 @@ async fn file_view(
                     "Source"
                 </a>
             </div>
+            (blob_header)
             <section class="file-comments" aria-label="File comments">
                 <div class="panel-heading">
                     <div>
@@ -376,39 +565,32 @@ async fn file_view(
                 } else if !can_comment {
                     <p class="form-context">"Sign in as a forge member to comment on this file."</p>
                 }
-                for comment in comments.iter() {
-                    if comment.binding.is_none()
-                        || is_file_anchor(comment, current_path, file.text.as_bytes()) {
-                        <article class="comment file-comment" id=(format!("comment-{}", comment.id))>
-                            <div class="comment-heading">
-                                <strong>(comment.author.as_str())</strong>
-                                <a class="muted" href=(format!("/comments/{}", comment.id))>"Permalink"</a>
-                            </div>
-                            <p>(comment.body.as_str())</p>
-                        </article>
-                    }
-                }
+                for thread in file_threads { (thread) }
             </section>
             (body)
         </section>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn source_view(
     cx: &Cx,
     browse: &Browse,
     file: &File,
+    line_count: usize,
     anchored_comments: &[AnchoredComment],
     comment_target: Option<CommentTarget>,
     comment_error: Option<&str>,
     can_comment: bool,
+    blame: bool,
 ) -> Result<View> {
-    let lines = if file.text.is_empty() {
-        vec![""]
-    } else {
-        file.text.split_inclusive('\n').collect::<Vec<_>>()
-    };
-    let mut rendered_lines = Vec::with_capacity(lines.len());
+    // The syntax-highlighted HTML is generated once for the whole file and
+    // then split at line boundaries -- see `highlighted_source_lines`'s docs
+    // for why that's safe to do textually rather than re-highlighting each
+    // line (which would also break cross-line constructs like block
+    // comments).
+    let highlighted_lines = highlighted_source_lines(&browse.path, &file.text, line_count);
+    let mut rendered_lines = Vec::with_capacity(line_count);
     let selected_range = comment_target.and_then(|target| match target {
         CommentTarget::Lines { start, end } => Some((start, end)),
         CommentTarget::File => None,
@@ -419,7 +601,7 @@ async fn source_view(
         || "Source code".to_owned(),
         |(start, end)| format!("Source code, comment range lines {start} through {end} selected"),
     );
-    for (index, line) in lines.iter().enumerate() {
+    for (index, highlighted) in highlighted_lines.into_iter().enumerate() {
         let line_number = index as u64 + 1;
         let composer = if comment_target.is_some_and(|target| target.is_start(line_number)) {
             Some(
@@ -429,7 +611,7 @@ async fn source_view(
                     comment_target.unwrap_or(CommentTarget::File),
                     "source",
                     comment_error,
-                    Some(lines.len() as u64),
+                    Some(line_count as u64),
                 )
                 .await?,
             )
@@ -444,10 +626,38 @@ async fn source_view(
             }
             _ => format!("Comment on line {line_number}"),
         };
+        let mut line_class = String::from("source-line");
+        if comment_target.is_some_and(|target| target.contains(line_number)) {
+            line_class.push_str(" selected");
+        }
+        if blame {
+            line_class.push_str(" with-blame");
+        }
+        let thread_confidence = anchored_comments
+            .iter()
+            .find(|anchored| anchored.range.start == line_number)
+            .map(|anchored| anchored.confidence);
+        let dot_class = match thread_confidence {
+            Some(confidence) => format!("thread-dot {}", confidence.css_class()),
+            None => "thread-dot".to_owned(),
+        };
         rendered_lines.push((view! { cx =>
-            <li class=(if comment_target.is_some_and(|target| target.contains(line_number)) { "source-line selected" } else { "source-line" }) id=(format!("L{line_number}")) data-line=(line_number) data-selected-start=(selected_start.as_str()) data-selected-end=(selected_end.as_str())>
-                <a class="line-number" href=(format!("#L{line_number}")) aria-label=(format!("Line {line_number}"))>(line_number)</a>
-                <code class="line-content">(line)</code>
+            <li class=(line_class.as_str()) id=(format!("L{line_number}")) data-line=(line_number) data-selected-start=(selected_start.as_str()) data-selected-end=(selected_end.as_str())>
+                <a class="line-number" href=(format!("#L{line_number}")) aria-label=(format!("Line {line_number}"))>
+                    <span class=(dot_class.as_str()) aria-hidden="true"></span>
+                    (line_number)
+                </a>
+                if blame {
+                    // No real per-line blame is available: `gix` 0.85 (this
+                    // repo's pinned version) has no `blame` feature/crate in
+                    // its dependency tree, so there is no cheap way to
+                    // compute it. Rather than fabricate an author per line,
+                    // the column renders structurally with a placeholder --
+                    // see the "Blame column" section of this crate's
+                    // implementation report.
+                    <span class="line-blame">"—"</span>
+                }
+                <code class="line-content">(Unescaped::new_unchecked(highlighted))</code>
                 if let Some(form) = composer {
                     (form)
                 }
@@ -463,9 +673,12 @@ async fn source_view(
                 }
                 for anchored in anchored_comments.iter() {
                     if anchored.range.start == line_number {
-                        <article class="source-comment" id=(format!("comment-{}", anchored.comment.id)) data-comment-start=(anchored.range.start) data-comment-end=(anchored.range.end)>
+                        <article class=(format!("source-comment {}", anchored.confidence.css_class())) id=(format!("comment-{}", anchored.comment.id)) data-comment-start=(anchored.range.start) data-comment-end=(anchored.range.end)>
                             <div class="comment-heading">
                                 <strong>(anchored.comment.author.as_str())</strong>
+                                <span class=(format!("confidence-label {}", anchored.confidence.css_class()))>
+                                    (anchored.confidence.label())
+                                </span>
                                 <a class="muted" href=(format!("/comments/{}", anchored.comment.id))>"Permalink"</a>
                             </div>
                             <p class="comment-range">"Lines " (anchored.range.start) "–" (anchored.range.end)</p>
@@ -601,9 +814,68 @@ impl CommentTarget {
     }
 }
 
+/// A thread's anchor-confidence state, per HANDOFF.md packet B: encodes how
+/// much to trust that a comment still applies to where it visually sits.
+///
+/// Computed from data already in scope, not mocked:
+/// - `Bound`: the anchor's captured-at commit (`binding_genesis`) is exactly
+///   the commit currently being viewed.
+/// - `Rebound`: the captured-at commit differs, but the anchor still
+///   resolves to a line range (or the whole file) in the current text --
+///   moved, but still applies.
+/// - `Orphaned`: the anchor no longer resolves against current content at
+///   all.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Confidence {
+    Bound,
+    Rebound,
+    Orphaned,
+}
+
+impl Confidence {
+    fn css_class(self) -> &'static str {
+        match self {
+            Self::Bound => "confidence-bound",
+            Self::Rebound => "confidence-rebound",
+            Self::Orphaned => "confidence-orphaned",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bound => "bound here",
+            Self::Rebound => "rebound",
+            Self::Orphaned => "orphaned",
+        }
+    }
+}
+
+/// `None` when `comment` has no position anchor at all (a plain subject
+/// comment), in which case no confidence badge applies.
+fn comment_confidence(
+    comment: &Comment,
+    current_commit: gix::ObjectId,
+    path: &str,
+    source: &[u8],
+) -> Option<Confidence> {
+    let binding = comment.binding.as_ref()?;
+    if !matches!(binding, Binding::Position(_)) {
+        return None;
+    }
+    if binding_genesis(binding) == Some(current_commit) {
+        return Some(Confidence::Bound);
+    }
+    if is_file_anchor(comment, path, source) || anchored_line_range(comment, path, source).is_some() {
+        Some(Confidence::Rebound)
+    } else {
+        Some(Confidence::Orphaned)
+    }
+}
+
 struct AnchoredComment {
     comment: Comment,
     range: LineRange,
+    confidence: Confidence,
 }
 
 fn file_subject_id(path: &str) -> String {
@@ -735,6 +1007,10 @@ fn supported_view(view: Option<&str>) -> Option<&'static str> {
     }
 }
 
+fn blame_on(value: Option<&str>) -> bool {
+    matches!(value, Some(value) if value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
 fn tree_href(reference: &str, route_path: &str, view: Option<&str>) -> String {
     let mut href = format!(
         "/tree?ref={reference}&path={}",
@@ -743,6 +1019,18 @@ fn tree_href(reference: &str, route_path: &str, view: Option<&str>) -> String {
     if let Some(view) = view {
         href.push_str("&view=");
         href.push_str(view);
+    }
+    href
+}
+
+/// A link that adds (or removes) the `blame=1` query parameter while
+/// preserving the ref, path, and view -- see the "Blame column" section of
+/// this crate's implementation report for what the toggle does and does not
+/// power.
+fn blame_toggle_href(reference: &str, route_path: &str, view: Option<&str>, blame: bool) -> String {
+    let mut href = tree_href(reference, route_path, view);
+    if !blame {
+        href.push_str("&blame=1");
     }
     href
 }
@@ -800,4 +1088,200 @@ fn percent_encode(bytes: &[u8]) -> String {
         }
     }
     encoded
+}
+
+fn capitalize(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Format a Unix timestamp as a short, human "age" string (`"3d ago"`,
+/// `"40m ago"`, ...), used for both the refs pane and the blob header's last
+/// commit line.
+fn format_age(seconds: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(seconds);
+    let delta = (now - seconds).max(0);
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const WEEK: i64 = 7 * DAY;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+    if delta < MINUTE {
+        "just now".to_owned()
+    } else if delta < HOUR {
+        format!("{}m ago", delta / MINUTE)
+    } else if delta < DAY {
+        format!("{}h ago", delta / HOUR)
+    } else if delta < WEEK {
+        format!("{}d ago", delta / DAY)
+    } else if delta < MONTH {
+        format!("{}w ago", delta / WEEK)
+    } else if delta < YEAR {
+        format!("{}mo ago", delta / MONTH)
+    } else {
+        format!("{}y ago", delta / YEAR)
+    }
+}
+
+/// Split `highlight_file`'s whole-document HTML into one HTML fragment per
+/// source line, so each line can live in its own `<li>` for the sticky
+/// gutter.
+///
+/// `arborium`'s `ClassNamesWithPrefix` renderer never nests `<span>` tags --
+/// at most one span wraps any given run of text -- so a run that crosses a
+/// line break can simply be closed at the break and reopened on the next
+/// line; this is the same technique terminal/editor line-splitters use, and
+/// it keeps every line's fragment independently valid HTML.
+///
+/// `expected_lines` is the caller's own line count (from splitting the raw
+/// source text). `arborium` trims trailing newlines from the source before
+/// highlighting, which can make its output end one or more blank lines
+/// short of the caller's count, so the result is padded with empty lines to
+/// match.
+fn highlighted_source_lines(path: &str, source: &str, expected_lines: usize) -> Vec<String> {
+    if source.is_empty() {
+        return vec![String::new(); expected_lines.max(1)];
+    }
+    // `highlight_file` falls back to `ammonia::clean_text` when there's no
+    // detected (or supported) grammar for `path`, and unlike arborium's own
+    // escaper, `clean_text` encodes `\n` as the `&#10;` entity rather than
+    // leaving it literal (it's built for arbitrary untrusted attribute
+    // text, not specifically for code). It's still correct HTML either
+    // way, but this scanner splits lines by looking for a literal `\n`, so
+    // decode that one entity back before scanning.
+    let html = highlight_file(path, source).replace("&#10;", "\n");
+    let mut lines = Vec::with_capacity(expected_lines);
+    let mut current = String::new();
+    let mut open_class: Option<String> = None;
+    let mut rest = html.as_str();
+    const OPEN_PREFIX: &str = "<span class=\"";
+    const CLOSE_TAG: &str = "</span>";
+    loop {
+        let next_open = rest.find(OPEN_PREFIX);
+        let next_close = rest.find(CLOSE_TAG);
+        let boundary = match (next_open, next_close) {
+            (Some(open), Some(close)) => Some((open.min(close), open <= close)),
+            (Some(open), None) => Some((open, true)),
+            (None, Some(close)) => Some((close, false)),
+            (None, None) => None,
+        };
+        let Some((index, is_open)) = boundary else {
+            push_highlighted_text(&mut lines, &mut current, open_class.as_deref(), rest);
+            break;
+        };
+        let (text, remainder) = rest.split_at(index);
+        push_highlighted_text(&mut lines, &mut current, open_class.as_deref(), text);
+        if is_open {
+            let after = &remainder[OPEN_PREFIX.len()..];
+            let Some(quote_end) = after.find('"') else {
+                push_highlighted_text(&mut lines, &mut current, open_class.as_deref(), remainder);
+                break;
+            };
+            if open_class.is_some() {
+                current.push_str(CLOSE_TAG);
+            }
+            let class_name = &after[..quote_end];
+            current.push_str(OPEN_PREFIX);
+            current.push_str(class_name);
+            current.push_str("\">");
+            open_class = Some(class_name.to_owned());
+            rest = &after[quote_end + 2..];
+        } else {
+            if open_class.take().is_some() {
+                current.push_str(CLOSE_TAG);
+            }
+            rest = &remainder[CLOSE_TAG.len()..];
+        }
+    }
+    lines.push(current);
+    while lines.len() < expected_lines {
+        lines.push(String::new());
+    }
+    lines.truncate(expected_lines);
+    lines
+}
+
+/// Append `text` to `current`, splitting it into `lines` at every `\n` and
+/// carrying `open_class` (if any) across the break by closing it before the
+/// break and reopening it after.
+fn push_highlighted_text(
+    lines: &mut Vec<String>,
+    current: &mut String,
+    open_class: Option<&str>,
+    text: &str,
+) {
+    let mut parts = text.split('\n');
+    if let Some(first) = parts.next() {
+        current.push_str(first);
+    }
+    for part in parts {
+        if open_class.is_some() {
+            current.push_str("</span>");
+        }
+        lines.push(std::mem::take(current));
+        if let Some(class_name) = open_class {
+            current.push_str("<span class=\"");
+            current.push_str(class_name);
+            current.push_str("\">");
+        }
+        current.push_str(part);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highlighted_source_lines;
+
+    #[test]
+    fn splits_highlighted_html_by_line_without_leaking_open_tags() {
+        let source = "fn a() {}\nfn b() {}\n";
+        let lines = highlighted_source_lines("example.rs", source, 2);
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            assert_eq!(line.matches("<span").count(), line.matches("</span>").count());
+        }
+        assert!(lines[0].contains('a'));
+        assert!(lines[1].contains('b'));
+    }
+
+    #[test]
+    fn carries_a_multi_line_span_across_the_break() {
+        let source = "/* one\ntwo */\nfn c() {}\n";
+        let lines = highlighted_source_lines("example.rs", source, 3);
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            assert_eq!(line.matches("<span").count(), line.matches("</span>").count());
+        }
+        assert!(lines[0].contains("one"));
+        assert!(lines[1].contains("two"));
+    }
+
+    #[test]
+    fn pads_trailing_blank_lines_arborium_trims() {
+        let source = "fn a() {}\n\n\n";
+        let lines = highlighted_source_lines("example.rs", source, 3);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].is_empty() || lines[1].trim().is_empty());
+        assert!(lines[2].is_empty() || lines[2].trim().is_empty());
+    }
+
+    #[test]
+    fn handles_plain_text_with_no_detected_language() {
+        let source = "hello\nworld\n";
+        let lines = highlighted_source_lines("notes.txt", source, 2);
+        assert_eq!(lines, vec!["hello".to_owned(), "world".to_owned()]);
+    }
+
+    #[test]
+    fn handles_empty_file() {
+        let lines = highlighted_source_lines("empty.rs", "", 1);
+        assert_eq!(lines, vec![String::new()]);
+    }
 }
