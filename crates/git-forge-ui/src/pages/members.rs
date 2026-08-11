@@ -143,21 +143,21 @@ async fn members(cx: &Cx) -> Result {
         }
     };
 
-    view! { shell(active: Tab::Members, title: "Members", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Config), title: "Members", keyword: None, child: content) }
 }
 
 #[page("/members/new")]
 async fn member_new(cx: &Cx) -> Result {
     if !can_manage_members(cx).await {
         let content = (view! { <div class="empty-panel"><h2>"Maintainer access required"</h2><p class="muted">"Member management is intentionally limited to maintainers; the directory remains readable."</p><a class="button-link secondary" href="/members">"Back to members"</a></div> })?;
-        return view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Config), title: "Add member", keyword: None, child: content) };
     }
     let form = MemberForm {
         signing_key: String::new(),
         role: "member".to_owned(),
     };
     let content = member_form(cx, "/members", &form, None).await?;
-    view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Config), title: "Add member", keyword: None, child: content) }
 }
 
 #[page(POST "/members")]
@@ -172,7 +172,7 @@ async fn member_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             Some("Signing key and role are required."),
         )
         .await?;
-        return view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Config), title: "Add member", keyword: None, child: content) };
     }
     let member = Member {
         id: String::new(),
@@ -186,14 +186,14 @@ async fn member_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     match result {
         Ok(_id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"MEMBER ADDED"</p><h2>"Trusted identity added"</h2><p class="muted">"This member is now available in the repository forge."</p><a class="button-link" href="/members">"View members"</a></section> })?;
-            view! { shell(active: Tab::Members, title: "Member added", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Config), title: "Member added", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = member_form(cx, "/members", &form, Some(&error)).await?;
-            view! { shell(active: Tab::Members, title: "Add member", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Config), title: "Add member", keyword: None, child: content) }
         }
     }
 }
@@ -223,7 +223,7 @@ async fn member_edit_page(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Could not load member"</strong><p>(error)</p></div> })?
         }
     };
-    view! { shell(active: Tab::Members, title: "Edit member", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Config), title: "Edit member", keyword: None, child: content) }
 }
 
 #[page(POST "/members/{member_id}/edit")]
@@ -239,7 +239,7 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
             Some("Signing key and role are required."),
         )
         .await?;
-        return view! { shell(active: Tab::Members, title: "Edit member", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Config), title: "Edit member", keyword: None, child: content) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
@@ -256,14 +256,14 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
     match result {
         Ok(_) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"SAVED"</p><h2>"Member updated"</h2><a class="button-link" href="/members">"View members"</a></section> })?;
-            view! { shell(active: Tab::Members, title: "Member updated", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Config), title: "Member updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Member could not be saved"</strong><p>(error)</p><a href=(format!("/members/{id}/edit"))>"Return to editor"</a></div> })?;
-            view! { shell(active: Tab::Members, title: "Edit member", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Config), title: "Edit member", keyword: None, child: content) }
         }
     }
 }
@@ -287,5 +287,5 @@ async fn member_delete(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Member could not be removed"</strong><p>(error)</p><a href="/members">"Return to members"</a></div> })?
         }
     };
-    view! { shell(active: Tab::Members, title: "Remove member", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Config), title: "Remove member", keyword: None, child: content) }
 }

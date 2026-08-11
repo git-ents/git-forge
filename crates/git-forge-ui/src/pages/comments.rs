@@ -11,7 +11,7 @@ use topcoat::{
 use crate::{
     auth::{authorization, authorization_error, can_create, can_update},
     pages::with_repo,
-    shell::{Tab, shell},
+    shell::shell,
 };
 
 #[path_param(error = bad_request)]
@@ -77,7 +77,7 @@ async fn comment_form(cx: &Cx, form: &CommentForm, error: Option<&str>) -> Resul
                     <textarea id="comment-body" name="body" rows="8" placeholder="Share context, ask a question, or leave a status update." required="">(form.body.as_str())</textarea>
                 </fieldset>
                 <div class="form-actions">
-                    <a class="button-link secondary" href="/">"Cancel"</a>
+                    <a class="button-link secondary" href="/tree">"Cancel"</a>
                     <button type="submit">"Publish comment"</button>
                 </div>
             </form>
@@ -92,7 +92,7 @@ async fn comment_new(cx: &Cx) -> Result {
     } else {
         (view! { <div class="empty-panel"><h2>"Sign in to start a discussion"</h2><p class="muted">"Reads stay available without an account; publishing requires a forge member identity."</p></div> })?
     };
-    view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) }
+    view! { shell(active: None, title: "New comment", keyword: None, child: content) }
 }
 
 #[page(POST "/comments")]
@@ -106,13 +106,13 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
 
     if author.is_empty() || body.is_empty() {
         let content = comment_form(cx, &form, Some("Author and comment are required.")).await?;
-        return view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) };
+        return view! { shell(active: None, title: "New comment", keyword: None, child: content) };
     }
     if subject_kind.is_empty() != subject_id.is_empty()
         || (!subject_kind.is_empty() && !matches!(subject_kind, "issue" | "review"))
     {
         let content = comment_form(cx, &form, Some("Choose an issue or review and provide its ID, or leave both attachment fields empty.")).await?;
-        return view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) };
+        return view! { shell(active: None, title: "New comment", keyword: None, child: content) };
     }
 
     let author = author.to_owned();
@@ -165,14 +165,14 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
                     <a class="button-link" href=(href.as_str())>"View comment"</a>
                 </section>
             })?;
-            view! { shell(active: Tab::Dashboard, title: "Comment published", keyword: None, child: content) }
+            view! { shell(active: None, title: "Comment published", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = comment_form(cx, &form, Some(&error)).await?;
-            view! { shell(active: Tab::Dashboard, title: "New comment", keyword: None, child: content) }
+            view! { shell(active: None, title: "New comment", keyword: None, child: content) }
         }
     }
 }
@@ -213,13 +213,13 @@ async fn comment_detail(cx: &Cx) -> Result {
             })?
         }
         Ok(None) => {
-            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/">"Return home"</a></div> })?
+            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/tree">"Return home"</a></div> })?
         }
         Err(error) => {
             (view! { <div class="error-panel"><strong>"Could not load comment"</strong><p>(error)</p></div> })?
         }
     };
-    view! { shell(active: Tab::Dashboard, title: "Comment", keyword: None, child: content) }
+    view! { shell(active: None, title: "Comment", keyword: None, child: content) }
 }
 
 #[page("/comments/edit/{*comment_id}")]
@@ -256,7 +256,7 @@ async fn comment_edit_page(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Could not load comment"</strong><p>(error)</p></div> })?
         }
     };
-    view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) }
+    view! { shell(active: None, title: "Edit comment", keyword: None, child: content) }
 }
 
 #[page(POST "/comments/edit/{*comment_id}")]
@@ -272,7 +272,7 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
         let content = (view! {
             <div class="error-panel"><strong>"Comment could not be saved"</strong><p>"A comment cannot be empty."</p><a href=(format!("/comments/edit/{id}"))>"Return to editor"</a></div>
         })?;
-        return view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) };
+        return view! { shell(active: None, title: "Edit comment", keyword: None, child: content) };
     }
 
     let body = body.to_owned();
@@ -298,14 +298,14 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
                     <a class="button-link" href=(format!("/comments/{id}"))>"View comment"</a>
                 </section>
             })?;
-            view! { shell(active: Tab::Dashboard, title: "Comment updated", keyword: None, child: content) }
+            view! { shell(active: None, title: "Comment updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/comments/edit/{id}"))>"Return to editor"</a></div> })?;
-            view! { shell(active: Tab::Dashboard, title: "Edit comment", keyword: None, child: content) }
+            view! { shell(active: None, title: "Edit comment", keyword: None, child: content) }
         }
     }
 }
@@ -321,10 +321,10 @@ async fn comment_delete(cx: &Cx) -> Result {
     .await;
     let content = match result {
         Ok(true) => {
-            (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment deleted"</h2><a class="button-link" href="/">"Return home"</a></section> })?
+            (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment deleted"</h2><a class="button-link" href="/tree">"Return home"</a></section> })?
         }
         Ok(false) => {
-            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/">"Return home"</a></div> })?
+            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/tree">"Return home"</a></div> })?
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
@@ -333,7 +333,7 @@ async fn comment_delete(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Comment could not be deleted"</strong><p>(error)</p><a href=(format!("/comments/{id}"))>"Return to comment"</a></div> })?
         }
     };
-    view! { shell(active: Tab::Dashboard, title: "Delete comment", keyword: None, child: content) }
+    view! { shell(active: None, title: "Delete comment", keyword: None, child: content) }
 }
 
 fn subject_href(subject: &str) -> Option<String> {

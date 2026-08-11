@@ -162,14 +162,14 @@ async fn reviews(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Tab::Reviews, title: "Reviews", list: list, detail: detail) }
+    view! { split_shell(active: Some(Tab::Reviews), title: "Reviews", list: list, detail: detail) }
 }
 
 #[page("/reviews/new")]
 async fn review_new(cx: &Cx) -> Result {
     if !can_create::<Review>(cx).await {
         let content = (view! { <div class="empty-panel"><h2>"Sign in to request a review"</h2><p class="muted">"Reads stay available without an account; creating a review requires a forge member identity."</p><a class="button-link secondary" href="/reviews">"Back to reviews"</a></div> })?;
-        return view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Reviews), title: "New review", keyword: None, child: content) };
     }
     let form = ReviewForm {
         body: String::new(),
@@ -179,7 +179,7 @@ async fn review_new(cx: &Cx) -> Result {
         target: String::new(),
     };
     let content = review_form(cx, "/reviews", &form, None).await?;
-    view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Reviews), title: "New review", keyword: None, child: content) }
 }
 
 #[page(POST "/reviews")]
@@ -194,7 +194,7 @@ async fn review_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             Some("Enter a valid review target using one of the supported target formats."),
         )
         .await?;
-        return view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Reviews), title: "New review", keyword: None, child: content) };
     }
     if Status::parse(&form.status).is_none() {
         let content = review_form(
@@ -204,7 +204,7 @@ async fn review_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             Some("Choose either Open or Closed for the status."),
         )
         .await?;
-        return view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Reviews), title: "New review", keyword: None, child: content) };
     }
     let review = Review {
         id: String::new(),
@@ -222,14 +222,14 @@ async fn review_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"REVIEW CREATED"</p><h2>"Your review request is ready"</h2><p class="muted">"Reviewers can now find the target and leave feedback."</p><a class="button-link" href=(format!("/reviews/{id}"))>"View review"</a></section> })?;
-            view! { shell(active: Tab::Reviews, title: "Review created", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Review created", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = review_form(cx, "/reviews", &form, Some(&error)).await?;
-            view! { shell(active: Tab::Reviews, title: "New review", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "New review", keyword: None, child: content) }
         }
     }
 }
@@ -323,7 +323,7 @@ async fn review_detail(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Tab::Reviews, title: "Review", list: list, detail: detail) }
+    view! { split_shell(active: Some(Tab::Reviews), title: "Review", list: list, detail: detail) }
 }
 
 #[page("/reviews/{review_id}/edit")]
@@ -351,7 +351,7 @@ async fn review_edit_page(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Could not load review"</strong><p>(error)</p></div> })?
         }
     };
-    view! { shell(active: Tab::Reviews, title: "Edit review", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Reviews), title: "Edit review", keyword: None, child: content) }
 }
 
 #[page(POST "/reviews/{review_id}/edit")]
@@ -370,7 +370,7 @@ async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
             Some("Target and status must use supported values."),
         )
         .await?;
-        return view! { shell(active: Tab::Reviews, title: "Edit review", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Reviews), title: "Edit review", keyword: None, child: content) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
@@ -389,14 +389,14 @@ async fn review_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"SAVED"</p><h2>"Review updated"</h2><a class="button-link" href=(format!("/reviews/{id}"))>"View review"</a></section> })?;
-            view! { shell(active: Tab::Reviews, title: "Review updated", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Review updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Review could not be saved"</strong><p>(error)</p><a href=(format!("/reviews/{id}/edit"))>"Return to editor"</a></div> })?;
-            view! { shell(active: Tab::Reviews, title: "Edit review", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Edit review", keyword: None, child: content) }
         }
     }
 }
@@ -429,14 +429,14 @@ async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Review status updated"</h2><a class="button-link" href=(format!("/reviews/{id}"))>"Return to review"</a></section> })?;
-            view! { shell(active: Tab::Reviews, title: "Review updated", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Review updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Could not update review"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
-            view! { shell(active: Tab::Reviews, title: "Review action failed", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Review action failed", keyword: None, child: content) }
         }
     }
 }
@@ -459,7 +459,7 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
         .to_owned();
     if author.is_empty() || body.is_empty() {
         let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
-        return view! { shell(active: Tab::Reviews, title: "Comment failed", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Reviews), title: "Comment failed", keyword: None, child: content) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
@@ -472,14 +472,14 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     match result {
         Ok(_) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment added"</h2><a class="button-link" href=(format!("/reviews/{id}"))>"Return to review"</a></section> })?;
-            view! { shell(active: Tab::Reviews, title: "Comment added", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Comment added", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
-            view! { shell(active: Tab::Reviews, title: "Comment failed", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Reviews), title: "Comment failed", keyword: None, child: content) }
         }
     }
 }
@@ -507,5 +507,5 @@ async fn review_delete(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Review could not be deleted"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?
         }
     };
-    view! { shell(active: Tab::Reviews, title: "Delete review", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Reviews), title: "Delete review", keyword: None, child: content) }
 }

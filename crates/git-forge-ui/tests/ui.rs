@@ -87,13 +87,32 @@ fn ui_crawls_every_internal_route() {
     let address = server.wait_for_url();
     let mut crawler = Crawler::new(address);
     crawler.wait_until_ready();
-    crawler.enqueue("GET", "/", Vec::new());
+
+    // `/` no longer renders a page: it redirects to `/tree`. Check that
+    // directly rather than through the crawler, which only follows 2xx (or
+    // 401/403-on-POST) responses.
+    let root_response = crawler
+        .client
+        .request(&Request {
+            method: "GET".to_owned(),
+            target: "/".to_owned(),
+            body: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(root_response.status, 307);
+    assert_eq!(
+        root_response.headers.get("location").map(String::as_str),
+        Some("/tree")
+    );
+
     for target in [
         "/tree",
         "/issues",
         "/issues/ui-issue-1",
         "/reviews",
         "/reviews/ui-review-1",
+        "/releases",
+        "/workingcopy",
         "/members",
         "/query",
         "/search",
@@ -255,12 +274,13 @@ fn ui_crawls_every_internal_route() {
     );
 
     for target in [
-        "/",
         "/tree",
         "/issues",
         "/issues/ui-issue-1",
         "/reviews",
         "/reviews/ui-review-1",
+        "/releases",
+        "/workingcopy",
         "/members",
         "/query",
         "/search",
@@ -362,7 +382,7 @@ impl Crawler {
         let deadline = Instant::now() + Duration::from_secs(10);
         let request = Request {
             method: "GET".to_owned(),
-            target: "/".to_owned(),
+            target: "/tree".to_owned(),
             body: Vec::new(),
         };
         loop {
@@ -370,7 +390,7 @@ impl Crawler {
                 Ok(response) => {
                     assert!(
                         (200..300).contains(&response.status),
-                        "GET / returned HTTP {} while waiting for the UI",
+                        "GET /tree returned HTTP {} while waiting for the UI",
                         response.status
                     );
                     return;

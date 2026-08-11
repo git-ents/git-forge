@@ -9,7 +9,7 @@ use topcoat::{
 
 use crate::{
     pages::with_repo,
-    shell::{Tab, shell},
+    shell::shell,
 };
 
 struct QueryForm {
@@ -57,7 +57,7 @@ async fn query_page(cx: &Cx) -> Result {
         select: String::new(),
     };
     let content = query_form(cx, &form, None).await?;
-    view! { shell(active: Tab::Query, title: "Query", keyword: None, child: content) }
+    view! { shell(active: None, title: "Query", keyword: None, child: content) }
 }
 
 #[page(POST "/query")]
@@ -110,5 +110,5 @@ async fn query_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
             })?
         }
     };
-    view! { shell(active: Tab::Query, title: "Query", keyword: None, child: content) }
+    view! { shell(active: None, title: "Query", keyword: None, child: content) }
 }

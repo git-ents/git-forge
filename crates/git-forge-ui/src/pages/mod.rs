@@ -1,11 +1,13 @@
 mod comments;
-mod dashboard;
 mod files;
 mod issues;
 mod members;
 mod query;
+mod releases;
 mod reviews;
+mod root;
 mod search;
+mod workingcopy;
 
 use topcoat::context::{Cx, app_context};
 

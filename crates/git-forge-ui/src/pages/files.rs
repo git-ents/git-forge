@@ -45,7 +45,7 @@ async fn files(cx: &Cx) -> Result {
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
-    view! { shell(active: Tab::Files, title: "Files", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Files), title: "Files", keyword: None, child: content) }
 }
 
 #[page(POST "/tree/comments")]
@@ -138,7 +138,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
                     <a class="button-link" href=(href)>"Return to file"</a>
                 </section>
             })?;
-            view! { shell(active: Tab::Files, title: "Comment published", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Files), title: "Comment published", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = crate::auth::authorization_error(&error) {
@@ -551,7 +551,7 @@ async fn comment_failure(
             <a href=(href)>"Return to comment composer"</a>
         </div>
     })?;
-    view! { cx => shell(active: Tab::Files, title: "File comment", keyword: None, child: content) }
+    view! { cx => shell(active: Some(Tab::Files), title: "File comment", keyword: None, child: content) }
 }
 
 async fn error_panel(cx: &Cx, title: &str, error: &str) -> Result {

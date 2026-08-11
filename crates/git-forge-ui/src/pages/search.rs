@@ -9,7 +9,7 @@ use topcoat::{
 
 use crate::{
     pages::with_repo,
-    shell::{Tab, shell},
+    shell::shell,
 };
 
 #[derive(Default)]
@@ -20,7 +20,18 @@ struct SearchForm {
     requester: Option<String>,
 }
 
-async fn search_form(cx: &Cx, form: &SearchForm, hits: Option<&[(String, String)]>) -> Result {
+/// What a search submission produced: either the keyword/assignee/reviewer
+/// find used by plain searches, or -- when the keyword starts with `?` -- the
+/// rows of a bare predicate lookup, rendered the same way `/query` renders
+/// them (`row.join(" · ")`). The compact top-bar box has no column-selection
+/// UI, so a predicate name is all it accepts; `/query` remains the place for
+/// goals and column selection.
+enum SearchOutcome {
+    Entities(Vec<(String, String)>),
+    Predicate { predicate: String, rows: Vec<Vec<String>> },
+}
+
+async fn search_form(cx: &Cx, form: &SearchForm, outcome: Option<&SearchOutcome>) -> Result {
     view! { cx =>
         <section class="panel query-panel">
             <form class="stack-form" action="/search" method="post">
@@ -33,20 +44,38 @@ async fn search_form(cx: &Cx, form: &SearchForm, hits: Option<&[(String, String)
                 <input id="requester" name="requester" value=(form.requester.as_deref().unwrap_or_default())>
                 <button type="submit">"Search"</button>
             </form>
+            <p class="form-help">"Prefix the top-bar search box with " <code>"?"</code> " to run a Datalog predicate by name (for example " <code>"?issue"</code> "). For goals and column selection, use the " <a href="/query">"full query console"</a> "."</p>
         </section>
-        if let Some(hits) = hits {
-            <section class="panel query-results">
-                <div class="panel-heading"><h2>"Matches"</h2><span class="muted">(hits.len())</span></div>
-                if hits.is_empty() {
-                    <p class="empty">"No matches."</p>
-                } else {
-                    <ul class="entity-list">
-                        for (kind, id) in hits {
-                            <li><a class="entity-link" href=(format!("/{kind}s/{id}"))><strong>(kind.as_str())</strong><span class="muted">(id.as_str())</span></a></li>
-                        }
-                    </ul>
-                }
-            </section>
+        match outcome {
+            Some(SearchOutcome::Entities(hits)) => {
+                <section class="panel query-results">
+                    <div class="panel-heading"><h2>"Matches"</h2><span class="muted">(hits.len())</span></div>
+                    if hits.is_empty() {
+                        <p class="empty">"No matches."</p>
+                    } else {
+                        <ul class="entity-list">
+                            for (kind, id) in hits {
+                                <li><a class="entity-link" href=(format!("/{kind}s/{id}"))><strong>(kind.as_str())</strong><span class="muted">(id.as_str())</span></a></li>
+                            }
+                        </ul>
+                    }
+                </section>
+            },
+            Some(SearchOutcome::Predicate { predicate, rows }) => {
+                <section class="panel query-results">
+                    <div class="panel-heading"><h2>"?" (predicate.as_str())</h2><span class="muted">(rows.len())</span></div>
+                    if rows.is_empty() {
+                        <p class="empty">"No rows returned."</p>
+                    } else {
+                        <ol>
+                            for row in rows {
+                                <li><code>(row.join(" · "))</code></li>
+                            }
+                        </ol>
+                    }
+                </section>
+            },
+            None => "",
         }
     }
 }
@@ -55,7 +84,7 @@ async fn search_form(cx: &Cx, form: &SearchForm, hits: Option<&[(String, String)
 async fn search_page(cx: &Cx) -> Result {
     let form = SearchForm::default();
     let content = search_form(cx, &form, None).await?;
-    view! { shell(active: Tab::Query, title: "Search", keyword: form.keyword.as_deref(), child: content) }
+    view! { shell(active: None, title: "Search", keyword: form.keyword.as_deref(), child: content) }
 }
 
 #[page(POST "/search")]
@@ -66,6 +95,47 @@ async fn search_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         reviewer: input.get("reviewer").cloned(),
         requester: input.get("requester").cloned(),
     };
+
+    if let Some(predicate) = form
+        .keyword
+        .as_deref()
+        .map(str::trim)
+        .and_then(|keyword| keyword.strip_prefix('?'))
+    {
+        let predicate = predicate.trim().to_owned();
+        let content = if predicate.is_empty() {
+            let form_view = search_form(cx, &form, None).await?;
+            (view! { cx =>
+                (form_view)
+                <div class="error-panel"><strong>"Search failed"</strong><p>"Provide a predicate name after " <code>"?"</code> "."</p></div>
+            })?
+        } else {
+            let result = with_repo(cx, {
+                let predicate = predicate.clone();
+                move |repo| {
+                    Ok(gix_forge::query_predicate(repo, &predicate, &[])?
+                        .into_iter()
+                        .map(|row| row.into_iter().map(|value| value.to_string()).collect())
+                        .collect::<Vec<Vec<String>>>())
+                }
+            })
+            .await;
+            match result {
+                Ok(rows) => {
+                    search_form(cx, &form, Some(&SearchOutcome::Predicate { predicate, rows })).await?
+                }
+                Err(error) => {
+                    let form_view = search_form(cx, &form, None).await?;
+                    (view! { cx =>
+                        (form_view)
+                        <div class="error-panel"><strong>"Search failed"</strong><p>(error)</p></div>
+                    })?
+                }
+            }
+        };
+        return view! { shell(active: None, title: "Search", keyword: form.keyword.as_deref(), child: content) };
+    }
+
     let assignee = form
         .assignee
         .as_deref()
@@ -102,7 +172,7 @@ async fn search_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     .await;
 
     let content = match result {
-        Ok(hits) => search_form(cx, &form, Some(&hits)).await?,
+        Ok(hits) => search_form(cx, &form, Some(&SearchOutcome::Entities(hits))).await?,
         Err(error) => {
             let form_view = search_form(cx, &form, None).await?;
             (view! { cx =>
@@ -111,5 +181,5 @@ async fn search_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             })?
         }
     };
-    view! { shell(active: Tab::Query, title: "Search", keyword: form.keyword.as_deref(), child: content) }
+    view! { shell(active: None, title: "Search", keyword: form.keyword.as_deref(), child: content) }
 }

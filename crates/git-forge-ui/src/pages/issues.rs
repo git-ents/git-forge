@@ -166,14 +166,14 @@ async fn issues(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Tab::Issues, title: "Issues", list: list, detail: detail) }
+    view! { split_shell(active: Some(Tab::Issues), title: "Issues", list: list, detail: detail) }
 }
 
 #[page("/issues/new")]
 async fn issue_new(cx: &Cx) -> Result {
     if !can_create::<Issue>(cx).await {
         let content = (view! { <div class="empty-panel"><h2>"Sign in to open an issue"</h2><p class="muted">"Reads stay available without an account; creating an issue requires a forge member identity."</p><a class="button-link secondary" href="/issues">"Back to issues"</a></div> })?;
-        return view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Issues), title: "New issue", keyword: None, child: content) };
     }
     let form = IssueForm {
         title: String::new(),
@@ -184,7 +184,7 @@ async fn issue_new(cx: &Cx) -> Result {
         reporters: String::new(),
     };
     let content = issue_form(cx, "/issues", &form, None).await?;
-    view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Issues), title: "New issue", keyword: None, child: content) }
 }
 
 #[page(POST "/issues")]
@@ -194,7 +194,7 @@ async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
     let title = form.title.trim();
     if title.is_empty() {
         let content = issue_form(cx, "/issues", &form, Some("A title is required.")).await?;
-        return view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Issues), title: "New issue", keyword: None, child: content) };
     }
     if Status::parse(&form.status).is_none() {
         let content = issue_form(
@@ -204,7 +204,7 @@ async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
             Some("Choose either Open or Closed for the status."),
         )
         .await?;
-        return view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Issues), title: "New issue", keyword: None, child: content) };
     }
 
     let issue = Issue {
@@ -232,14 +232,14 @@ async fn issue_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
                     <a class="button-link" href=(format!("/issues/{id}"))>"View issue"</a>
                 </section>
             })?;
-            view! { shell(active: Tab::Issues, title: "Issue created", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Issue created", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = issue_form(cx, "/issues", &form, Some(&error)).await?;
-            view! { shell(active: Tab::Issues, title: "New issue", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "New issue", keyword: None, child: content) }
         }
     }
 }
@@ -351,7 +351,7 @@ async fn issue_detail(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Tab::Issues, title: "Issue", list: list, detail: detail) }
+    view! { split_shell(active: Some(Tab::Issues), title: "Issue", list: list, detail: detail) }
 }
 
 #[page("/issues/{issue_id}/edit")]
@@ -379,7 +379,7 @@ async fn issue_edit_page(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Could not load issue"</strong><p>(error)</p></div> })?
         }
     };
-    view! { shell(active: Tab::Issues, title: "Edit issue", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Issues), title: "Edit issue", keyword: None, child: content) }
 }
 
 #[page(POST "/issues/{issue_id}/edit")]
@@ -395,7 +395,7 @@ async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) 
             Some("A title is required and status must be Open or Closed."),
         )
         .await?;
-        return view! { shell(active: Tab::Issues, title: "Edit issue", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Issues), title: "Edit issue", keyword: None, child: content) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
@@ -415,14 +415,14 @@ async fn issue_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) 
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"SAVED"</p><h2>"Issue updated"</h2><a class="button-link" href=(format!("/issues/{id}"))>"View issue"</a></section> })?;
-            view! { shell(active: Tab::Issues, title: "Issue updated", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Issue updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Issue could not be saved"</strong><p>(error)</p><a href=(format!("/issues/{id}/edit"))>"Return to editor"</a></div> })?;
-            view! { shell(active: Tab::Issues, title: "Edit issue", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Edit issue", keyword: None, child: content) }
         }
     }
 }
@@ -455,14 +455,14 @@ async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
     match result {
         Ok(id) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Issue status updated"</h2><a class="button-link" href=(format!("/issues/{id}"))>"Return to issue"</a></section> })?;
-            view! { shell(active: Tab::Issues, title: "Issue updated", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Issue updated", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Could not update issue"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
-            view! { shell(active: Tab::Issues, title: "Issue action failed", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Issue action failed", keyword: None, child: content) }
         }
     }
 }
@@ -485,7 +485,7 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         .to_owned();
     if author.is_empty() || body.is_empty() {
         let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
-        return view! { shell(active: Tab::Issues, title: "Comment failed", keyword: None, child: content) };
+        return view! { shell(active: Some(Tab::Issues), title: "Comment failed", keyword: None, child: content) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
@@ -498,14 +498,14 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     match result {
         Ok(_) => {
             let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment added"</h2><a class="button-link" href=(format!("/issues/{id}"))>"Return to issue"</a></section> })?;
-            view! { shell(active: Tab::Issues, title: "Comment added", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Comment added", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
             let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
-            view! { shell(active: Tab::Issues, title: "Comment failed", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Issues), title: "Comment failed", keyword: None, child: content) }
         }
     }
 }
@@ -533,5 +533,5 @@ async fn issue_delete(cx: &Cx) -> Result {
             (view! { <div class="error-panel"><strong>"Issue could not be deleted"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?
         }
     };
-    view! { shell(active: Tab::Issues, title: "Delete issue", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Issues), title: "Delete issue", keyword: None, child: content) }
 }
