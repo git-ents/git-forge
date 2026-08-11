@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use gix_forge::{Authorization, EntityOps, Issue, Member, Principal, Review, ReviewTarget};
 use test_support::{commit_file, init_repo};
 
-const BIN: &str = env!("CARGO_BIN_EXE_git-forge");
+const BIN: &str = env!("CARGO_BIN_EXE_git-forge-ui");
 
 #[test]
 fn ui_crawls_every_internal_route() {
@@ -287,7 +287,7 @@ impl Server {
     fn spawn(repo_dir: &std::path::Path) -> Self {
         let mut child = Command::new(BIN)
             .current_dir(repo_dir)
-            .args(["ui", "--host", "127.0.0.1", "--port", "0"])
+            .args(["--host", "127.0.0.1", "--port", "0"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

@@ -1,7 +1,6 @@
 //! `git-forge`: A Git subcommand for store, anchor, and query.
 
 use std::io::IsTerminal;
-use std::sync::Arc;
 
 #[cfg(unix)]
 use serde_json::{Value, json};
@@ -378,40 +377,120 @@ fn run_ui(repo: &gix::Repository, args: UiArgs) -> Result<()> {
         return run_ui_detached(repo, args);
     }
 
-    let repo_path = repo.path().to_owned();
-    let member_id = resolve_ui_member_id(repo);
-    let host = args.host;
-    let open = args.open;
-    let port = args.port;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("failed to create the UI runtime")?;
+    let mut command = ui_command(repo, &args.host, args.port, args.open)?;
 
-    runtime.block_on(async move {
-        let repo = gix::ThreadSafeRepository::open(repo_path)
-            .context("failed to open the repository for the UI")?;
-        let router = git_forge_ui::build_router(Arc::new(repo), member_id).await;
-        let listener = tokio::net::TcpListener::bind((host.as_str(), port.unwrap_or(0)))
-            .await
-            .with_context(|| format!("failed to bind the UI to {host}:{:?}", port))?;
-        let port = listener
-            .local_addr()
-            .context("failed to determine the UI listener address")?
-            .port();
+    // Replace this process rather than wrap it: an intermediate parent would
+    // have to forward every terminal signal to the server itself.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
 
-        let url = ui_url(&host, port);
-        println!("{url}");
-        if open {
-            open_url(&url)?;
+        Err(command.exec()).context("failed to run the UI")
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command.status().context("failed to run the UI")?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
         }
-        topcoat::serve(listener, router)
-            .await
-            .context("the UI server failed")?;
         Ok(())
-    })
+    }
 }
 
+const UI_EXECUTABLE: &str = if cfg!(windows) {
+    "git-forge-ui.exe"
+} else {
+    "git-forge-ui"
+};
+
+/// A file that exists and carries an execute bit, which `is_file` alone does
+/// not tell us — a readable-but-not-executable candidate must not end the
+/// search, or it masks the real server further along the path.
+fn is_executable_file(path: &std::path::Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Locate the UI server, which ships beside this binary.
+fn ui_executable() -> Result<std::path::PathBuf> {
+    let executable =
+        std::env::current_exe().context("failed to locate the git-forge executable")?;
+    let sibling = executable.parent().map(|dir| dir.join(UI_EXECUTABLE));
+    if let Some(sibling) = sibling.clone().filter(|path| is_executable_file(path)) {
+        return Ok(sibling);
+    }
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(found) = std::env::split_paths(&path)
+        // An empty PATH entry — from a leading, trailing, or doubled colon —
+        // means the current directory to a shell. Honoring that here would
+        // run a `git-forge-ui` committed to whatever repository the user is
+        // sitting in, so only absolute directories are searched.
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(UI_EXECUTABLE))
+        .find(|candidate| is_executable_file(candidate))
+    {
+        return Ok(found);
+    }
+
+    let sibling = sibling.map_or_else(
+        || "the git-forge executable's directory".to_owned(),
+        |path| path.display().to_string(),
+    );
+    bail!(
+        "cannot find `{UI_EXECUTABLE}`: it is neither at {sibling} nor on PATH; \
+         install it alongside git-forge"
+    )
+}
+
+fn ui_command(
+    repo: &gix::Repository,
+    host: &str,
+    port: Option<u16>,
+    open: bool,
+) -> Result<std::process::Command> {
+    // `gix::discover(".")` yields a relative Git directory, which a detached
+    // server would resolve against whatever its working directory happens to
+    // be for the rest of its life.
+    let git_dir = std::path::absolute(repo.path()).with_context(|| {
+        format!(
+            "failed to resolve the Git directory {}",
+            repo.path().display()
+        )
+    })?;
+    let mut command = std::process::Command::new(ui_executable()?);
+    command
+        .arg("--git-dir")
+        .arg(git_dir)
+        .arg("--host")
+        .arg(host);
+    if let Some(port) = port {
+        command.arg("--port").arg(port.to_string());
+    }
+    if open {
+        command.arg("--open");
+    }
+    Ok(command)
+}
+
+// The detached parent prints and records the URL before the child has bound
+// anything, so it cannot ask the UI binary what its URL will be.
+#[cfg(unix)]
 fn ui_url(host: &str, port: u16) -> String {
     let host = if host.starts_with('[') && host.ends_with(']') {
         host.to_owned()
@@ -423,36 +502,10 @@ fn ui_url(host: &str, port: u16) -> String {
     format!("https://{host}:{port}")
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn open_url(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(target_os = "linux")]
-    let mut command = std::process::Command::new("xdg-open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    command.arg(url);
-    let status = command.status().context("failed to open the UI URL")?;
-    if !status.success() {
-        bail!("failed to open the UI URL: {url}");
-    }
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn open_url(_url: &str) -> Result<()> {
-    bail!("opening UI URLs is unsupported on this platform");
-}
-
 #[cfg(unix)]
 fn run_ui_detached(repo: &gix::Repository, args: UiArgs) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     let port = resolve_ui_port(&args.host, args.port)?;
     let log_path = repo.git_dir().join("git-forge-ui.log");
@@ -464,18 +517,7 @@ fn run_ui_detached(repo: &gix::Repository, args: UiArgs) -> Result<()> {
     let stderr = stdout
         .try_clone()
         .with_context(|| format!("failed to prepare UI log {}", log_path.display()))?;
-    let executable =
-        std::env::current_exe().context("failed to locate the git-forge executable")?;
-    let mut command = Command::new(executable);
-    command
-        .arg("ui")
-        .arg("--host")
-        .arg(&args.host)
-        .arg("--port")
-        .arg(port.to_string());
-    if args.open {
-        command.arg("--open");
-    }
+    let mut command = ui_command(repo, &args.host, Some(port), args.open)?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -982,16 +1024,6 @@ fn load_members(repo: &gix::Repository) -> Result<Vec<Member>> {
         .into_iter()
         .map(|id| Member::load_from_repo(repo, &id)?.with_context(|| format!("no member {id}")))
         .collect()
-}
-
-fn resolve_ui_member_id(repo: &gix::Repository) -> Option<String> {
-    let signing_key = effective_signing_key().ok().flatten()?;
-    let members = load_members(repo).ok()?;
-    let mut matches = members
-        .into_iter()
-        .filter(|member| member.signing_key == signing_key);
-    let member = matches.next()?;
-    matches.next().is_none().then_some(member.id)
 }
 
 fn effective_signing_key() -> Result<Option<String>> {

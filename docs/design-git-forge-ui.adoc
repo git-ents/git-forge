@@ -27,6 +27,8 @@ Made with the user before planning:
 == Architecture
 
 A new workspace crate, `crates/git-forge-ui`, holds all web-specific code, keeping `gix-forge` UI-agnostic and `git-forge`'s `main.rs` a thin CLI wrapper — the same separation already drawn between `gix-forge` and `git-forge`.
+The crate ships its own `git-forge-ui` executable, and the `git-forge` CLI launches it as a subprocess rather than linking it, so the web server, the syntax grammars, and the markup renderers stay out of the CLI binary.
+`git forge ui` therefore requires `git-forge-ui` to be installed next to `git-forge` (or on `PATH`).
 
 === The gix threading gotcha
 
@@ -92,12 +94,12 @@ struct UiArgs {
 }
 ----
 +
-`run_ui(repo, args)`: the foreground path builds a `tokio::runtime::Runtime`, opens `gix::ThreadSafeRepository::open(repo.path())`, builds the router, binds a `TcpListener` (resolving an ephemeral port up front when `--port` is absent), prints the URL, and calls `topcoat::serve(listener, router)`.
-The detach path resolves the port first (bind-and-release, then pass `--port <resolved>` explicitly to the child so parent and child agree), re-execs `std::env::current_exe()` with `--detach` stripped via `std::process::Command`, redirects stdio to a log file, and calls `pre_exec(|| { libc::setsid(); Ok(()) })` on Unix (`std::os::unix::process::CommandExt`) so the child survives terminal close — then writes `.git/git-forge-ui.pid` (JSON: pid, host, port, url) and prints the URL without blocking.
+`run_ui(repo, args)`: the foreground path locates the sibling `git-forge-ui` executable and, on Unix, `exec`s into it with `--repo`, `--host`, `--port`, and `--open`, so the server inherits the terminal's signals with no intermediate parent; elsewhere it spawns and propagates the child's exit status.
+The detach path resolves the port first (bind-and-release, then pass `--port <resolved>` explicitly to the child so parent and child agree), spawns the same executable via `std::process::Command`, redirects stdio to a log file, and calls `pre_exec(|| { libc::setsid(); Ok(()) })` on Unix (`std::os::unix::process::CommandExt`) so the child survives terminal close — then writes `.git/git-forge-ui.pid` (JSON: pid, host, port, url) and prints the URL without blocking.
 +
 `run_ui_stop(repo)` reads the pidfile, sends `SIGTERM` via `libc::kill`, removes the pidfile, and reports the result (or "not running").
 `run_ui_status(repo)` reads the pidfile, liveness-checks with `libc::kill(pid, 0)`, and prints the URL or "not running", cleaning up a stale pidfile.
-Add `git-forge-ui = { path = "../git-forge-ui" }` and `libc` to `crates/git-forge/Cargo.toml`.
+Add `libc` to `crates/git-forge/Cargo.toml`; the CLI deliberately does not depend on `git-forge-ui`.
 
 == Explicitly out of scope
 
