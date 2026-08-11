@@ -10,6 +10,7 @@ use topcoat::{
 
 use crate::{
     auth::{authorization, authorization_error, can_create, can_update},
+    confirm::confirm_step,
     pages::with_repo,
     shell::shell,
 };
@@ -113,6 +114,18 @@ async fn comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     {
         let content = comment_form(cx, &form, Some("Choose an issue or review and provide its ID, or leave both attachment fields empty.")).await?;
         return view! { shell(active: None, title: "New comment", keyword: None, child: content) };
+    }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        "/comments",
+        "refs/meta/comments/new",
+        "/tree",
+        (view! { cx => "Publish a comment as " <code>(author)</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: None, title: "Confirm comment", keyword: None, child: confirm) };
     }
 
     let author = author.to_owned();
@@ -274,6 +287,18 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
         })?;
         return view! { shell(active: None, title: "Edit comment", keyword: None, child: content) };
     }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/comments/edit/{id}"),
+        &format!("refs/meta/comments/{id}"),
+        &format!("/comments/{id}"),
+        (view! { cx => "Update comment " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: None, title: "Confirm comment update", keyword: None, child: confirm) };
+    }
 
     let body = body.to_owned();
     let lookup_id = id.clone();
@@ -311,9 +336,21 @@ async fn comment_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>
 }
 
 #[page(POST "/comments/delete/{*comment_id}")]
-async fn comment_delete(cx: &Cx) -> Result {
+async fn comment_delete(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
     let authorization = authorization(cx).await?;
     let id = path_param::<CommentId>(cx)?.clone();
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/comments/delete/{id}"),
+        &format!("refs/meta/comments/{id}"),
+        &format!("/comments/{id}"),
+        (view! { cx => "Delete comment " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: None, title: "Confirm comment deletion", keyword: None, child: confirm) };
+    }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
         Comment::delete_as(repo, &lookup_id, &authorization)

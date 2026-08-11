@@ -1,4 +1,5 @@
 pub mod auth;
+mod confirm;
 mod pages;
 pub mod render;
 mod shell;

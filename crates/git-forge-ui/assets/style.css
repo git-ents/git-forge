@@ -259,6 +259,17 @@ code { overflow-wrap: anywhere; font-size: .9em; }
 .rendered-file img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border); border-radius: 5px; }
 .rendered-file hr { margin: 1.75rem 0; border: 0; border-top: 1px solid var(--border); }
 
+/* ---------- Signed-action confirm step ---------- */
+
+.confirm-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1.5rem; background: rgba(6, 8, 4, .6); }
+.confirm-modal { width: min(30rem, 100%); padding: 1.5rem; border: 1px solid var(--border-hover); border-radius: 10px; background: var(--surface); box-shadow: 0 20px 60px #000000a0; }
+.confirm-modal h2 { margin-bottom: .6rem; }
+.confirm-summary { margin: 0 0 1.1rem; color: var(--text-prose); font-size: .88rem; }
+.confirm-details { display: grid; grid-template-columns: 6rem 1fr; gap: .5rem 1rem; margin: 0 0 1.35rem; padding: .9rem; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-sunken); }
+.confirm-details dt { color: var(--text-muted); font-size: .72rem; }
+.confirm-details dd { margin: 0; overflow-wrap: anywhere; font-size: .84rem; }
+.confirm-form { margin: 0; }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 700px) {

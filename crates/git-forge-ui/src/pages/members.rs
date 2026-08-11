@@ -10,6 +10,7 @@ use topcoat::{
 
 use crate::{
     auth::{authorization, authorization_error, can_manage_members},
+    confirm::confirm_step,
     pages::with_repo,
     shell::{Tab, shell},
 };
@@ -174,6 +175,18 @@ async fn member_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         .await?;
         return view! { shell(active: Some(Tab::Config), title: "Add member", keyword: None, child: content) };
     }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        "/members",
+        "refs/meta/members/new",
+        "/members",
+        (view! { cx => "Add " <code>(form.signing_key.trim())</code> " as a new " (form.role.trim()) " member" })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Config), title: "Confirm new member", keyword: None, child: confirm) };
+    }
     let member = Member {
         id: String::new(),
         signing_key: form.signing_key.trim().to_owned(),
@@ -241,6 +254,18 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
         .await?;
         return view! { shell(active: Some(Tab::Config), title: "Edit member", keyword: None, child: content) };
     }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/members/{id}/edit"),
+        &format!("refs/meta/members/{id}"),
+        "/members",
+        (view! { cx => "Update member " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Config), title: "Confirm member update", keyword: None, child: confirm) };
+    }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
         let mut member = Member::load_from_repo(repo, &lookup_id)?.ok_or_else(|| {
@@ -269,9 +294,21 @@ async fn member_edit_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>)
 }
 
 #[page(POST "/members/{member_id}/delete")]
-async fn member_delete(cx: &Cx) -> Result {
+async fn member_delete(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
     let authorization = authorization(cx).await?;
     let id = path_param::<MemberId>(cx)?.clone();
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/members/{id}/delete"),
+        &format!("refs/meta/members/{id}"),
+        "/members",
+        (view! { cx => "Remove member " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Config), title: "Confirm member removal", keyword: None, child: confirm) };
+    }
     let result = with_repo(cx, move |repo| Member::delete_as(repo, &id, &authorization)).await;
     let content = match result {
         Ok(true) => {
