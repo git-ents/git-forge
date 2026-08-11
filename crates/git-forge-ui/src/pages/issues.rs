@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gix_forge::{Comment, Commentable, EntityOps, Issue, Status};
+use gix_forge::{Comment, Commentable, EntityOps, Issue, Member, Status};
 use topcoat::{
     Result,
     context::Cx,
@@ -10,6 +10,7 @@ use topcoat::{
 
 use crate::{
     auth::{authorization, authorization_error, can_create, can_update},
+    confirm::confirm_step,
     pages::{csv_values, with_repo},
     render::render_asciidoc,
     shell::{Tab, shell, split_shell},
@@ -102,7 +103,12 @@ async fn issue_form(cx: &Cx, action: &str, form: &IssueForm, error: Option<&str>
     }
 }
 
-async fn issue_list(cx: &Cx, items: &[Issue]) -> Result {
+/// One master-list row's worth of real data: the issue plus its comment
+/// count (there is no cheaper aggregate for this than loading the thread,
+/// so callers pay for it once per issue when building the list).
+type IssueRow = (Issue, usize);
+
+async fn issue_list(cx: &Cx, items: &[IssueRow], selected: Option<&str>) -> Result {
     let can_create = can_create::<Issue>(cx).await;
     view! { cx =>
         <div class="list-heading">
@@ -122,14 +128,24 @@ async fn issue_list(cx: &Cx, items: &[Issue]) -> Result {
             </div>
         } else {
             <ul class="entity-list">
-                for issue in items {
+                for (issue, comment_count) in items {
+                    let dot_class = if issue.status == "open" { "status-dot ok" } else { "status-dot" };
+                    let row_class = if selected == Some(issue.id.as_str()) { "list-row selected" } else { "list-row" };
+                    let author = issue.reporters.first().map(String::as_str).unwrap_or("unassigned");
                     <li>
-                        <a class="entity-link" href=(format!("/issues/{}", issue.id))>
-                            <span>
-                                <strong>(issue.title.as_str())</strong>
-                                <small>(issue.id.as_str())</small>
-                            </span>
-                            <span class="status">(issue.status.as_str())</span>
+                        <a class=(row_class) href=(format!("/issues/{}", issue.id))>
+                            <div class="row-top">
+                                <span class=(dot_class)></span>
+                                <strong class="row-title">(issue.title.as_str())</strong>
+                            </div>
+                            <div class="row-meta">
+                                <span class="row-id">(issue.id.as_str())</span>
+                                <span>(author)</span>
+                                <span class="row-comments">(*comment_count) " comments"</span>
+                                for label in &issue.labels {
+                                    <span class="label-chip">(label.as_str())</span>
+                                }
+                            </div>
                         </a>
                     </li>
                 }
@@ -138,20 +154,42 @@ async fn issue_list(cx: &Cx, items: &[Issue]) -> Result {
     }
 }
 
+/// Attach comment counts the same way the detail view needs them, for the
+/// list pane both routes share.
+fn load_issue_rows(repo: &gix::Repository) -> std::result::Result<Vec<IssueRow>, gix_forge::Error> {
+    let ids = Issue::list(repo)?;
+    ids.into_iter()
+        .map(|id| Issue::load_from_repo(repo, &id))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(|loaded| {
+            loaded
+                .into_iter()
+                .flatten()
+                .map(|issue| {
+                    let comment_count = issue.get_comments(repo).map(|c| c.len()).unwrap_or(0);
+                    (issue, comment_count)
+                })
+                .collect()
+        })
+}
+
+/// The signed-in member's registered signing key for `author`, when they are
+/// still a known member -- the one piece of "signed" identity a comment
+/// genuinely carries, since [`Comment`] itself stores no per-comment
+/// signature or timestamp.
+fn signing_key_of(repo: &gix::Repository, author: &str) -> Option<String> {
+    let member = Member::load_from_repo(repo, author).ok().flatten()?;
+    let key = member.signing_key.trim();
+    (!key.is_empty()).then(|| key.to_owned())
+}
+
 #[page("/issues")]
 async fn issues(cx: &Cx) -> Result {
-    let data = with_repo(cx, |repo| {
-        let ids = Issue::list(repo)?;
-        ids.into_iter()
-            .map(|id| Issue::load_from_repo(repo, &id))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|issues| issues.into_iter().flatten().collect::<Vec<Issue>>())
-    })
-    .await;
+    let data = with_repo(cx, load_issue_rows).await;
 
     let (list, detail) = match data {
         Ok(issues) => (
-            issue_list(cx, &issues).await?,
+            issue_list(cx, &issues, None).await?,
             (view! {
                 <div class="placeholder-detail">
                     <p class="eyebrow">"ISSUE DETAIL"</p>
@@ -252,15 +290,15 @@ async fn issue_detail(cx: &Cx) -> Result {
         match issue {
             Some(issue) => {
                 let comments = issue.get_comments(repo)?;
-                let ids = Issue::list(repo)?;
-                let issue_items = ids
+                let comment_rows: Vec<(Comment, Option<String>)> = comments
                     .into_iter()
-                    .map(|id| Issue::load_from_repo(repo, &id))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<Issue>>();
-                Ok(Some((issue_items, issue, comments)))
+                    .map(|comment| {
+                        let key = signing_key_of(repo, &comment.author);
+                        (comment, key)
+                    })
+                    .collect();
+                let issue_items = load_issue_rows(repo)?;
+                Ok(Some((issue_items, issue, comment_rows)))
             }
             None => Ok(None),
         }
@@ -268,7 +306,7 @@ async fn issue_detail(cx: &Cx) -> Result {
     .await;
 
     let (list, detail) = match data {
-        Ok(Some((issue_items, issue, comments))) => {
+        Ok(Some((issue_items, issue, comment_rows))) => {
             let can_edit = can_update(cx, &issue).await;
             let can_comment = can_create::<Comment>(cx).await;
             let next_status = if issue.status == "open" {
@@ -276,12 +314,13 @@ async fn issue_detail(cx: &Cx) -> Result {
             } else {
                 "open"
             };
+            let status_class = if issue.status == "open" { "status ok" } else { "status neutral" };
             (
-                issue_list(cx, &issue_items).await?,
+                issue_list(cx, &issue_items, Some(issue.id.as_str())).await?,
                 (view! {
                     <article>
                         <div class="detail-meta">
-                            <span class="status">(issue.status.as_str())</span>
+                            <span class=(status_class)>(issue.status.as_str())</span>
                             <span class="muted">"#" (issue.id.as_str())</span>
                         </div>
                         <div class="detail-heading">
@@ -303,21 +342,24 @@ async fn issue_detail(cx: &Cx) -> Result {
                         </div>
                         <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&issue.body)))</div>
                         <div class="tag-row">
-                            for label in &issue.labels { <span class="tag">(label.as_str())</span> }
+                            for label in &issue.labels { <span class="label-chip">(label.as_str())</span> }
                         </div>
                         <dl class="facts">
                             <dt>"Assignees"</dt><dd>(if issue.assignees.is_empty() { "None".to_owned() } else { issue.assignees.join(", ") })</dd>
                             <dt>"Reporters"</dt><dd>(if issue.reporters.is_empty() { "None".to_owned() } else { issue.reporters.join(", ") })</dd>
                         </dl>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
-                            if comments.is_empty() {
+                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comment_rows.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
-                                for comment in &comments {
-                                    <article class="comment">
+                                for (comment, key) in &comment_rows {
+                                    <article class="comment thread-entry">
                                         <div class="comment-heading">
                                             <strong>(comment.author.as_str())</strong>
+                                            if let Some(key) = key {
+                                                <span class="thread-key">"signed " <code>(key.as_str())</code></span>
+                                            }
                                             if can_update(cx, comment).await {
                                                 <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a>
                                             }
@@ -436,6 +478,18 @@ async fn issue_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Re
         .map(String::as_str)
         .unwrap_or_default()
         .to_owned();
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/issues/{id}/status"),
+        &format!("refs/meta/issues/{id}/status"),
+        &format!("/issues/{id}"),
+        (view! { cx => "Change issue " <code>(id.as_str())</code> " status to " <code>(status.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Issues), title: "Confirm status change", keyword: None, child: confirm) };
+    }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
         let mut issue = Issue::load_from_repo(repo, &lookup_id)?.ok_or_else(|| {
@@ -486,6 +540,18 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
     if author.is_empty() || body.is_empty() {
         let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
         return view! { shell(active: Some(Tab::Issues), title: "Comment failed", keyword: None, child: content) };
+    }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/issues/{id}/comments"),
+        &format!("refs/meta/comments/issue-{id}"),
+        &format!("/issues/{id}"),
+        (view! { cx => "Post a new comment on issue " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Issues), title: "Confirm comment", keyword: None, child: confirm) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {

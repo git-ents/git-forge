@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gix_forge::{Comment, Commentable, EntityOps, Review, ReviewTarget, Status};
+use gix_forge::{Comment, Commentable, EntityOps, Member, Review, ReviewTarget, Status};
 use topcoat::{
     Result,
     context::Cx,
@@ -10,6 +10,7 @@ use topcoat::{
 
 use crate::{
     auth::{authorization, authorization_error, can_create, can_update},
+    confirm::confirm_step,
     pages::{csv_values, with_repo},
     render::render_asciidoc,
     shell::{Tab, shell, split_shell},
@@ -49,6 +50,96 @@ impl ReviewForm {
             requesters: input.get("requesters").cloned().unwrap_or_default(),
             target: input.get("target").cloned().unwrap_or_default(),
         }
+    }
+}
+
+/// The design's six git-anchor kinds, collapsed from `ReviewTarget`'s six
+/// variants: label text plus the DESIGN-SPEC token class that colors it
+/// (`oid` for blob-shaped targets, `warn` for tree-shaped, `mauve` for
+/// commit-shaped -- "Anchor kind colors" in DESIGN-SPEC.md).
+fn anchor_kind(target: &ReviewTarget) -> (&'static str, &'static str) {
+    match target {
+        ReviewTarget::Blob { .. } => ("blob", "oid"),
+        ReviewTarget::Tree { .. } => ("tree", "warn"),
+        ReviewTarget::Commit { .. } => ("commit", "mauve"),
+        ReviewTarget::BaseTipTreePair { .. } => ("tree range", "warn"),
+        ReviewTarget::BaseTipCommitPair { .. } => ("commit range", "mauve"),
+        ReviewTarget::CommitRange { .. } => ("commit range", "mauve"),
+    }
+}
+
+/// The literal coordinates a target names -- object ids stay in full, per
+/// DESIGN-SPEC's "object ids are always visible" rule; nothing here is
+/// truncated for display.
+fn anchor_coord(target: &ReviewTarget) -> String {
+    match target {
+        ReviewTarget::Blob { path, oid } => format!("{path} @ {oid}"),
+        ReviewTarget::Tree { oid } | ReviewTarget::Commit { oid } => oid.clone(),
+        ReviewTarget::BaseTipTreePair { base, tip }
+        | ReviewTarget::BaseTipCommitPair { base, tip } => format!("{base}..{tip}"),
+        ReviewTarget::CommitRange { start, end } => format!("{start}..{end}"),
+    }
+}
+
+/// Whether `hex` names an object that actually exists in `repo` -- the one
+/// real signal available for a `ReviewTarget`: it is a bare oid (or pair of
+/// oids), not a captured `gix-anchor` identity subtree, so there is no
+/// stored anchor id or "captured at" commit to report, and no oracle to ask
+/// for a rebound projection (see `anchor_projection`'s doc comment). Clean
+/// vs. orphaned, computed by trying to resolve the object, is the honest
+/// scope for a bare-oid target.
+fn object_exists(repo: &gix::Repository, hex: &str) -> bool {
+    gix::ObjectId::from_hex(hex.as_bytes())
+        .ok()
+        .is_some_and(|id| repo.try_find_object(id).ok().flatten().is_some())
+}
+
+/// `(clean, message)` for a target's projection onto the repository as it
+/// exists right now.
+///
+/// `gix-anchor`'s oracles (`op_log` / `diff_trace` / `fingerprint`) resolve a
+/// captured `Anchor`/`Span` -- the identity subtree behind a [`Comment`]'s
+/// `Binding::Position` -- onto a moving target, and can report a *rebound*
+/// (moved but still present) state as well as bound/orphaned. A
+/// `ReviewTarget` is not one of those: it is a bare oid (or oid pair) with no
+/// captured identity, so there is nothing for those oracles to run against.
+/// The only honest check left is existence: does the object the review named
+/// still resolve in this repository. That gives two real states -- clean and
+/// orphaned -- not three; a "rebound" review-target state is not implemented
+/// here because there is no cheap, real way to detect it for a bare oid.
+fn anchor_projection(repo: &gix::Repository, target: &ReviewTarget) -> (bool, String) {
+    match target {
+        ReviewTarget::Blob { oid, .. } | ReviewTarget::Tree { oid } | ReviewTarget::Commit { oid } => {
+            if object_exists(repo, oid) {
+                (true, format!("projects cleanly onto {oid}"))
+            } else {
+                (
+                    false,
+                    format!("{oid} was not found in this repository -- this review's target is orphaned"),
+                )
+            }
+        }
+        ReviewTarget::BaseTipTreePair { base, tip }
+        | ReviewTarget::BaseTipCommitPair { base, tip } => range_projection(repo, base, tip),
+        ReviewTarget::CommitRange { start, end } => range_projection(repo, start, end),
+    }
+}
+
+fn range_projection(repo: &gix::Repository, a: &str, b: &str) -> (bool, String) {
+    let (a_ok, b_ok) = (object_exists(repo, a), object_exists(repo, b));
+    if a_ok && b_ok {
+        (true, format!("both endpoints resolve -- projects cleanly onto {a}..{b}"))
+    } else {
+        let missing = match (a_ok, b_ok) {
+            (false, false) => format!("{a} and {b}"),
+            (false, true) => a.to_owned(),
+            (true, false) => b.to_owned(),
+            (true, true) => unreachable!("handled by the a_ok && b_ok branch above"),
+        };
+        (
+            false,
+            format!("{missing} not found in this repository -- this review's target range is orphaned"),
+        )
     }
 }
 
@@ -98,7 +189,11 @@ async fn review_form(cx: &Cx, action: &str, form: &ReviewForm, error: Option<&st
     }
 }
 
-async fn review_list(cx: &Cx, items: &[Review]) -> Result {
+/// One master-list row's worth of real data: the review plus its comment
+/// count.
+type ReviewRow = (Review, usize);
+
+async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Result {
     let can_create = can_create::<Review>(cx).await;
     view! { cx =>
         <div class="list-heading">
@@ -118,14 +213,23 @@ async fn review_list(cx: &Cx, items: &[Review]) -> Result {
             </div>
         } else {
             <ul class="entity-list">
-                for review in items {
+                for (review, comment_count) in items {
+                    let dot_class = if review.status == "open" { "status-dot ok" } else { "status-dot" };
+                    let row_class = if selected == Some(review.id.as_str()) { "list-row selected" } else { "list-row" };
+                    let (kind_label, kind_class) = anchor_kind(&review.target);
+                    let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
                     <li>
-                        <a class="entity-link" href=(format!("/reviews/{}", review.id))>
-                            <span>
-                                <strong>"Review " (review.id.as_str())</strong>
-                                <small>(review.requesters.join(", "))</small>
-                            </span>
-                            <span class="status">(review.status.as_str())</span>
+                        <a class=(row_class) href=(format!("/reviews/{}", review.id))>
+                            <div class="row-top">
+                                <span class=(dot_class)></span>
+                                <strong class="row-title">"Review " (review.id.as_str())</strong>
+                            </div>
+                            <div class="row-meta">
+                                <span class="row-id">(review.id.as_str())</span>
+                                <span>(author)</span>
+                                <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
+                                <span class="row-comments">(*comment_count) " comments"</span>
+                            </div>
                         </a>
                     </li>
                 }
@@ -134,20 +238,56 @@ async fn review_list(cx: &Cx, items: &[Review]) -> Result {
     }
 }
 
+/// Attach comment counts the same way the detail view needs them, for the
+/// list pane both routes share.
+fn load_review_rows(repo: &gix::Repository) -> std::result::Result<Vec<ReviewRow>, gix_forge::Error> {
+    let ids = Review::list(repo)?;
+    ids.into_iter()
+        .map(|id| Review::load_from_repo(repo, &id))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(|loaded| {
+            loaded
+                .into_iter()
+                .flatten()
+                .map(|review| {
+                    let comment_count = review.get_comments(repo).map(|c| c.len()).unwrap_or(0);
+                    (review, comment_count)
+                })
+                .collect()
+        })
+}
+
+/// The signed-in member's registered signing key for `author`, when they are
+/// still a known member -- the one piece of "signed" identity a comment
+/// genuinely carries, since [`Comment`] itself stores no per-comment
+/// signature or timestamp.
+fn signing_key_of(repo: &gix::Repository, author: &str) -> Option<String> {
+    let member = Member::load_from_repo(repo, author).ok().flatten()?;
+    let key = member.signing_key.trim();
+    (!key.is_empty()).then(|| key.to_owned())
+}
+
+/// Whether `reviewer` has left any comment on this review's thread -- the
+/// one real, honest signal standing in for a structured verdict. There is no
+/// approve / request-changes state anywhere in the backend (`Review` carries
+/// only a free-text `body` and a `reviewers: Vec<String>` list, and grepping
+/// `gix-forge` for "verdict"/"approve" only turns up an aspirational Datalog
+/// rule set in `lib.rs` with no `Claim`/`Verdict` type behind it) -- so
+/// rather than inventing one, a reviewer who has posted in the thread is
+/// shown as having responded, and everyone else as awaiting a response. This
+/// is a UI-only approximation over real reviewer/comment data, not a verdict
+/// system.
+fn has_responded(reviewer: &str, comments: &[Comment]) -> bool {
+    comments.iter().any(|comment| comment.author == reviewer)
+}
+
 #[page("/reviews")]
 async fn reviews(cx: &Cx) -> Result {
-    let data = with_repo(cx, |repo| {
-        let ids = Review::list(repo)?;
-        ids.into_iter()
-            .map(|id| Review::load_from_repo(repo, &id))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|reviews| reviews.into_iter().flatten().collect::<Vec<Review>>())
-    })
-    .await;
+    let data = with_repo(cx, load_review_rows).await;
 
     let (list, detail) = match data {
         Ok(reviews) => (
-            review_list(cx, &reviews).await?,
+            review_list(cx, &reviews, None).await?,
             (view! {
                 <div class="placeholder-detail">
                     <p class="eyebrow">"REVIEW DETAIL"</p>
@@ -242,15 +382,28 @@ async fn review_detail(cx: &Cx) -> Result {
         match review {
             Some(review) => {
                 let comments = review.get_comments(repo)?;
-                let ids = Review::list(repo)?;
-                let review_items = ids
-                    .into_iter()
-                    .map(|id| Review::load_from_repo(repo, &id))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<Review>>();
-                Ok(Some((review_items, review, comments)))
+                let (anchor_clean, anchor_message) = anchor_projection(repo, &review.target);
+                let comment_rows: Vec<(Comment, Option<String>)> = comments
+                    .iter()
+                    .map(|comment| {
+                        let key = signing_key_of(repo, &comment.author);
+                        (comment.clone(), key)
+                    })
+                    .collect();
+                let verdict_rows: Vec<(String, bool)> = review
+                    .reviewers
+                    .iter()
+                    .map(|reviewer| (reviewer.clone(), has_responded(reviewer, &comments)))
+                    .collect();
+                let review_items = load_review_rows(repo)?;
+                Ok(Some((
+                    review_items,
+                    review,
+                    comment_rows,
+                    verdict_rows,
+                    anchor_clean,
+                    anchor_message,
+                )))
             }
             None => Ok(None),
         }
@@ -258,7 +411,7 @@ async fn review_detail(cx: &Cx) -> Result {
     .await;
 
     let (list, detail) = match data {
-        Ok(Some((review_items, review, comments))) => {
+        Ok(Some((review_items, review, comment_rows, verdict_rows, anchor_clean, anchor_message))) => {
             let can_edit = can_update(cx, &review).await;
             let can_comment = can_create::<Comment>(cx).await;
             let next_status = if review.status == "open" {
@@ -266,11 +419,15 @@ async fn review_detail(cx: &Cx) -> Result {
             } else {
                 "open"
             };
+            let status_class = if review.status == "open" { "status ok" } else { "status neutral" };
+            let (kind_label, kind_class) = anchor_kind(&review.target);
+            let coord = anchor_coord(&review.target);
+            let projection_class = if anchor_clean { "anchor-projection ok" } else { "anchor-projection warn" };
             (
-                review_list(cx, &review_items).await?,
+                review_list(cx, &review_items, Some(review.id.as_str())).await?,
                 (view! {
                     <article>
-                        <div class="detail-meta"><span class="status">(review.status.as_str())</span><span class="muted">"#" (review.id.as_str())</span></div>
+                        <div class="detail-meta"><span class=(status_class)>(review.status.as_str())</span><span class="muted">"#" (review.id.as_str())</span></div>
                         <div class="detail-heading">
                             <div><h2>"Review " (review.id.as_str())</h2><p class="muted">"A request for focused feedback"</p></div>
                             <div class="detail-actions">
@@ -284,18 +441,56 @@ async fn review_detail(cx: &Cx) -> Result {
                             </div>
                         </div>
                         <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&review.body)))</div>
+                        <div class="panel-block">
+                            <div class="panel-block-heading">"Anchor"</div>
+                            <div class="panel-block-body anchor-block-body">
+                                <div class="anchor-kind-row">
+                                    <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
+                                    <code class="anchor-coord">(coord)</code>
+                                </div>
+                                <div class=(projection_class)>(anchor_message)</div>
+                            </div>
+                        </div>
                         <dl class="facts">
                             <dt>"Requesters"</dt><dd>(if review.requesters.is_empty() { "None".to_owned() } else { review.requesters.join(", ") })</dd>
                             <dt>"Reviewers"</dt><dd>(if review.reviewers.is_empty() { "None".to_owned() } else { review.reviewers.join(", ") })</dd>
-                            <dt>"Target"</dt><dd><code>(review.target.to_string())</code></dd>
                         </dl>
+                        <div class="panel-block">
+                            <div class="panel-block-heading">"Verdicts"</div>
+                            <p class="form-help verdicts-note">"Approve / request-changes verdicts are not tracked by the backend yet -- this reflects whether each reviewer has posted in the comment thread below."</p>
+                            if verdict_rows.is_empty() {
+                                <p class="empty panel-block-body">"No reviewers assigned."</p>
+                            } else {
+                                <ul class="verdict-list">
+                                    for (reviewer, responded) in &verdict_rows {
+                                        <li class="verdict-row">
+                                            <span>(reviewer.as_str())</span>
+                                            <span class=(if *responded { "verdict-pill responded" } else { "verdict-pill pending" })>
+                                                if *responded { "responded" } else { "awaiting response" }
+                                            </span>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comments.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
-                            if comments.is_empty() {
+                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comment_rows.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
-                                for comment in &comments {
-                                    <article class="comment"><div class="comment-heading"><strong>(comment.author.as_str())</strong> if can_update(cx, comment).await { <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a> }</div><p>(comment.body.as_str())</p></article>
+                                for (comment, key) in &comment_rows {
+                                    <article class="comment thread-entry">
+                                        <div class="comment-heading">
+                                            <strong>(comment.author.as_str())</strong>
+                                            if let Some(key) = key {
+                                                <span class="thread-key">"signed " <code>(key.as_str())</code></span>
+                                            }
+                                            if can_update(cx, comment).await {
+                                                <a class="muted" href=(format!("/comments/edit/{}", comment.id))>"Edit"</a>
+                                            }
+                                        </div>
+                                        <p>(comment.body.as_str())</p>
+                                    </article>
                                 }
                             }
                             if can_comment {
@@ -410,6 +605,18 @@ async fn review_status(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         .map(String::as_str)
         .unwrap_or_default()
         .to_owned();
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/reviews/{id}/status"),
+        &format!("refs/meta/review/{id}"),
+        &format!("/reviews/{id}"),
+        (view! { cx => "Change review " <code>(id.as_str())</code> " status to " <code>(status.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Reviews), title: "Confirm status change", keyword: None, child: confirm) };
+    }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
         let mut review = Review::load_from_repo(repo, &lookup_id)?.ok_or_else(|| {
@@ -460,6 +667,18 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     if author.is_empty() || body.is_empty() {
         let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
         return view! { shell(active: Some(Tab::Reviews), title: "Comment failed", keyword: None, child: content) };
+    }
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/reviews/{id}/comments"),
+        &format!("refs/meta/review/{id}"),
+        &format!("/reviews/{id}"),
+        (view! { cx => "Post a new comment on review " <code>(id.as_str())</code> })?,
+    )
+    .await?
+    {
+        return view! { shell(active: Some(Tab::Reviews), title: "Confirm comment", keyword: None, child: confirm) };
     }
     let lookup_id = id.clone();
     let result = with_repo(cx, move |repo| {
