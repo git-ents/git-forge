@@ -3,9 +3,12 @@ mod dashboard;
 mod files;
 mod issues;
 mod members;
+mod palette;
 mod query;
 mod reviews;
 mod search;
+
+pub(crate) use palette::{palette_mount, palette_trigger};
 
 use topcoat::context::{Cx, app_context};
 

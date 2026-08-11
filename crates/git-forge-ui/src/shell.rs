@@ -5,7 +5,10 @@ use topcoat::{
     view::{View, component, view},
 };
 
-use crate::auth::authenticated_member;
+use crate::{
+    auth::authenticated_member,
+    pages::{palette_mount, palette_trigger},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -113,6 +116,7 @@ pub(crate) async fn shell(
                                 <input id="shell-search" name="keyword" value=(keyword.unwrap_or_default()) placeholder="Search issues and reviews" type="search">
                                 <button type="submit">"Search"</button>
                             </form>
+                            (palette_trigger(cx).await?)
                         </header>
                         <main class="content">
                             <div class="page-heading">
@@ -122,6 +126,7 @@ pub(crate) async fn shell(
                             (child)
                         </main>
                     </div>
+                    (palette_mount(cx).await?)
                 </div>
             </body>
         </html>
@@ -180,6 +185,7 @@ pub(crate) async fn split_shell(
                                 <input id="split-search" name="keyword" placeholder="Search issues and reviews" type="search">
                                 <button type="submit">"Search"</button>
                             </form>
+                            (palette_trigger(cx).await?)
                         </header>
                         <main class="content">
                             <div class="page-heading">
@@ -192,6 +198,7 @@ pub(crate) async fn split_shell(
                             </div>
                         </main>
                     </div>
+                    (palette_mount(cx).await?)
                 </div>
             </body>
         </html>
