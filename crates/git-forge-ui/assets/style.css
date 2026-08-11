@@ -270,6 +270,59 @@ code { overflow-wrap: anywhere; font-size: .9em; }
 .confirm-details dd { margin: 0; overflow-wrap: anywhere; font-size: .84rem; }
 .confirm-form { margin: 0; }
 
+/* ---------- Object ids ---------- */
+
+.oid, code.oid { color: var(--oid); }
+
+/* ---------- Releases ---------- */
+
+.release-intro { max-width: 48rem; margin-bottom: 1.1rem; }
+.release-list { display: grid; gap: 1rem; max-width: 48rem; }
+.release-card { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.release-header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; padding: .6rem 1rem; background: var(--surface-sunken); border-bottom: 1px solid var(--border); }
+.release-header strong { font-size: .9rem; }
+.release-quorum { display: flex; align-items: center; gap: .6rem; margin-left: auto; }
+.quorum-bar { display: flex; gap: 2px; }
+.quorum-seg { width: 18px; height: 6px; border-radius: 1px; background: var(--border); }
+.quorum-seg.filled { background: var(--ok); }
+.quorum-label { font-size: .68rem; font-weight: 700; }
+.quorum-label.ok { color: var(--ok); }
+.quorum-label.warn { color: var(--warn); }
+.claim-list { margin: 0; padding: 0; list-style: none; }
+.claim-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; padding: .5rem 1rem; border-top: 1px solid var(--border-subtle); font-size: .76rem; }
+.claim-row .status { margin-left: auto; }
+
+/* ---------- Working copy ---------- */
+
+.wc-intro { max-width: 52rem; margin-bottom: .3rem; }
+.wc-summary { margin: 0 0 1.2rem; font-size: .78rem; }
+.wc-count { font-weight: 700; }
+.wc-count.accent { color: var(--accent); }
+.wc-count.warn { color: var(--warn); }
+.wc-count.danger { color: var(--danger); }
+.wc-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); align-items: start; gap: 1rem; max-width: 66rem; }
+.wc-column { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.wc-column-heading { margin: 0; padding: .5rem .9rem; border-bottom: 1px solid var(--border); background: var(--surface-sunken); color: var(--text-muted); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+.wc-list { margin: 0; padding: 0; list-style: none; }
+.wc-dirty-row { display: flex; align-items: baseline; gap: .6rem; padding: .4rem .9rem; border-top: 1px solid var(--border-subtle); font-size: .78rem; }
+.wc-dirty-row:first-child { border-top: 0; }
+.wc-mark { width: 1rem; font-weight: 700; }
+.wc-mark.warn { color: var(--warn); }
+.wc-mark.muted { color: var(--text-muted); }
+.wc-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diffstat { font-size: .7rem; white-space: nowrap; }
+.diffstat .add { color: var(--ok); }
+.diffstat .del { color: var(--danger); }
+.wc-commit-row, .wc-gate-row { padding: .45rem .9rem; border-top: 1px solid var(--border-subtle); font-size: .78rem; }
+.wc-commit-row:first-child, .wc-gate-row:first-child { border-top: 0; }
+.wc-commit-top { display: flex; gap: .7rem; align-items: baseline; }
+.wc-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: system-ui, sans-serif; }
+.wc-commit-meta { display: flex; gap: .7rem; align-items: center; margin-top: .15rem; font-size: .68rem; }
+.wc-gate-top { display: flex; justify-content: space-between; gap: .7rem; }
+.wc-gate-detail { margin-top: .1rem; font-size: .68rem; }
+.wc-push { margin: 0; padding: .8rem .9rem; border-top: 1px solid var(--border); }
+.wc-push button { width: 100%; }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media (max-width: 700px) {
