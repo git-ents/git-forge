@@ -74,6 +74,121 @@ pub fn load(
     })
 }
 
+/// A real, honestly-sourced summary of a local branch, used to populate the
+/// files route's refs pane.
+///
+/// Deliberately does *not* group refs by author identity or attach a CI
+/// status: the forge has neither an author-identity-to-git-committer mapping
+/// nor CI integration, so a "Mine / Others / Machine" split or a pass/fail
+/// badge would be fabricated data (see `HANDOFF.md` section 3, packet B, and
+/// its "already-decided scope simplification" note). `ahead` and
+/// `last_commit_seconds` are both computed from the real object graph.
+#[derive(Clone, Debug)]
+pub struct RefSummary {
+    /// Short branch name, e.g. `main` for `refs/heads/main`.
+    pub display_name: String,
+    /// Percent-encoded full ref name, usable as the `ref` query parameter.
+    pub selector: String,
+    /// Commits reachable from this ref but not from the repository's
+    /// default (`HEAD`) branch, via a real `gix` revwalk.
+    pub ahead: usize,
+    /// The tip commit's committer time, seconds since the Unix epoch.
+    pub last_commit_seconds: i64,
+}
+
+/// List local branches (`refs/heads/*`), sorted most-recently-active first.
+///
+/// Remote-tracking refs (`refs/remotes/*`) are intentionally excluded to
+/// keep the pane to branches this repository actually owns; see
+/// [`RefSummary`]'s docs for what else is deliberately left out.
+pub fn list_refs(repo: &gix::Repository) -> Result<Vec<RefSummary>, Error> {
+    let default_commit = repo.head_commit().ok().map(|commit| commit.id);
+    let platform = repo
+        .references()
+        .map_err(|error| Error::Reference(error.to_string()))?;
+    let iter = platform
+        .local_branches()
+        .map_err(|error| Error::Reference(error.to_string()))?;
+
+    let mut refs = Vec::new();
+    for candidate in iter {
+        let Ok(mut reference) = candidate else {
+            continue;
+        };
+        let Ok(commit) = reference.peel_to_commit() else {
+            continue;
+        };
+        let Ok(time) = commit.time() else {
+            continue;
+        };
+        let commit_id = commit.id;
+        let ahead = match default_commit {
+            Some(default_id) if default_id == commit_id => 0,
+            Some(default_id) => repo
+                .rev_walk(Some(commit_id))
+                .with_hidden(Some(default_id))
+                .all()
+                .map(|walk| walk.count())
+                .unwrap_or(0),
+            None => 0,
+        };
+        let full_name = reference.name().as_bstr().as_bytes().to_owned();
+        refs.push(RefSummary {
+            display_name: display_name(reference.name().shorten().as_bytes()),
+            selector: percent_encode(&full_name),
+            ahead,
+            last_commit_seconds: time.seconds,
+        });
+    }
+    refs.sort_by_key(|reference| std::cmp::Reverse(reference.last_commit_seconds));
+    Ok(refs)
+}
+
+/// A commit's display-relevant fields, gathered once and detached from the
+/// repository so it's cheap to carry into a view.
+#[derive(Clone, Debug)]
+pub struct CommitSummary {
+    pub short_oid: String,
+    pub subject: String,
+    pub author: String,
+    pub seconds: i64,
+}
+
+/// Summarize `commit_id` for display in the blob header's "last commit"
+/// line.
+///
+/// This is the *ref's tip commit*, not necessarily the last commit that
+/// touched the specific file being viewed: a real per-file "last commit"
+/// would need a pathspec-scoped revwalk (walk from the tip, diffing each
+/// commit against its parent(s) restricted to this path, stopping at the
+/// first one that touched it). That's a reasonable follow-up but is real
+/// scope creep for this pass, so the tip commit is used as an honest,
+/// clearly-labeled stand-in -- see `files.rs`'s call site.
+pub fn commit_summary(repo: &gix::Repository, commit_id: gix::ObjectId) -> Result<CommitSummary, Error> {
+    let commit = repo
+        .find_commit(commit_id)
+        .map_err(|error| Error::Object(error.to_string()))?;
+    let short_oid = commit
+        .short_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|_| commit_id.to_string());
+    let subject = commit
+        .message()
+        .map(|message| display_name(message.title.trim()))
+        .unwrap_or_default();
+    let author = commit
+        .author()
+        .map(|signature| display_name(signature.name.as_bytes()))
+        .unwrap_or_default();
+    let seconds = commit.time().map(|time| time.seconds).unwrap_or_default();
+    Ok(CommitSummary {
+        short_oid,
+        subject,
+        author,
+        seconds,
+    })
+}
+
 fn validate_path(path: &str) -> Result<Vec<&str>, Error> {
     if path.is_empty() {
         return Ok(Vec::new());

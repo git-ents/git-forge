@@ -217,6 +217,88 @@ fn ui_crawls_every_internal_route() {
         "composer does not select line 4 as the end of the range"
     );
 
+    // A real (non-empty) line comment submission must stop at the shared
+    // confirm dialog rather than writing immediately -- see confirm.rs.
+    let comment_body = b"reference=HEAD&path=src%2Flib.rs&view=source&comment=1-1&body=Looks%20good".to_vec();
+    let confirm_response = crawler
+        .client
+        .request_with_authorization(
+            &Request {
+                method: "POST".to_owned(),
+                target: "/tree/comments".to_owned(),
+                body: comment_body.clone(),
+            },
+            Some("alice"),
+        )
+        .unwrap();
+    assert_eq!(confirm_response.status, 200);
+    let confirm_html = confirm_response.body_text().unwrap().to_owned();
+    assert!(
+        confirm_html.contains(r#"class="confirm-modal""#),
+        "an unconfirmed line comment did not render the shared confirm dialog"
+    );
+    assert!(
+        confirm_html.contains("refs/meta/comments/line-1"),
+        "the confirm dialog does not show the real target ref for this comment"
+    );
+    assert!(
+        confirm_html.contains("<code>alice</code>"),
+        "the confirm dialog does not show the signing identity"
+    );
+    let confirm_form = form_tags(&confirm_html)
+        .into_iter()
+        .find(|tag| attribute_value(tag, "action").as_deref() == Some("/tree/comments"))
+        .expect("confirm screen has no re-post form");
+    let confirm_form_html = form_contents(&confirm_html, confirm_form).expect("form has no body");
+    assert_eq!(
+        input_value(confirm_form_html, "confirmed").as_deref(),
+        Some("true"),
+        "the confirm form does not carry confirmed=true"
+    );
+    assert_eq!(
+        input_value(confirm_form_html, "body").as_deref(),
+        Some("Looks good"),
+        "the confirm form does not preserve the original comment body"
+    );
+
+    // Re-submitting with confirmed=true performs the real mutation.
+    let mut confirmed_body = comment_body.clone();
+    confirmed_body.extend_from_slice(b"&confirmed=true");
+    let published_response = crawler
+        .client
+        .request_with_authorization(
+            &Request {
+                method: "POST".to_owned(),
+                target: "/tree/comments".to_owned(),
+                body: confirmed_body,
+            },
+            Some("alice"),
+        )
+        .unwrap();
+    assert_eq!(published_response.status, 200);
+    let published_html = published_response.body_text().unwrap().to_owned();
+    assert!(
+        published_html.contains("Your file comment is live"),
+        "confirming the comment did not publish it"
+    );
+
+    // The published comment is anchored at the commit it's being viewed
+    // against, so it renders as "bound here", not rebound or orphaned.
+    let after_comment_response = crawler
+        .client
+        .request(&Request {
+            method: "GET".to_owned(),
+            target: "/tree?ref=HEAD&path=src%2Flib.rs&view=source".to_owned(),
+            body: Vec::new(),
+        })
+        .unwrap();
+    assert_eq!(after_comment_response.status, 200);
+    let after_comment_html = after_comment_response.body_text().unwrap();
+    assert!(
+        after_comment_html.contains("confidence-bound"),
+        "the freshly anchored comment does not render as bound here"
+    );
+
     let directory_response = crawler
         .client
         .request(&Request {

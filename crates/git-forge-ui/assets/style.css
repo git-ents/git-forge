@@ -207,6 +207,32 @@ code { overflow-wrap: anywhere; font-size: .9em; }
 .code-view .arb-punctuation, .code-view .arb-escape { color: var(--syntax-operator); }
 .code-view .arb-error { color: var(--danger); text-decoration: underline wavy; text-decoration-thickness: 1px; }
 
+/* ---------- Files route: refs pane ---------- */
+
+.tree-layout { display: grid; grid-template-columns: 17rem minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+.tree-main { min-width: 0; }
+.refs-pane { position: sticky; top: 1.75rem; max-height: calc(100vh - 3.5rem); overflow-y: auto; padding: .8rem .6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunken); font-size: .76rem; }
+.refs-pane-heading { margin: 0 0 .5rem; padding: 0 .3rem; font-size: .62rem; font-weight: 600; text-transform: uppercase; letter-spacing: .09em; color: var(--text-dim); }
+.refs-list { display: grid; gap: .1rem; margin: 0; padding: 0; list-style: none; }
+.ref-link { display: flex; align-items: baseline; gap: .5rem; width: 100%; padding: .28rem .5rem; border-left: 2px solid transparent; border-radius: 4px; color: var(--text); }
+.ref-link:hover { background: var(--border-subtle); color: var(--text); }
+.ref-link.active { color: var(--accent); background: var(--accent-tint); border-left-color: var(--accent); font-weight: 600; }
+.ref-link .ref-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ref-link .ref-meta { display: flex; flex-shrink: 0; gap: .4rem; font-size: .64rem; color: var(--text-muted); }
+.ref-link .ref-ahead { color: var(--accent); }
+
+/* ---------- Files route: blob header ---------- */
+
+.blob-header { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .9rem; margin-top: 1rem; padding: .55rem .9rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-sunken); font-size: .7rem; color: var(--text-muted); }
+.blob-header .blob-name { font-weight: 600; font-size: .82rem; color: var(--text); }
+.blob-header .blob-oid { color: var(--oid); }
+.blob-header .thread-count { color: var(--warn); }
+.blob-actions { display: flex; flex-shrink: 0; gap: .5rem; margin-left: auto; }
+.blob-actions a { padding: .22rem .65rem; border: 1px solid var(--border); border-radius: 5px; color: var(--text-muted); font-size: .72rem; font-weight: 600; }
+.blob-actions a:hover { color: var(--text); border-color: var(--border-hover); }
+.blob-actions a.active, .blame-toggle.active { border-color: var(--accent-border); background: var(--accent-tint); color: var(--accent); }
+.blob-actions a[aria-disabled="true"] { opacity: .55; cursor: not-allowed; pointer-events: none; }
+
 .tree-panel { min-width: 0; }
 .breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin-bottom: 1rem; padding-bottom: .75rem; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: .78rem; }
 .breadcrumbs a { overflow-wrap: anywhere; color: var(--text-muted); }
@@ -223,21 +249,53 @@ code { overflow-wrap: anywhere; font-size: .9em; }
 .source-lines { min-width: max-content; margin: 0; padding: 0; list-style: none; }
 .source-line { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; align-items: start; min-width: max-content; padding-right: 1rem; }
 .source-line.selected { background: var(--accent-fill-row); }
-.line-number { padding: 0 .9rem 0 1rem; color: var(--text-dim); text-align: right; user-select: none; }
+/* The blame column inserts as its own fixed-width track between the
+   line-number gutter and the code column, uniformly across every row, so
+   toggling it shifts the code column as a block without reflowing it. */
+.source-line.with-blame { grid-template-columns: 4.5rem 5.5rem minmax(0, 1fr) auto; }
+.inline-comment-form, .source-comment { grid-column: 2 / -1; }
+.source-line.with-blame .inline-comment-form, .source-line.with-blame .source-comment { grid-column: 3 / -1; }
+.line-number { position: sticky; left: 0; z-index: 1; padding: 0 .9rem 0 1.4rem; background: var(--surface-sunken); color: var(--text-dim); text-align: right; user-select: none; }
 .line-number:hover, .line-number:focus-visible { color: var(--accent); }
+.source-line.selected .line-number { background: var(--accent-fill-row); }
+.thread-dot { position: absolute; top: 50%; left: .35rem; width: 6px; height: 6px; border-radius: 50%; background: transparent; transform: translateY(-50%); }
+.thread-dot.confidence-bound { background: var(--ok); }
+.thread-dot.confidence-rebound { background: var(--warn); }
+.thread-dot.confidence-orphaned { background: var(--text-dim); }
+.line-blame { padding: .05rem .6rem; overflow: hidden; color: var(--text-muted); font-size: .68rem; white-space: nowrap; text-overflow: ellipsis; }
 .line-content { min-width: 0; padding-right: 1rem; font: inherit; white-space: pre; }
 .line-actions { padding-top: .05rem; }
 .line-comment { padding: .05rem .45rem; border: 1px solid var(--border); border-radius: 4px; color: var(--text-muted); font-size: .68rem; opacity: 0; }
 .source-line:hover .line-comment, .source-line:focus-within .line-comment { opacity: 1; }
 .line-comment:hover, .line-comment:focus-visible { border-color: var(--accent); color: var(--accent); }
-.inline-comment-form { grid-column: 2 / -1; width: min(42rem, calc(100vw - 7rem)); margin: .5rem 0 .75rem; }
-.source-comment { grid-column: 2 / -1; max-width: 48rem; margin: .35rem 0 .65rem; padding: .65rem .75rem; border-left: 3px solid var(--accent); border-radius: 0 5px 5px 0; background: var(--accent-glow-row); font-size: .82rem; white-space: normal; }
+.inline-comment-form { width: min(42rem, calc(100vw - 7rem)); margin: .5rem 0 .75rem; }
+.source-comment { max-width: 48rem; margin: .35rem 0 .65rem; padding: .65rem .75rem; border-left: 3px solid var(--accent); border-radius: 0 5px 5px 0; background: var(--accent-glow-row); font-size: .82rem; white-space: normal; }
 .source-comment p { margin: .25rem 0 0; white-space: pre-wrap; }
 .comment-range { color: var(--text-muted); font-size: .74rem; }
+.source-comment .comment-heading, .file-comments .comment-heading { justify-content: flex-start; gap: .6rem; }
+.confidence-label { margin-left: auto; font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.confidence-label.confidence-bound { color: var(--ok); }
+.confidence-label.confidence-rebound { color: var(--warn); }
+.confidence-label.confidence-orphaned { color: var(--text-muted); }
+.source-comment.confidence-bound, .comment.file-comment.confidence-bound { border-left-color: var(--ok); }
+.source-comment.confidence-rebound, .comment.file-comment.confidence-rebound { border-left-color: var(--warn); }
+.source-comment.confidence-orphaned, .comment.file-comment.confidence-orphaned { border-left-color: var(--border); background: var(--surface-sunken); }
 .file-comments { margin: 1rem 0; padding: 1rem; }
 .file-comments .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .file-comments .comment-form { background: var(--surface); }
 .source-view code { font: inherit; }
+/* Mirrors DESIGN-SPEC's syntax token table exactly for the 8 named buckets;
+   token kinds it doesn't name (variable, number, constant, property, tag,
+   label, namespace, markup, diff, embedded) are left in the plain text
+   color rather than inventing a mapping. */
+.line-content .arb-comment { color: var(--syntax-comment); }
+.line-content .arb-keyword { color: var(--syntax-keyword); }
+.line-content .arb-function, .line-content .arb-constructor { color: var(--syntax-function); }
+.line-content .arb-type { color: var(--syntax-type); }
+.line-content .arb-string { color: var(--syntax-string); }
+.line-content .arb-macro, .line-content .arb-attribute { color: var(--syntax-macro); }
+.line-content .arb-operator, .line-content .arb-punctuation { color: var(--syntax-operator); }
+.line-content .arb-error { color: var(--danger); text-decoration: underline wavy; text-decoration-thickness: 1px; }
 .rendered-file { min-width: 0; max-width: 100%; color: var(--text); line-height: 1.75; overflow-wrap: anywhere; font-size: .9rem; }
 .rendered-file > :first-child { margin-top: 0; }
 .rendered-file > :last-child { margin-bottom: 0; }
@@ -278,6 +336,8 @@ code { overflow-wrap: anywhere; font-size: .9em; }
     .branch-pill, .ahead-behind { display: none; }
     .content { padding: 1.25rem 1rem; }
     .split-pane { grid-template-columns: 1fr; }
+    .tree-layout { grid-template-columns: 1fr; }
+    .refs-pane { position: static; max-height: none; }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .form-layout { grid-template-columns: 1fr; gap: 1rem; }
     .form-intro { position: static; }
