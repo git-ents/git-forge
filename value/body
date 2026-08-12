@@ -1,0 +1,45 @@
+Un-stub the v3 UI redesign — Domain B+H: Working-copy status/gates & refs-pane grouping/CI badges
+
+Grouped together because both hinge on the same open question: does this product integrate with any CI system, and how?
+
+## Current state
+
+`crates/git-forge-ui/src/pages/workingcopy.rs` is 100% sample data for all three columns (`DIRTY_FILES`, `UNPUSHED_COMMITS`, `GATES` are `const` arrays); the push button is a documented no-op.
+
+`crates/git-forge-ui/src/pages/files.rs`'s `refs_pane_view` already renders a real, honestly-sourced flat branch list via `tree::list_refs` (`crates/git-forge-ui/src/tree.rs`) — real ahead-count via `repo.rev_walk(...).with_hidden(...)` and real age from commit time — but explicitly does not group into Mine/Others/Machine or show CI state, per in-code comments citing the redesign HANDOFF.
+
+`crates/gix-forge/src/member.rs`'s `Member` has only `id`, `signing_key`, `role` — no email/git-identity field. `crates/git-forge-ui/src/auth.rs` already has a real "current user" concept: `authenticated_member(cx)` resolves a bearer token to a stored `Member` (used today for authorization on mutations, not yet for UI personalization/grouping).
+
+There is no CI system, lint/test/build runner, or git hook anywhere in `crates/git-forge` (its CLI subcommands are store/anchor/query/member-type domain commands only).
+
+## Non-CI engineering — concrete approach and effort
+
+1. **Unpushed-commit detection (small).** `gix` 0.85's config/reference API exposes `branch_remote_tracking_ref_name(direction)` (aliased "upstream"), which resolves `branch.<name>.remote`/`.merge` config to a remote-tracking ref name with no new Cargo feature required — it works with the workspace's current minimal `gix` feature set. Once you have the tracking ref's tip oid, the existing `rev_walk(...).with_hidden(...)` pattern already used for `ahead` in `tree::list_refs` gives unpushed commits directly. Signed/unsigned state needs a real signature-verification pass (see Domain A — the same open question about attestation vs. verification applies here). A branch with no upstream configured is a real, expected case to handle (fall back to "no upstream tracked" state).
+
+2. **Dirty-file detection (medium).** Requires enabling `gix`'s `status` feature bundle (`gix-status`, `dirwalk` → `gix-dir` + `attributes` → `gix-filter`/`gix-pathspec`/`gix-attributes`/`gix-submodule`/`gix-command`, plus `index` → `gix-index`) — roughly 8-10 new transitive crates not currently in this workspace's `Cargo.lock`. Given the release profile (`lto = "fat"`, `codegen-units = 1`), this will measurably increase release compile time (one-time cost). `gix-status`'s change detection by default only tells you *that* content changed, not line counts — per-file diffstat (+add/-del) is not free; it needs a second pass diffing the HEAD blob against worktree content (e.g. via `gix-diff`'s blob diff), one extra read+diff per dirty file. Untracked files need a size-based or whole-file-as-added diffstat.
+
+3. **Refs pane Mine/Others/Machine grouping (medium, contingent on a schema change).** "Mine" needs mapping a ref's tip-commit committer (name+email, already obtainable via `commit.author()`/committer) to the authenticated `Member`. `Member` has no email field today, so this requires a schema change: add an `email`/`git_identity` field to `Member` in `crates/gix-forge/src/member.rs`, populated at member-creation time. Once `Member.email` exists, grouping is a straightforward match against each ref's tip-commit committer email against `auth::authenticated_member` — small once the schema lands. "Others" is simply "not mine, not machine." "Machine" has two viable mechanics needing a product call: (a) naming convention (refs matching a configurable pattern like `refs/heads/bot/*`), zero schema change but fragile/spoofable; (b) an explicit `is_bot`/`kind` flag on `Member`, more principled but requires bot accounts to be enrolled as Members with commits attributed to them.
+
+## The CI/gates question (needs a human product decision)
+
+No CI system, webhook receiver, or local check-runner exists anywhere in this codebase today, and this blocks both "gate predictions" in Domain B and per-ref CI badges in Domain H identically. Three options:
+
+- **(a) External CI integration** — a webhook receiver (GitHub Actions/GitLab CI/Buildkite/etc. POST status to a route) or a polling client against an external API. Pros: matches what "CI badge"/"gate prediction" visually implies in the design; scales to real test suites. Cons: no specific system is named anywhere in the design docs or codebase; requires picking a protocol, storing external credentials, and a new entity (e.g. `CheckRun`/`GateResult`) with sync/webhook plumbing — genuinely large, open-ended scope.
+- **(b) Local pre-push checks run by the CLI itself** — `git-forge` gains a `check`/`gate` subcommand that runs configured lint/test/build commands and reports pass/fail + timing, invoked by a real pre-push hook and/or on-demand from the UI. Pros: no external dependency, fully within this repo's control, matches "would-pass/would-fail... last-run timing" language in the design spec. Cons: doesn't map cleanly to "CI ref badges" for other people's branches unless results are published somewhere (a ref, a note) other members' UIs can read — some sync mechanism is still needed even here.
+- **(c) No CI concept at all** — retire "gate predictions" and "CI ref badges" from scope entirely and redesign those UI slots. Pros: zero new engineering. Cons: contradicts the design spec's explicit data model (`gates[]`, `Ref.ciState?`) and the redesign's acceptance criterion for the failing-gate explanation — would need explicit design sign-off to descope.
+
+## New dependencies/schema changes required
+
+`gix` `status` feature (+ transitive crates) for dirty-file detection; `Member.email`/`git_identity` field (schema/entity change in `gix-forge`) for Mine/Machine grouping; if CI option (a) or (b) is chosen, a new entity to store check/gate results plus either webhook-receiver routes or a CLI check-runner subcommand and a way to publish local results for other viewers to see.
+
+## Open product/UX questions
+
+- Which CI option (a/b/c)?
+- If (b), where do results get published for cross-member visibility — a ref, a `refs/notes/*` namespace, something else?
+- Should "Machine" use naming convention or an explicit Member flag?
+- Does a branch with no configured upstream get its own refs-pane/working-copy treatment, or fold into "Others"/"no upstream" implicitly?
+- Is a second diff pass per dirty file acceptable on every working-copy page load, or does it need caching?
+
+## Complexity
+
+Non-CI parts (unpushed-commit revwalk, dirty-file status + diffstat, refs grouping mechanics once `Member.email` exists) are collectively small-to-medium, each independently shippable. The CI-dependent parts (gate predictions, CI ref badges) are large and blocked on a product decision — effort ranges from near-zero (option c, redesign away) to a multi-week integration (option a), with option (b) in between but still requiring a cross-member result-publishing mechanism.
