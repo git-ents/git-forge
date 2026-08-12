@@ -6,6 +6,7 @@ use std::fmt;
 
 use facet::Facet;
 use facet_git_tree::normal_form::{self, NormalForm};
+use facet_git_tree::{RawBlob, RawTree};
 use gix::ObjectId;
 
 use crate::comment::Commentable;
@@ -30,7 +31,7 @@ pub struct StoredReview {
     body: String,
     reviewers: Vec<String>,
     requesters: Vec<String>,
-    target: ReviewTarget,
+    target: StoredReviewTarget,
     edit: Option<String>,
 }
 
@@ -48,7 +49,7 @@ impl Entity for Review {
             body: self.body.clone(),
             reviewers: self.reviewers.clone(),
             requesters: self.requesters.clone(),
-            target: self.target.canonicalized(),
+            target: self.target.canonicalized().into(),
             edit: self.edit.clone(),
         }
     }
@@ -77,7 +78,7 @@ impl Entity for Review {
             body: stored.body,
             reviewers: stored.reviewers,
             requesters: stored.requesters,
-            target: stored.target,
+            target: stored.target.into(),
             edit: stored.edit,
         }
     }
@@ -135,6 +136,95 @@ pub enum ReviewTarget {
     TreeRange { base: PinnedTree, tip: PinnedTree },
     Commits(Vec<ExactOid>),
     CommitRange { base: ExactOid, tip: ExactOid },
+}
+
+#[derive(Debug, Clone, Facet)]
+#[repr(u8)]
+enum StoredReviewTarget {
+    Blobs(Vec<StoredBlob>),
+    Trees(Vec<StoredTree>),
+    TreeRange { base: RawTree, tip: RawTree },
+    Commits(Vec<ExactOid>),
+    CommitRange { base: ExactOid, tip: ExactOid },
+}
+
+#[derive(Debug, Clone, Facet)]
+struct StoredBlob {
+    path: String,
+    oid: RawBlob,
+}
+
+#[derive(Debug, Clone, Facet)]
+struct StoredTree {
+    oid: RawTree,
+}
+
+impl From<ReviewTarget> for StoredReviewTarget {
+    fn from(target: ReviewTarget) -> Self {
+        match target {
+            ReviewTarget::Blobs(items) => Self::Blobs(
+                items
+                    .into_iter()
+                    .map(|item| StoredBlob {
+                        path: item.path,
+                        oid: RawBlob::new(item.oid.oid()),
+                    })
+                    .collect(),
+            ),
+            ReviewTarget::Trees(items) => Self::Trees(
+                items
+                    .into_iter()
+                    .map(|item| StoredTree {
+                        oid: RawTree::new(item.oid.oid()),
+                    })
+                    .collect(),
+            ),
+            ReviewTarget::TreeRange { base, tip } => Self::TreeRange {
+                base: RawTree::new(base.oid.oid()),
+                tip: RawTree::new(tip.oid.oid()),
+            },
+            ReviewTarget::Commits(items) => Self::Commits(items),
+            ReviewTarget::CommitRange { base, tip } => Self::CommitRange { base, tip },
+        }
+    }
+}
+
+impl From<StoredReviewTarget> for ReviewTarget {
+    fn from(target: StoredReviewTarget) -> Self {
+        match target {
+            StoredReviewTarget::Blobs(items) => Self::Blobs(
+                items
+                    .into_iter()
+                    .map(|item| PinnedBlob {
+                        path: item.path,
+                        oid: ExactOid::parse(&item.oid.oid().to_string())
+                            .expect("RawBlob contains an exact object id"),
+                    })
+                    .collect(),
+            ),
+            StoredReviewTarget::Trees(items) => Self::Trees(
+                items
+                    .into_iter()
+                    .map(|item| PinnedTree {
+                        oid: ExactOid::parse(&item.oid.oid().to_string())
+                            .expect("RawTree contains an exact object id"),
+                    })
+                    .collect(),
+            ),
+            StoredReviewTarget::TreeRange { base, tip } => Self::TreeRange {
+                base: PinnedTree {
+                    oid: ExactOid::parse(&base.oid().to_string())
+                        .expect("RawTree contains an exact object id"),
+                },
+                tip: PinnedTree {
+                    oid: ExactOid::parse(&tip.oid().to_string())
+                        .expect("RawTree contains an exact object id"),
+                },
+            },
+            StoredReviewTarget::Commits(items) => Self::Commits(items),
+            StoredReviewTarget::CommitRange { base, tip } => Self::CommitRange { base, tip },
+        }
+    }
 }
 
 impl ReviewTarget {
@@ -212,7 +302,8 @@ impl ReviewTarget {
     /// Return the canonical identity: a single object uses its own OID;
     /// compound targets use facet-git-tree's frozen normal form.
     pub fn target_id(&self) -> Result<ObjectId, Error> {
-        let empty = match self {
+        let target = self.canonicalized();
+        let empty = match &target {
             Self::Blobs(items) => items.is_empty(),
             Self::Trees(items) => items.is_empty(),
             Self::Commits(items) => items.is_empty(),
@@ -221,10 +312,10 @@ impl ReviewTarget {
         if empty {
             return Err(Error::InvalidTarget("empty target collection".into()));
         }
-        if let Some(oid) = self.single_oid() {
+        if let Some(oid) = target.single_oid() {
             return Ok(oid);
         }
-        let descriptor = self.canonicalized().descriptor();
+        let descriptor = target.descriptor();
         normal_form::hash(&descriptor)
             .map(|(oid, _)| oid)
             .map_err(|error| Error::InvalidTarget(format!("failed to hash review target: {error}")))
@@ -383,6 +474,7 @@ mod tests {
     use super::*;
     use crate::entity::EntityOps;
     use crate::{Authorization, Principal, open_store};
+    use facet_git_tree::{EntryKind, ObjectStore, serialize_into};
 
     fn auth() -> Authorization {
         Authorization::new(Principal::member_id("alice"))
@@ -514,6 +606,127 @@ mod tests {
             ])
             .target_id()
             .unwrap()
+        );
+    }
+
+    fn stored_review(target: ReviewTarget) -> StoredReview {
+        StoredReview {
+            status: "open".into(),
+            body: "body".into(),
+            reviewers: vec![],
+            requesters: vec![],
+            target: target.canonicalized().into(),
+            edit: None,
+        }
+    }
+
+    fn child_tree(store: &ObjectStore, root: &ObjectId, name: &str) -> ObjectId {
+        store
+            .get_tree(root)
+            .expect("root tree")
+            .into_iter()
+            .find(|entry| entry.filename == name)
+            .expect("tree entry")
+            .oid
+    }
+
+    #[test]
+    fn retained_blob_and_tree_targets_are_direct_edges() {
+        let blob = oid(1).oid();
+        let tree = oid(2).oid();
+
+        let blob_store = ObjectStore::default();
+        let blob_root = serialize_into(
+            &stored_review(ReviewTarget::Blobs(vec![PinnedBlob {
+                path: "src/lib.rs".into(),
+                oid: ExactOid::parse(&blob.to_string()).unwrap(),
+            }])),
+            &blob_store,
+        )
+        .expect("serialize blob review");
+        let blob_target = child_tree(&blob_store, &blob_root, "target");
+        let blob_variant = child_tree(&blob_store, &blob_target, "Blobs");
+        let blob_item = child_tree(&blob_store, &blob_variant, "0000");
+        let blob_entry = blob_store
+            .get_tree(&blob_item)
+            .expect("blob item tree")
+            .into_iter()
+            .find(|entry| entry.filename == "oid")
+            .expect("blob oid entry");
+        assert_eq!(blob_entry.mode.kind(), EntryKind::Blob);
+        assert_eq!(blob_entry.oid, blob);
+
+        let tree_store = ObjectStore::default();
+        let tree_root = serialize_into(
+            &stored_review(ReviewTarget::Trees(vec![PinnedTree {
+                oid: ExactOid::parse(&tree.to_string()).unwrap(),
+            }])),
+            &tree_store,
+        )
+        .expect("serialize tree review");
+        let tree_target = child_tree(&tree_store, &tree_root, "target");
+        let tree_variant = child_tree(&tree_store, &tree_target, "Trees");
+        let tree_item = child_tree(&tree_store, &tree_variant, "0000");
+        let tree_entry = tree_store
+            .get_tree(&tree_item)
+            .expect("tree item tree")
+            .into_iter()
+            .find(|entry| entry.filename == "oid")
+            .expect("tree oid entry");
+        assert_eq!(tree_entry.mode.kind(), EntryKind::Tree);
+        assert_eq!(tree_entry.oid, tree);
+    }
+
+    #[test]
+    fn tree_range_retains_base_and_tip_as_direct_entries() {
+        let base = oid(2).oid();
+        let tip = oid(3).oid();
+        let store = ObjectStore::default();
+        let root = serialize_into(
+            &stored_review(ReviewTarget::TreeRange {
+                base: PinnedTree {
+                    oid: ExactOid::parse(&base.to_string()).unwrap(),
+                },
+                tip: PinnedTree {
+                    oid: ExactOid::parse(&tip.to_string()).unwrap(),
+                },
+            }),
+            &store,
+        )
+        .expect("serialize tree range review");
+        let target = child_tree(&store, &root, "target");
+        let range = child_tree(&store, &target, "TreeRange");
+        let entries = store.get_tree(&range).expect("tree range tree");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].filename, "base");
+        assert_eq!(entries[0].mode.kind(), EntryKind::Tree);
+        assert_eq!(entries[0].oid, base);
+        assert_eq!(entries[1].filename, "tip");
+        assert_eq!(entries[1].mode.kind(), EntryKind::Tree);
+        assert_eq!(entries[1].oid, tip);
+    }
+
+    #[test]
+    fn commit_targets_preserve_ids_without_reachability_edges() {
+        let commit = oid(4).oid();
+        let store = ObjectStore::default();
+        let root = serialize_into(
+            &stored_review(ReviewTarget::Commits(vec![
+                ExactOid::parse(&commit.to_string()).unwrap(),
+            ])),
+            &store,
+        )
+        .expect("serialize commit review");
+        let target = child_tree(&store, &root, "target");
+        let commits = child_tree(&store, &target, "Commits");
+        let entry = &store.get_tree(&commits).expect("commit collection tree")[0];
+        assert_eq!(entry.mode.kind(), EntryKind::Tree);
+        assert_ne!(entry.oid, commit);
+
+        let stored: StoredReview = facet_git_tree::deserialize(&root, &store).expect("deserialize");
+        assert_eq!(
+            ReviewTarget::from(stored.target),
+            ReviewTarget::Commits(vec![ExactOid::parse(&commit.to_string()).unwrap()])
         );
     }
 
