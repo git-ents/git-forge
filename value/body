@@ -1,0 +1,37 @@
+Un-stub the v3 UI redesign — Domain K: Issue label colors (/issues)
+
+## Current state
+
+`Issue.labels` (`crates/gix-forge/src/issue.rs`) is `Vec<String>` — free text, no color, no dedicated `Label` type, and no repo-wide label registry. Storage round-trips it as-is with no other metadata attached.
+
+The CLI (`crates/git-forge/src/main.rs`) has no `label` subcommand. Labels are entered inline as repeated `--label` flags on `issue new`/`issue edit`, or comma-separated via an interactive prompt that autocompletes against labels scraped from existing issues. There is no create/configure-a-label flow anywhere.
+
+The UI (`crates/git-forge-ui/src/pages/issues.rs`) renders labels as neutral `<span class="label-chip">` with no color/style variation, in both the list row and issue detail tag row. The `IssueForm` also treats labels as a single comma-separated text input.
+
+The design spec's own data model already anticipates this: `Issue { ..., labels[{text, color}], ... }` — the design was built assuming labels carry color; the v3 pass stubbed it because the backend didn't support it.
+
+`gix-forge/src/entity.rs` has no in-repo schema-versioning/migration precedent for widening a field's type beyond the schema-publish mechanism itself, which lives in the external `gix-store` crate — there's no in-repo precedent to model a `Vec<String>` → richer-type migration against; it would need to be worked out against `gix-store`'s facet-based schema publishing.
+
+## Option 1: hash-derived deterministic color
+
+Purely presentational, no schema change. The UI hashes the label string and maps it into a fixed palette at render time. Same text always yields the same color; zero storage or CLI changes.
+
+Key constraint from the design spec's Semantic color table: `ok`/`warn`/`danger`/`oid`/`mauve` are explicitly "do not repurpose" — each has a fixed meaning (validity, ci state, anchor kind, etc.) elsewhere in the UI, so reusing them for arbitrary label hashing risks a label coincidentally rendering in `danger` red with no relation to "unsigned"/"would-fail," confusing that vocabulary. This needs a separate, dedicated label palette (new tokens, not the semantic ones), sized to keep collisions of similar-but-unrelated labels visually distinct.
+
+Tradeoffs: consistent but uncontrollable — users can't pick a label's color, similar labels can clash or look confusingly alike, and the palette is a new design surface to define.
+
+Effort: small. Pure front-end change — a hash function, a new palette constant, and a CSS/inline-style hookup in two render sites. No entity, store, or CLI change.
+
+## Option 2: genuine per-label metadata
+
+Requires either (a) widening `Issue.labels` to `Vec<{text, color}>`/a struct, or (b) a first-class repo-wide `Label` entity (own `Entity` impl, id/name/color) referenced by issues — the latter keeps color consistent across issues rather than duplicated per-issue-per-label. Needs: schema change plus migration of existing `Vec<String>` data (no in-repo migration pattern to reuse directly; would need new work against gix-store's schema evolution), a new CLI surface (`git forge label new/ls/edit`, and updated `issue new --label` to reference/validate existing labels), and UI form/detail changes to set and display colors (picker or restricted swatch list, plus updated `IssueForm`).
+
+Effort: medium. New entity type + CRUD + capability wiring (creates/updates/deletes need `Capability` entries analogous to Issue/Review/Comment), a migration path for existing string-only labels, new CLI subcommand tree, and UI form/list/detail rendering changes.
+
+## Open product question
+
+Should label color be automatic/deterministic (Option 1) or user-configured (Option 2)? If user-configured, is color per-issue (simple, but the same label text could show different colors on different issues) or a repo-wide label registry (consistent, but adds a new entity kind and CLI surface)? This is a product decision, not resolved by this research — both options are laid out above without a recommendation.
+
+## Complexity
+
+Option 1: Small. Option 2: Medium. Pick one before implementation.
