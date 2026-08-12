@@ -1,371 +1,200 @@
-# Design: anchored code reviews
+# Design: code reviews
 
 ## Summary
 
-A code review is a mutable, typed `gix-store` document whose scope is captured as one or more inline `git-anchor` bindings.
-A reviewer’s approval or request for changes is **not** a field on that document: it is a separate, signed `git-attest` claim over the review scope.
+A code review is an issue-like, mutable `gix-store` document with a typed `target` field.
+Interactions with the review are separate objects:
 
-This gives the feature four clear responsibilities:
+- comments are `Comment` entities linked to the review;
+- code comments are review comments with an optional inline anchor binding;
+- approvals and denials are signed `gix-attest` claims about the review target.
 
-- **Store** owns the review request document, schema, history, and CAS writes.
-- **Anchor** owns durable content identity and projection through repository history.
-- **Attest** owns signed reviewer passes, key validity, chaining, and revocation primitives.
-- **Query** joins reviews, projected anchors, members, and verified passes to derive facts such as `approved`, `reviewed`, and `mergeable`.
+The review document does not contain verdicts, passes, approval counts, or merge policy.
+Queries and gates may interpret these objects later, but they are separate features.
 
-The central invariant is:
+## Review document
 
-> A mutable review describes a request; only a verified, policy-eligible pass can count as a reviewer decision.
-
-This proposal is intentionally explicit about what is not yet implemented. `gix-forge` currently has typed reviews and anchored comments, but its `ReviewTarget` contains bare object-id strings, it does not depend on `gix-attest`, and its installed review rules are not backed by real forge-emitted claims.
-
-## Goals and non-goals
-
-### Goals
-
-1. Review immutable Git material or a precisely defined change scope.
-2. Preserve review scope as history changes, with bound, rebound, or orphaned outcomes rather than silently changing meaning.
-3. Support these scopes:
-   - one or more blobs;
-   - one or more trees/subtrees;
-   - a tree range;
-   - one or more commits;
-   - a commit range.
-4. Allow multiple independent passes by different users.
-5. Make approvals auditable, cryptographically verifiable, revocable, and policy-dependent.
-6. Keep existing review comments as separate entities, with their inline bindings and review subject.
-7. Make exact versus projected approval visible to query clients and the UI.
-
-### Non-goals
-
-- Storing the current approval verdict on `Review`.
-- Making a review pass imply approval of future commits automatically.
-- Defining one universal merge policy in `gix-forge`.
-- Embedding comments or passes into the review document.
-- Reimplementing anchor identity, projection, or signature verification in forge.
-
-## Proposed data model
-
-### Review request
-
-Keep `Review` as the user-facing workflow document under:
+Keep `Review` under:
 
 ```text
 refs/forge/review/<review-id>
 ```
 
-The existing fields remain conceptually appropriate:
+Its behavior is the same as an issue: typed storage, ordinary entity CRUD, Git-backed history, and comments through `Commentable`.
+The current shape is already close:
 
 ```rust
 pub struct Review {
     pub id: String,
-    pub status: ReviewStatus,
+    pub status: String,
     pub body: String,
-    pub reviewers: Vec<MemberId>,
-    pub requesters: Vec<MemberId>,
-    pub scope: ReviewScope,
+    pub reviewers: Vec<String>,
+    pub requesters: Vec<String>,
+    pub target: ReviewTarget,
     pub edit: Option<String>,
 }
 ```
 
-`id` remains the ref-path identity and is omitted from `StoredReview`. `requesters` continue to determine ownership for ordinary review-document updates; being listed as a reviewer does not grant update or delete authority.
+Some workflow fields may change independently, but `target` remains part of the review document.
+Updating the document does not rewrite its comments or signed decisions.
 
-`status` describes the request lifecycle (`draft`, `open`, `closed`, `superseded`), not the result of any reviewer pass.
-The exact enum and compatibility defaults should be finalized before schema publication; replacing the current free-form `String` is desirable but can be staged separately.
+## Review target
 
-### Review scope
+`ReviewTarget` is a typed description of the exact Git material being reviewed.
+It does not need an anchor: blobs, trees, and commits already have immutable content identities.
 
-Replace the current stringly `ReviewTarget` semantics with a typed `ReviewScope` whose serialized form contains a versioned, canonical identity portion and descriptive hints.
-The identity portion must use the store’s restricted identity normal form and must not be derived from `Display` output or an evolving general-purpose Facet representation.
-
-Conceptually:
+The target vocabulary should cover these shapes:
 
 ```rust
-pub enum ReviewScope {
-    Blobs { items: Vec<AnchorBinding> },
-    Trees { items: Vec<AnchorBinding> },
-    TreeRange { base: AnchorBinding, tip: AnchorBinding },
-    Commits { items: Vec<AnchorBinding> },
-    CommitRange { base: AnchorBinding, tip: AnchorBinding },
+pub enum ReviewTarget {
+    Blobs(Vec<PinnedBlob>),
+    Trees(Vec<PinnedTree>),
+    TreeRange {
+        base: PinnedTree,
+        tip: PinnedTree,
+    },
+    Commits(Vec<GitOid>),
+    CommitRange {
+        base: GitOid,
+        tip: GitOid,
+    },
 }
 ```
 
-`AnchorBinding` is a forge-level wrapper around the applicable `gix_anchor::Binding` shape.
-It is not a stored anchor reference and it does not contain a separately persisted anchor id.
-Each binding is embedded in the review document, so the review cannot dangle if an index or derived anchor lookup disappears.
+Single-object targets are one-element collections.
+A GitHub-style pull request target is normally `CommitRange { base, tip }`, where `base` is the target branch commit and `tip` is the feature branch commit.
+Forge records those endpoints; ancestry and diff interpretation belong elsewhere.
 
-The concrete binding constructors must be supplied by `gix-anchor` for object and range scopes where the current `Position` binding is insufficient.
-They should capture, at minimum:
+The exact Rust wrappers and serialized variant names can be finalized during implementation.
+The important distinction is between direct Git object links and scalar commit IDs.
 
-- the genesis revision at which the scope was captured;
-- the object/path/span identity needed for stable matching;
-- algorithm and capture hints as non-identity metadata;
-- endpoint ordering and range semantics for composite scopes.
+### Object retention
 
-A scope has one identity per anchored item.
-For a multi-blob or multi-tree review, the canonical identity is an ordered or explicitly sorted list of child identities; the choice must be frozen and tested.
-The order should normally be canonicalized so equivalent sets cannot produce different target keys.
+Blob and tree targets should be embedded as real entries in the review's typed target tree.
+Those Git edges make the objects reachable from the review ref.
+A tree range is a small structured tree whose `base` and `tip` entries point directly to the endpoint trees.
 
-#### Scope semantics
+`facet-git-tree` already supports direct tree links through `RawTree`.
+It needs the equivalent typed passthrough for blobs, or a target-specific structured-tree codec that preserves blob entries.
 
-The five variants have these meanings:
+Commits cannot be retained by ordinary blob or tree entries.
+Gitlinks name commits but are not repository reachability edges.
+The initial model therefore assumes reviewed commits remain reachable through repository refs.
+If repositories need stronger retention later, they can add explicit keep refs such as `refs/jj/keep/*` without changing the review interaction model.
 
-- **Blobs**: approval covers the listed blob contents, optionally with path hints when path-at-capture is part of the contract.
-- **Trees**: approval covers the listed tree or subtree contents.
-  A subtree must include its normalized path; a root tree alone is not enough to identify a subtree.
-- **TreeRange**: approval covers the transition from a captured base tree to a captured tip tree.
-  It is not an arbitrary pair of unrelated trees.
-- **Commits**: approval covers the listed commit identities as individual immutable objects.
-- **CommitRange**: approval covers a directed transition from `base` to `tip`, with explicit ancestry, endpoint inclusion, and traversal policy.
+## Comments
 
-The design should reject or explicitly mark invalid ranges when endpoints are missing or the required ancestry relation cannot be established.
-It must define whether equal endpoints represent an empty scope and whether merge traversal is first-parent or full graph traversal.
-Those semantics are part of the target identity/policy contract, not UI behavior.
-
-The existing variants `BaseTipTreePair` and `BaseTipCommitPair` can be read through a compatibility adapter, but new documents should use the versioned scope vocabulary.
-Existing target strings must never be reinterpreted under new rules.
-
-### Anchor identity and projection
-
-The review stores bindings inline, following the existing `Comment.binding` pattern.
-The anchor id is computed from the binding identity subtree when needed; it is not an additional field and must not be used as a foreign key to a stored anchor entity.
-
-At capture time, the API should require an explicit repository revision (defaulting to the resolved HEAD only in CLI convenience paths) and return the captured scope plus its genesis revision.
-At read/query time, clients choose a projection revision:
+Comments remain ordinary forge `Comment` entities linked by subject:
 
 ```text
-project(scope, revision) -> candidates with oracle and confidence
+review:<review-id>
 ```
 
-The anchor oracle supplies candidates; policy decides whether a candidate is acceptable.
-The UI should distinguish at least:
+Two existing forms cover review discussion:
 
-- `exact`: the original identity is present;
-- `rebound`: a projected candidate is being used, with oracle and confidence;
-- `orphaned`: no acceptable candidate exists;
-- `ambiguous`: multiple candidates require a manual pin.
+- a review-level comment has the review subject and no binding;
+- a code comment has the review subject and an inline `gix_anchor::Binding` locating the relevant code.
 
-A rebound scope must not silently count as an exact approval.
-Query should expose both the projection and its confidence so a repository rule can choose a threshold or require a manual rebind pin.
-A pin is an attest claim or other authoritative effect, not a mutation of the original review document.
+Anchors are useful for code locations that may be projected through edits.
+They are not the identity or storage mechanism for the review target itself.
 
-## Review passes
+## Approvals and denials
 
-### Separate signed assertion
-
-Add a forge-owned typed payload, for example:
+An approval or denial is a separate signed attestation, not a mutation of `Review`.
+Forge owns a small typed payload:
 
 ```rust
-pub struct ReviewPass {
+pub struct ReviewDecision {
     pub review_id: String,
     pub verdict: ReviewVerdict,
-    pub summary: Option<String>,
-    pub protocol: String,
+    pub message: Option<String>,
 }
 
 pub enum ReviewVerdict {
     Approve,
-    RequestChanges,
-    Comment,
+    Deny,
 }
 ```
 
-The pass is serialized under a dedicated schema/payload kind such as `review-pass`.
-It is not a `Review` entity and should not be written through ordinary review `save` semantics.
-
-The attest envelope targets the canonical identity of the complete review scope:
+The attest envelope targets the reviewed Git material itself:
 
 ```text
-kind: review-scope-v1
-id: hash(canonical scope identity)
-payload kind: review-pass
-payload: ReviewPass tree
-signer: signing-key claim
-chain: target claim chain
+target: exact blob, tree, tree range, commit, or commit range
+payload kind: review-decision
+payload: ReviewDecision
+signer: reviewer's signing key
 ```
 
-`review_id` provides discussion and workflow context.
-It is not a substitute for the attest target.
-If a pass includes a duplicate scope descriptor for export/debugging, query must reject a payload/envelope mismatch rather than choosing one silently.
+For a single blob, tree, or commit, the target ID is its Git object ID.
+For a collection or range, the target ID is the store hash of its canonical typed target descriptor, following `gix-attest`'s existing compound-target convention.
+The target kind distinguishes these shapes.
 
-The pass should be append-only.
-Revoking a pass creates a revocation claim; deleting or editing the review request must not erase the historical decision.
-Multiple users can therefore publish independent passes on the same scope without contending on the mutable review ref.
+`review_id` links the interaction to the review discussion and workflow.
+The attest target says exactly what material the signer approved or denied.
 
-### “By other users” policy
+Each user publishes an independent signed claim.
+Claims are append-only interactions; they are not embedded in the mutable review document and do not contend on the review ref.
+Revocation, if used, is another attest-chain operation.
 
-A cryptographically valid signer is not automatically a forge member.
-The query layer needs an explicit bridge from signing-key claims to member identities, for example:
+## API sketch
 
-```text
-member_key(Member, KeyClaim)
-```
-
-A pass counts only when the selected policy establishes all required conditions:
-
-1. the signature and claim chain verify;
-2. the signing key is valid under the policy’s as-of point;
-3. the key is associated with a forge member;
-4. the member is eligible for this review/repository;
-5. self-approval is accepted or rejected according to policy;
-6. the pass has not been revoked;
-7. the target is exact or its projection satisfies the configured confidence/pin policy.
-
-The mutable `reviewers` list is an input to eligibility, not proof of identity or authority.
-A future repository policy may use code owners, teams, or required reviewer sets instead.
-
-## Query vocabulary and derived policy
-
-Forge should contribute typed facts rather than force consumers to parse `ReviewTarget` display strings:
-
-```text
-review(R)
-review_status(R, Status)
-review_requester(R, Member)
-review_reviewer(R, Member)
-review_scope(R, ScopeKey)
-review_scope_kind(R, Kind)
-
-review_pass(C)
-review_pass_review(C, R)
-review_pass_verdict(C, Verdict)
-
-claim_verified(C)
-claim_target(C, ScopeKey)
-claim_signer(C, KeyClaim)
-member_key(Member, KeyClaim)
-```
-
-The query host should decode `review-pass`, not treat the mutable `review` document as a verdict payload.
-This fixes the current mismatch where installed review rules refer to a `verdict` field that the actual `Review` does not contain and forge has no attest integration to populate.
-
-Derived predicates should be policy modules, versioned under the query rule refs:
-
-```text
-exact_pass(Scope, Claim)
-projected_pass(Scope, Claim, Confidence)
-approval(Scope, Member)
-reviewed(Scope)
-mergeable(Commit)
-```
-
-A simple policy could require one eligible exact approval and no effective request for changes.
-Another could require two distinct code-owner approvals.
-Neither should be hard-coded into `Review`, `gix-attest`, or the anchor oracle.
-
-For ranges, the rule must state whether approval covers the range atomically or all changed material.
-If the latter is desired, query needs an explicit relation such as:
-
-```text
-changed_item(CommitRange, BlobOrTreeScope)
-covers(ReviewScope, BlobOrTreeScope)
-```
-
-An approval for `base..tip` must not automatically apply to `base..new-tip`.
-Projection can be offered as a named policy mode, but it must preserve confidence and orphan/ambiguity diagnostics.
-
-Query cache inputs must include review refs, claim/key/member refs, rule ref state, and any Git/anchor state used for projection.
-A revocation, key association change, new pass, or rule change must invalidate a previously derived approval.
-
-## API and UX proposal
-
-### Library API
-
-Add explicit capture and pass operations while retaining synchronous `&gix::Repository` boundaries:
+The forge API should expose the three concepts directly:
 
 ```rust
-Review::create_with_scope_as(repo, auth, draft, capture) -> Result<ReviewId>
-Review::scope_at(repo, review, revision) -> Result<ProjectedScope>
-ReviewPass::publish_as(repo, auth, review_id, verdict, summary) -> Result<ClaimId>
-ReviewPass::revoke_as(repo, auth, claim_id, reason) -> Result<ClaimId>
+Review::create_in_repo_as(repo, auth, review)
+review.add_comment_as(repo, auth, body)
+review.add_anchored_comment_as_at(repo, auth, revision, path, lines, body)
+ReviewDecision::approve_as(repo, auth, review_id, message)
+ReviewDecision::deny_as(repo, auth, review_id, message)
 ```
 
-Publishing must atomically stage the typed payload, create/sign the attest envelope, append it with CAS, and return only after the claim is authoritative.
-A failed step must not report a created pass.
+Publishing a decision loads the review, derives the attest target from its typed `target` field, writes the typed payload, and signs the claim.
+The signing identity comes from authenticated configuration, never from a caller-supplied author string.
 
-Suggested capabilities are `ReviewPassCreate` and `ReviewPassRevoke`; pass creation is not review-document ownership.
-The signing key must be configured and associated with the authenticated member.
+## Explicitly separate features
 
-### CLI and UI
+This design does not define:
 
-Extend review creation to capture a scope from an explicit revision and one or more typed selectors.
-Preserve current target syntax as a compatibility input, but display the canonical scope kind and projection state.
+- reviewer eligibility or self-approval policy;
+- quorum or required approval counts;
+- how conflicting or repeated decisions are interpreted;
+- whether a review is currently approved;
+- whether a branch is mergeable;
+- query predicates or cache invalidation;
+- merge gates or `git-effect` execution;
+- carrying approval onto changed targets.
 
-Review detail should show:
+Those are query and gate concerns built over the stored review, comments, and attestations.
+They do not require additional review-document machinery.
 
-- captured revision and scope items;
-- exact/rebound/orphaned/ambiguous status;
-- each pass, signer member, verdict, verification status, and revocation status;
-- the policy explanation for whether the review is currently `reviewed`;
-- comments separately, including their existing anchored locations.
+## Implementation plan
 
-“Approve” and “Request changes” must be distinct signed actions, not mutations of `Review.status`.
-The UI should never display a pass as trusted solely because a signer string was supplied by the client.
+1. Finalize the small `ReviewTarget` vocabulary and canonical compound-target encoding.
+2. Add direct typed blob retention alongside the existing `RawTree` support.
+3. Adapt the existing `ReviewTarget` variants without changing the review entity model.
+4. Register the `review-decision` payload schema and integrate `gix-attest` into forge.
+5. Add authenticated approve and deny library operations and CLI commands.
+6. Test review comments, code comments, object retention, target derivation, signing, and revocation independently.
 
-## Schema and migration plan
+## Tests
 
-1. **Stabilize scope identity.**
-   Define `review-scope-v1`, canonical ordering, path normalization, OID validation, range semantics, and golden target-key tests.
-   Keep existing `ReviewTarget` readable through a compatibility adapter.
-2. **Add inline scope bindings.**
-   Extend `StoredReview` additively with an optional versioned scope/binding field.
-   Old reviews remain readable and are shown as legacy, exact-object targets without rebound semantics until recaptured.
-3. **Add the `review-pass` payload schema.**
-   Register it in forge and add the attest dependency/integration.
-   Do not make merge gates depend on it yet.
-4. **Wire query facts and rules.**
-   Decode verified passes, associate keys to members, define revocation/as-of policy, and expose explainable exact/projected results.
-5. **Enable policy enforcement.**
-   Update the versioned `reviewed`/`mergeable` rules and only then connect them to `git-effect` gates.
-6. **Offer recapture/rebind.**
-   Never rewrite old bindings or target keys.
-   A new capture or manual pin creates a new authoritative record/claim and leaves the original audit trail intact.
+The core feature should verify:
 
-Changing target identity, range ordering, path inclusion, or OID normalization requires `review-scope-v2`; existing attest claims must retain their v1 meaning forever.
+- every target shape round-trips through `gix-store`;
+- blob and tree objects remain reachable through the review document tree;
+- commit targets preserve their exact IDs without claiming reachability;
+- review-level and anchored code comments remain linked to the review;
+- approval and denial payloads link to the review but attest the exact target;
+- different users can publish independent decisions for the same target;
+- editing or deleting a review does not rewrite existing interaction objects;
+- malformed targets and unsigned or invalidly signed decisions are rejected.
 
-## Testing strategy
+## Open target details
 
-### Store and anchor
+Before implementation, settle only the representation details required for stable target IDs:
 
-- Round-trip every scope variant through the published schema.
-- Verify old review documents remain readable and retain their ids.
-- Verify bindings are inline and no anchor foreign key is required.
-- Capture at a known revision, project after edits, and distinguish exact, rebound, orphaned, and ambiguous outcomes.
-- Verify canonical ordering and deterministic scope keys.
-- Reject invalid object types, missing objects, malformed paths, invalid ranges, and ambiguous target descriptors.
-
-### Attest and identity
-
-- Valid signed passes become facts; bad or missing signatures do not.
-- A pass from an unassociated key does not count as a member pass.
-- Self-approval follows the configured policy.
-- Revocation removes a pass from effective policy without deleting its history.
-- Key rotation and as-of validity produce the documented result.
-- Concurrent pass writers preserve both claims through CAS chaining.
-- Payload kind is exactly `review-pass`; request documents cannot be decoded as passes.
-
-### Query and end-to-end
-
-- Exact approvals satisfy the selected one- and multi-reviewer policies.
-- Request-changes blocks a policy when configured to do so.
-- Duplicate passes by one member do not satisfy a distinct-reviewer quorum.
-- A changed exact target invalidates the old approval.
-- A projected approval reports confidence and never silently becomes exact.
-- Claim, key, member, review, anchor, and rule changes invalidate cached results.
-
-The primary integration fixture should create a review, have an eligible second member publish a signed pass, verify `approval`/`reviewed`, revoke the pass, and verify the derived result disappears.
-It should then change the target and demonstrate that exact approval does not carry forward.
-
-## Open decisions
-
-Before implementation, the following must be recorded as protocol decisions rather than left to individual callers:
-
-- Whether multi-item scopes are sets or ordered sequences.
-- Whether blob path is identity or display-only metadata.
-- Whether a tree means a root tree, a subtree, or both.
-- Commit-range ancestry, endpoint inclusion, and merge traversal rules.
-- Whether projected approvals are supported initially or require a manual pin.
-- Member-to-key binding and key revocation semantics.
-- Whether `ReviewPass.summary` is included in the signed payload or stored only as discussion.
-- Which repository policies define eligibility, quorum, self-approval, and stale approvals.
-
-Resolving these decisions first prevents the most dangerous failure modes: treating mutable workflow state as signed authority, carrying an approval across a changed target, or allowing two consumers to derive different identities from the same review scope.
+- exact names and shapes of collection and range variants;
+- ordering rules for multi-object targets;
+- whether blob and subtree paths are descriptive fields;
+- canonical compound-target hashing;
+- the repository invariant for commit retention and whether keep refs are needed.
