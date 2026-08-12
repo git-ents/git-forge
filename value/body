@@ -1,0 +1,31 @@
+Un-stub the v3 UI redesign — Domain J: Comment/issue/review timestamps
+
+## Current state
+
+Confirmed by reading `crates/gix-forge/src/comment.rs`, `issue.rs`, and `review.rs` in full: none of `Comment`, `Issue`, or `Review` (nor their stored counterparts) carry any explicit `created_at`/`updated_at` field. The only time-adjacent field anywhere is `edit: Option<String>` (an edit-note string, not a timestamp). `crates/git-forge-ui/src/pages/issues.rs` already has a doc comment acknowledging this gap explicitly: "since `Comment` itself stores no per-comment signature or timestamp."
+
+But an implicit timestamp already exists one layer down, and it is not surfaced. `crates/gix-forge/src/entity.rs` confirms every entity is stored as a real git commit: `EntityOps::create_in_repo_as`/`save_as` call into `gix-store`'s write path, which bottoms out in a real commit-write with `author`/`committer` set to real `gix::actor::Signature`s carrying wall-clock timestamps, exactly like an ordinary `git commit`. Every create and every update (comments are editable via the CLI's `CommentCommand::Edit`) produces a new commit at the entity's ref, so the ref's history already encodes a full "created → edited → edited" timeline for free. The store's history-listing API returns commit ids tip-first; the oldest entry is creation, the tip is the current version's timestamp. The UI layer even has a ready-made formatter for this shape of data: `format_age()` in `crates/git-forge-ui/src/pages/files.rs`, already used for git commit ages elsewhere in the UI.
+
+What's missing is plumbing, not schema: the entity-loading path carries a commit id alongside the loaded value internally, but `EntityOps::rebuild()` discards it, keeping only the value. No commit's timestamp is ever read back out.
+
+## Target state
+
+Issue/Review/Comment detail views and comment threads show "created N ago" (and "edited N ago" when history length > 1), sourced from the underlying commit signatures — no new stored fields.
+
+## Technical approach
+
+Extend `Entity`/`EntityOps` to preserve provenance through `load`/`load_all`/`entries` (e.g. a `LoadedWith<Self>` or a sibling method returning `(Self, ObjectId)`/`Entry<Self>`), then resolve `created` from `history(id).last()` and `updated` from the tip commit id via `repo.find_commit(oid)?.time()` (author or committer time — author is more meaningful for "created," since a signed committer could differ). This is additive plumbing through an existing internal API, not a schema migration — no schema-versioning/field changes needed, so the schema-versioning/migration pattern used elsewhere in this codebase (confirmed precedented by the commit that added `edit: Option<String>` to all three entities) is not required for this feature. It would only become relevant if product later wants a timestamp independent of git authorship (e.g. imported/backfilled data).
+
+## New dependencies / schema changes
+
+None. This is a plumbing change through existing `gix-forge`/`gix-store` APIs plus UI wiring to the already-existing `format_age` helper — explicitly not a schema migration.
+
+## Open product/UX questions
+
+1. Created-only vs. created+updated — updated is cheap here since it's just the tip commit, but for Issue/Review "updated" conflates body edits with status/label/assignee changes; decide if that's acceptable or if a separate "activity" signal is wanted later.
+2. Author time vs. committer time when they diverge (e.g. imported history).
+3. Whether to expose full edit history (all commits) in the UI now that it's cheap to reach.
+
+## Complexity: Small
+
+The implicit-git-timestamp angle substantially shrinks this from how it might first appear — no new field, no migration, no backfill-compatibility concern for existing stored comments (their commits already have valid timestamps from when they were written). It's a plumbing change through existing `Entry`/history APIs plus UI wiring.
