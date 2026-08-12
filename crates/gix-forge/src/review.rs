@@ -652,8 +652,12 @@ impl fmt::Display for ReviewTarget {
 mod tests {
     use super::*;
 
-    use crate::{Authorization, Principal, open_store};
+    use crate::{
+        Authorization, Comment, Commentable, EntityOps, Principal, ReviewDecision, open_store,
+    };
     use facet_git_tree::{EntryKind, ObjectStore, serialize_into};
+    use std::io::Write;
+    use std::process::Command;
 
     fn auth() -> Authorization {
         Authorization::new(Principal::member_id("alice"))
@@ -961,5 +965,103 @@ mod tests {
         assert!(ReviewTarget::Commits(vec![]).target_id().is_err());
         assert!(ReviewTarget::Trees(vec![]).target_id().is_err());
         assert!(ReviewTarget::Blobs(vec![]).target_id().is_err());
+    }
+
+    #[test]
+    fn review_mutations_do_not_touch_comments_or_attest_decisions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::init_repo(dir.path());
+        let key = dir.path().join("review-signing-key");
+        let status = Command::new("ssh-keygen")
+            .args(["-q", "-t", "ed25519", "-N", ""])
+            .arg("-f")
+            .arg(&key)
+            .status()
+            .expect("run ssh-keygen");
+        assert!(status.success(), "ssh-keygen failed");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git/config"))
+            .expect("open repository config")
+            .write_all(
+                format!(
+                    "\n[gpg]\n\tformat = ssh\n[user]\n\tsigningkey = {}\n",
+                    key.display()
+                )
+                .as_bytes(),
+            )
+            .expect("configure signing key");
+        let repo = gix::open(dir.path()).expect("open repo");
+        let authorization = auth();
+        let mut review = Review {
+            id: String::new(),
+            status: "open".into(),
+            body: "original body".into(),
+            reviewers: vec![],
+            requesters: vec![],
+            target: ReviewTarget::Commits(vec![oid(1)]),
+            edit: None,
+        };
+        let review_id = review
+            .create_in_repo_as(&repo, &authorization)
+            .expect("create review");
+        review.id = review_id;
+        review = Review::load_from_repo(&repo, &review.id)
+            .expect("load created review")
+            .expect("created review exists");
+
+        let comment_id = review
+            .add_comment_as(&repo, &authorization, "review-level comment")
+            .expect("create review comment");
+        let comment_before = Comment::load_from_repo(&repo, &comment_id)
+            .expect("load comment")
+            .expect("comment exists");
+        assert_eq!(
+            comment_before.subject.as_deref(),
+            Some(format!("review:{}", review.id).as_str())
+        );
+        assert!(comment_before.binding.is_none());
+
+        let claim = ReviewDecision::approve_as(
+            &repo,
+            &authorization,
+            &review.id,
+            Some("approved independently".into()),
+        )
+        .expect("publish signed decision");
+        assert!(repo.find_commit(claim).is_ok(), "claim is not a commit");
+
+        let mut edited = review.clone();
+        edited.body = "edited body".into();
+        edited
+            .save_in_repo_as(&repo, &authorization)
+            .expect("edit review");
+        let comment_after_edit = Comment::load_from_repo(&repo, &comment_id)
+            .expect("reload comment after edit")
+            .expect("comment survives review edit");
+        assert_eq!(comment_after_edit.subject, comment_before.subject);
+        assert_eq!(comment_after_edit.body, comment_before.body);
+        assert!(
+            repo.find_commit(claim).is_ok(),
+            "decision survives review edit"
+        );
+
+        assert!(Review::delete_as(&repo, &review.id, &authorization).expect("delete review"));
+        assert!(
+            Review::load_from_repo(&repo, &review.id)
+                .expect("load deleted review")
+                .is_none()
+        );
+        let comment_after_delete = Comment::load_from_repo(&repo, &comment_id)
+            .expect("reload comment after delete")
+            .expect("comment survives review deletion");
+        assert_eq!(
+            comment_after_delete.subject.as_deref(),
+            Some(format!("review:{}", review.id).as_str())
+        );
+        assert!(
+            repo.find_commit(claim).is_ok(),
+            "decision survives review deletion"
+        );
     }
 }

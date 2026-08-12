@@ -636,7 +636,7 @@ fn review_edit_without_args_requires_field_without_terminal() {
             "--body",
             "looks good",
             "--target",
-            "commit:deadbeef",
+            "commit:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ],
     );
     assert!(ok, "review new failed: {err}");
@@ -730,7 +730,7 @@ fn review_new_show_list_log_and_remove() {
             "--requester",
             "dave",
             "--target",
-            "commit:deadbeef",
+            "commit:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ],
     );
     assert!(ok, "review new failed: {err}");
@@ -748,7 +748,10 @@ fn review_new_show_list_log_and_remove() {
     assert!(out.contains("looks good"), "review show output: {out}");
     assert!(out.contains("carol"), "review show output: {out}");
     assert!(out.contains("alice"), "review show output: {out}");
-    assert!(out.contains("commit:deadbeef"), "review show output: {out}");
+    assert!(
+        out.contains("commits:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+        "review show output: {out}"
+    );
 
     let (out, err, ok) = run(path, &["review", "ls"]);
     assert!(ok, "review ls failed: {err}");
@@ -768,7 +771,7 @@ fn review_new_show_list_log_and_remove() {
             "--body",
             "needs changes",
             "--target",
-            "commit:feedface",
+            "commit:feedfacefeedfacefeedfacefeedfacefeedface",
         ],
     );
     assert!(ok, "review edit failed: {err}");
@@ -776,7 +779,10 @@ fn review_new_show_list_log_and_remove() {
     let (out, err, ok) = run(path, &show_args);
     assert!(ok, "review show after edit failed: {err}");
     assert!(out.contains("needs changes"), "review show output: {out}");
-    assert!(out.contains("commit:feedface"), "review show output: {out}");
+    assert!(
+        out.contains("commits:feedfacefeedfacefeedfacefeedfacefeedface"),
+        "review show output: {out}"
+    );
 
     let log_args = vec!["review", "log", review_id.as_str()];
     let (out, err, ok) = run(path, &log_args);
@@ -811,7 +817,7 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
             "--body",
             "looks good",
             "--target",
-            "commit:deadbeef",
+            "commit:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ],
     );
     assert!(ok, "review new failed: {err}");
@@ -1078,7 +1084,7 @@ fn review_search_filters_by_reviewer_requester_and_keyword() {
             "--requester",
             "dave",
             "--target",
-            "commit:deadbeef",
+            "commit:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ],
     );
     assert!(ok, "review new failed: {err}");
@@ -1210,7 +1216,7 @@ fn query_sugar_filters_by_people_and_keyword() {
             "--requester",
             "dave",
             "--target",
-            "commit:deadbeef",
+            "commit:deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         ],
     );
     assert!(ok, "review new failed: {err}");
