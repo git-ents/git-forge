@@ -11,6 +11,7 @@
 
 mod authorization;
 mod comment;
+mod decision;
 mod entity;
 mod error;
 mod facts;
@@ -25,6 +26,7 @@ use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
 pub use comment::{Comment, Commentable, binding_genesis};
+pub use decision::{ReviewDecision, ReviewVerdict};
 pub use entity::{Entity, EntityOps};
 pub use error::Error;
 pub use facts::ForgeFacts;

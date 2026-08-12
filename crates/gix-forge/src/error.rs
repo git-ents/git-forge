@@ -27,6 +27,18 @@ pub enum Error {
     /// A `--target`/review-target string did not parse.
     #[error("invalid review target `{0}`")]
     InvalidTarget(String),
+    /// The requested review does not exist.
+    #[error("review `{0}` was not found")]
+    ReviewNotFound(String),
+    /// The repository has no usable authenticated signing configuration.
+    #[error("missing signing configuration: {0}")]
+    MissingSigner(String),
+    /// A decision claim was unexpectedly written without a Git signature.
+    #[error("review decision claim is unsigned")]
+    UnsignedDecision,
+    /// Failed to publish or read an attest claim.
+    #[error(transparent)]
+    Attest(#[from] gix_attest::Error),
     /// Authentication is required for the requested mutation.
     #[error("unauthorized: authentication is required to {capability}; provide --as <member-id>")]
     Unauthorized { capability: crate::Capability },

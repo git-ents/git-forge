@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 gix.workspace = true
 gix-anchor.workspace = true
+gix-attest.workspace = true
 gix-store.workspace = true
 facet-git-tree = { git = "https://github.com/git-ents/git-store.git" }
 gix-query.workspace = true

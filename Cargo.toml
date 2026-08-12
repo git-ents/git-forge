@@ -40,6 +40,7 @@ strip = "symbols"
 
 [workspace.dependencies]
 gix-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
+gix-attest = { git = "https://github.com/git-ents/git-anchor.git" }
 gix-store = { git = "https://github.com/git-ents/git-store.git" }
 gix-query = { git = "https://github.com/git-ents/git-query.git" }
 gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs"] }

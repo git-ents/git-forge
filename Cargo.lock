@@ -2129,6 +2129,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-attest"
+version = "0.1.0"
+source = "git+https://github.com/git-ents/git-anchor.git#2536a8901558bc89ebe45157ae5a0394759a8c82"
+dependencies = [
+ "facet",
+ "facet-git-tree",
+ "gix",
+ "gix-refstore",
+ "gix-store",
+ "ssh-key",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "gix-attributes"
 version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2328,6 +2342,7 @@ dependencies = [
  "facet-git-tree",
  "gix",
  "gix-anchor",
+ "gix-attest 0.1.0 (git+https://github.com/git-ents/git-anchor.git)",
  "gix-query",
  "gix-store",
  "tempfile",
@@ -2610,7 +2625,7 @@ dependencies = [
  "facet",
  "gix",
  "gix-anchor",
- "gix-attest",
+ "gix-attest 0.1.0 (git+https://github.com/git-ents/git-anchor.git?rev=4b98ae23f47a5415416e68bae7c88913798ad3ea)",
  "gix-query-ir",
  "gix-refstore",
  "gix-store",
