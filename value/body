@@ -1,0 +1,35 @@
+Un-stub the v3 UI redesign — Domain I: Ahead/behind against upstream (top bar)
+
+## Current state
+
+The top bar renders a hardcoded placeholder in `crates/git-forge-ui/src/shell.rs`: `<span class="ahead-behind" title="Ahead/behind against upstream">"↑– ↓–"</span>`. No real computation backs it. However, the exact pattern needed already exists one file over: `crates/git-forge-ui/src/tree.rs`'s `list_refs` computes a real one-directional ahead-count per branch today, using `repo.rev_walk(Some(commit_id)).with_hidden(Some(default_id)).all().count()`. That's the same revwalk primitive the top-bar indicator needs, just doubled up for both directions. There is no push/pull machinery anywhere in `crates/git-forge` or `crates/gix-forge` today — this feature has zero prior art beyond `tree.rs`'s ahead count.
+
+## Target state
+
+Replace the static glyph with real `↑N ↓M` counts comparing the currently checked-out branch (HEAD) against its configured upstream tracking ref.
+
+## Technical approach (confirmed against the local gix 0.85.0 source)
+
+1. Resolve upstream: `repo.head()?.try_into_referent()` → `Option<Reference>` (`None` if HEAD is detached/unborn). On the `Reference`, call `.remote_tracking_ref_name(gix::remote::Direction::Fetch)` → `Option<Result<Cow<FullNameRef>, _>>`. This reads `branch.<name>.remote` + `branch.<name>.merge` config and matches it against the remote's fetch refspecs to produce something like `refs/remotes/origin/main`. `None` means no upstream configured.
+2. Resolve that name to a commit via `repo.find_reference(name)?.peel_to_commit()`.
+3. Compute both directions with two revwalks, mirroring `tree.rs`: `ahead = rev_walk(head_id).with_hidden(upstream_id).all()?.count()`, `behind = rev_walk(upstream_id).with_hidden(head_id).all()?.count()`. No merge-base API or symmetric-difference helper exists in gix 0.85; the two-hidden-walk approach is exactly what git itself and this codebase already do elsewhere.
+
+## New dependencies
+
+None. `gix` is already a workspace dependency with the needed features; no new crate is required.
+
+## Read-only confirmation
+
+Confirmed true — this only reads refs and config and walks the object graph; no fetch/push network I/O is needed.
+
+## Multi-repo wrinkle
+
+None exists to worry about. The UI is single-repo today — page handlers pull one app-wide `Arc<gix::ThreadSafeRepository>` from context, and the top bar's "repo picker" is just a static link, not a real picker. "The currently displayed branch" is unambiguously HEAD.
+
+## Open product/UX questions
+
+- What to show when there's no upstream configured (`try_into_referent()` is `None`, or `remote_tracking_ref_name` returns `None`) — hide the indicator entirely vs. show static text like "no upstream". Small, low-stakes call.
+
+## Complexity: Small
+
+Confirmed, not just as originally framed — the revwalk pattern is copy-adjacent to existing code in `tree.rs`, the upstream-resolution API is a single well-documented gix call chain, no new dependencies, no architecture changes, and no multi-repo ambiguity materializes since the UI is single-repo. This is meaningfully smaller than domains requiring new backend concepts (e.g. CI integration in Domain B+H).
