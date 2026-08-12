@@ -1,0 +1,34 @@
+Un-stub the v3 UI redesign — Domain E: Raw file serving (/tree, blob header "Raw" action)
+
+## Current state
+
+The blob header in `crates/git-forge-ui/src/pages/files.rs` renders `<a class="stub-action" href="#" aria-disabled="true" title="Raw blob serving has no route yet">raw</a>` — a dead stub, consistent with this crate's stub-rather-than-fake policy. `crates/git-forge-ui/src/tree.rs`'s `load_file` (called from the `/tree` page) enforces `MAX_FILE_SIZE = 1 MiB` and rejects any blob with a NUL byte in its first 8 KiB (`NUL_SCAN_SIZE`), then requires the rest to be valid UTF-8, returning a `File { text: String, size, object_id }`. These guards exist because the rendered view highlights/tokenizes as UTF-8 text — none of that applies to serving raw bytes.
+
+## Target state
+
+A working "Raw" link that streams a blob's actual bytes with a best-effort Content-Type, independent of the rendered-view guards.
+
+## Technical approach
+
+`#[page]` handlers are hard-wired to return `Result<View>` (`topcoat_router::page::PageRenderFn`), so raw serving needs the separate `#[route]` macro instead, which accepts any `IntoResponse`-implementing return type — `topcoat-router`'s docs show `#[route(POST "/api/users")] async fn f() -> Result<(StatusCode, Json<User>)>`, and `topcoat-router/src/response.rs` already implements `IntoResponse` for `Vec<u8>`/`Bytes` defaulting to `application/octet-stream`, plus a `(headers, body)` tuple form to override it. A new route, e.g. `#[route(GET "/tree/raw")]`, taking the same `ref`/`path` query params as `/tree`, would load the blob via `gix`, fetch the raw bytes (bypassing `tree::load_file`'s UTF-8/NUL logic entirely), and return `([(CONTENT_TYPE, guessed)], bytes)`. Precedent for exactly this pattern already exists in-tree: `vendor/topcoat/crates/topcoat-asset/src/serve.rs` builds a `Response` from `Body::from(bytes)` plus an inserted `CONTENT_TYPE` header for static assets.
+
+## Content-Type strategy
+
+`mime_guess` (2.0.5) is already in `Cargo.lock`, pulled in transitively by `topcoat-asset` (used for its asset bundler), which `git-forge-ui` already depends on. Reusing it for raw serving needs one line added to `crates/git-forge-ui/Cargo.toml` (`mime_guess = "2"`) — no new crate is fetched or compiled, just made directly importable. Path-extension sniffing via `mime_guess::from_path(path).first_or_octet_stream()` is the natural choice given this precedent; magic-byte sniffing would be new machinery for no clear benefit here.
+
+## Size/binary guard
+
+Reusing `tree::load_file`'s 1 MiB cap and NUL/UTF-8 checks would make "Raw" fail for exactly the large/binary files where it's most useful — those checks exist for the rendered view's needs, not raw serving's. Per `docs/design-git-forge-ui.adoc`'s Auth decision ("None. Single-user, local-trusted... deployment"), unbounded raw serving isn't a new confidentiality exposure (the whole repo is already reachable) — at most a self-inflicted memory/bandwidth concern. Recommend a separate, more permissive (or no) size cap for raw serving; flagged as an open question rather than settled here.
+
+## New dependencies
+
+None to fetch — `mime_guess` is already resolved in `Cargo.lock` transitively; it just needs to become a direct dependency of `git-forge-ui`.
+
+## Open product/UX questions
+
+- Content-type strategy: extension-based `mime_guess` vs. a fixed `application/octet-stream` vs. content-sniffing.
+- Raw size-limit policy: none, a larger cap, or streaming instead of buffering.
+
+## Complexity: Small
+
+The `#[route]`/`IntoResponse` mechanism and `mime_guess` dependency both already exist in-tree with working precedent; this is wiring, not new architecture — likely one of the smallest items in this plan.
