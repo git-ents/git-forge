@@ -1,0 +1,37 @@
+Un-stub the v3 UI redesign — Domain L: Command palette keyboard shortcuts (⌘K / Ctrl-K / Escape)
+
+This is the one domain in the plan that is explicitly an architecture-level product decision, not primarily an engineering task. No recommendation is made here — the tradeoff is laid out for the user to decide.
+
+## Current state
+
+The design spec requires ⌘K/Ctrl+K to open the command palette and Escape to close both the palette and the confirm dialog. The shipped implementation (`crates/git-forge-ui/src/pages/palette.rs`, `crates/git-forge-ui/src/confirm.rs`) does neither: the palette opens via a clickable `<a href="#palette">` trigger using the CSS `:target` pattern, closes via a "Close" link that re-targets to `#`, and the confirm dialog is a plain `<div class="confirm-scrim">`/`<div class="confirm-modal">` with a "Cancel" link — no `<dialog>` element anywhere in the crate. This is a deliberate, well-documented substitution: both files' module docs explain the app ships no client JavaScript, so a keychord "cannot be a real key binding," and "press a key" becomes "click a link." This zero-JS stance is not recorded as a top-level Decision in `docs/design-git-forge-ui.adoc`'s Decisions table (that doc predates the v3 visual redesign and says nothing about JS) — it's an implementation choice made and documented locally during the redesign pass, in code comments, not in the architecture doc.
+
+Confirmed: zero JS ships today. A repo-wide grep of `crates/git-forge-ui` finds no `.js` files, no `<script>` tags outside test fixtures asserting markdown-sanitization strips them, and no `<dialog>` elements. Static assets are served via `topcoat-asset`'s bundler — currently only `assets/style.css` exists.
+
+## Why a keychord genuinely needs JS
+
+No native HTML/CSS mechanism binds a global keydown (⌘K/Ctrl+K) to any action — there is no CSS selector or HTML attribute that reacts to a specific key combination system-wide; `:target` only reacts to URL fragment changes, which requires a click (or manual URL edit), not a keypress. Opening the palette via keyboard requires a `keydown` listener, full stop — this part is unavoidable without JS.
+
+Escape-to-close is a narrower case. The native `<dialog>` element's `showModal()` gives built-in Escape-to-close with zero JS for closing only — but `<dialog>` still must be opened via `.showModal()`/`.show()` JS calls or a `<button commandfor>` invoker; there's no way to auto-open it from page load or a fragment change without JS or a form submission. Swapping the confirm dialog (and palette panel) from `<div>` to `<dialog>` would give free Escape-to-close once already open, but would not by itself deliver ⌘K-to-open, and the confirm dialog already opens via a real server round-trip (a POST response), not a client interaction — `<dialog>` there would need JS on page load to call `showModal()`, i.e. it doesn't reduce the JS need, just changes what the JS does.
+
+## Option (a): add one small scoped JS file
+
+Serve `assets/palette.js` through the same `topcoat-asset` bundler already serving `style.css` — the bundler derives output extension from the source file's extension rather than special-casing CSS, so a `<script defer src=(asset!("../assets/palette.js"))>` in `shell.rs` should work with no bundler changes. The script itself is thin: a `keydown` listener on `document` checking for `(metaKey || ctrlKey) && key === 'k'`, calling `.preventDefault()` and `.click()` on the existing `.palette-trigger` link (reusing the already-working `:target` open path, no new state), plus a second listener for Escape that clicks `.palette-close` or the confirm modal's cancel link if either is present. Roughly 20-30 lines, no build step, no framework, no bundling of app logic — a pure progressive enhancement over already-functional click-driven HTML. If `<dialog>` is adopted for the confirm modal alongside this, the Escape-for-confirm half of the script becomes unnecessary (native behavior covers it), shrinking the script further.
+
+## Option (b): leave it click-only
+
+Zero-JS remains absolute everywhere in the app. The "Jump ⌘K" trigger and "Close"/"Cancel" links stay as the real interaction surface; the `<kbd>⌘K</kbd>` hint in the trigger becomes documentation of a shortcut that doesn't exist, or gets removed.
+
+## Tradeoffs (no recommendation)
+
+For (a): command palettes exist specifically to serve keyboard-driven power users; a mouse-only palette is arguably a self-defeating feature. The JS surface is tiny, additive, and doesn't touch data-fetching or rendering (which stay server-side).
+
+For (b): the zero-JS choice was deliberate and documented twice (in palette.rs and confirm.rs). "Just one small file" is the classic first crack in an architectural invariant — the next enhancement request (live filter-as-you-type, optimistic UI) will cite this file as precedent. `<dialog>`'s native Escape gets partial value (closing, not opening) at zero JS cost, which may be "enough" depending on how strictly Escape-to-close is valued versus ⌘K-to-open.
+
+## Open product question
+
+Introduce one small, unobtrusive, progressively-enhancing vanilla-JS file for this one interaction, or leave it click-only permanently to preserve the absolute zero-JS architecture? This is explicitly the user's call, not an engineering decision.
+
+## Complexity
+
+Option (a): Small — one new ~20-30 line vanilla JS file, one `<script>` tag added to two render sites, no new dependencies, reuses existing trigger/close elements and CSS classes; asset delivery is already proven for `style.css` via the identical mechanism. Optionally pair with converting the confirm-dialog markup to `<dialog>` (small template change) to shrink the JS further. Option (b): Zero — no code changes; it is a decision to explicitly ratify the current state and possibly remove the now-misleading `<kbd>⌘K</kbd>` hint from the trigger if the shortcut is permanently not implemented.
