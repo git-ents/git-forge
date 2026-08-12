@@ -2,12 +2,15 @@ mod comments;
 mod files;
 mod issues;
 mod members;
+mod palette;
 mod query;
 mod releases;
 mod reviews;
 mod root;
 mod search;
 mod workingcopy;
+
+pub(crate) use palette::{palette_mount, palette_trigger};
 
 use topcoat::context::{Cx, app_context};
 

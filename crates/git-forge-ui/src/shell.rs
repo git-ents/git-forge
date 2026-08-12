@@ -5,7 +5,10 @@ use topcoat::{
     view::{View, component, view},
 };
 
-use crate::auth::authenticated_member;
+use crate::{
+    auth::authenticated_member,
+    pages::{palette_mount, palette_trigger},
+};
 
 /// The six rail routes. Query and Search stay reachable through the top-bar
 /// search form instead of a rail entry, so pages that render them (and other
@@ -156,6 +159,7 @@ async fn topbar(cx: &Cx, keyword: Option<&str>) -> Result {
                 <input id="shell-search" name="keyword" value=(keyword.unwrap_or_default()) placeholder="Search, or ?predicate" type="search">
                 <button type="submit">"Search"</button>
             </form>
+            (palette_trigger(cx).await?)
             <div class="auth-state">
                 if let Some(member) = &member {
                     <span class="status-dot ok"></span>
@@ -201,6 +205,7 @@ pub(crate) async fn shell(
                             (child)
                         </main>
                     </div>
+                    (palette_mount(cx).await?)
                 </div>
             </body>
         </html>
@@ -240,6 +245,7 @@ pub(crate) async fn split_shell(
                             </div>
                         </main>
                     </div>
+                    (palette_mount(cx).await?)
                 </div>
             </body>
         </html>
