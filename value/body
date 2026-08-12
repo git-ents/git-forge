@@ -1,0 +1,36 @@
+Un-stub the v3 UI redesign — Domain C: Git blame (/tree, blob view)
+
+## Current state
+
+`crates/git-forge-ui/src/pages/files.rs` already builds the full structural affordance for blame: a `blame` query param (`blame_on`, `blame_toggle_href`), a `with-blame` line class, and a gutter `<span class="line-blame">` rendered per line inside `source_view` — but it always renders the placeholder `"—"`. The existing code comment claims `gix` 0.85 has "no blame feature/crate in its dependency tree." That comment is only half right and should be corrected as part of this work: inspecting the vendored `gix-0.85.0` `Cargo.toml` confirms `gix` 0.85.0 *does* ship a `blame` feature (`blame = ["dep:gix-blame", "blob-diff"]`, pulling in `gix-blame` `^0.15.0`). It simply isn't enabled — the workspace pins `gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs"] }` at the root, and `git-forge-ui`'s own `Cargo.toml` only adds `"parallel"`. `gix-blame` does not currently appear in `Cargo.lock`, consistent with the feature never being turned on anywhere in the workspace.
+
+## Target state
+
+Real per-line blame: author, short oid, and age in the gutter, populated from an actual revwalk/diff rather than a placeholder, matching the design spec's `BlobLine { n, tokens[...], blame?, threads[] }` model and the "toggles without shifting alignment" requirement already satisfied structurally.
+
+## Technical approach
+
+Enable `gix`'s `blame` feature for `git-forge-ui` (and only there) and call `gix_blame::file(...)` inside a `with_repo`-style `spawn_blocking` closure, the same pattern already used for every other repo read. The API takes an odb, a starting "suspect" commit, an optional commitgraph cache, a resource cache, a slash-separated file path, and an `Options { diff_algorithm, ranges, since, rewrites, debug_track_path }`, returning `BlameEntry` ranges with originating commits — a real libgit2-style history-walk-and-diff algorithm, not a stub.
+
+## New dependencies
+
+Checking `Cargo.lock` against `gix`'s feature graph: `blame` requires `blob-diff` → `gix-diff/blob` → `imara-diff`, `gix-filter`, `gix-worktree`, `gix-path`, `gix-fs`, `gix-command`, `gix-tempfile`, `gix-trace`, `gix-traverse`, plus `attributes` → `gix-pathspec`, `gix-attributes`, `gix-submodule`. Every one of these except `gix-blame` and `imara-diff` is already present in `Cargo.lock` (pulled in transitively already) — so the net new crates are just `gix-blame` (cached locally at 0.15.0, matching `^0.15.0`) and `imara-diff` (distinct from the already-present `gix-imara-diff` fork). Smaller delta than a naive estimate would suggest. Note: Domain D (per-file history) also needs `blob-diff` — enabling it once benefits both, worth sequencing together.
+
+## Performance and caching — the real risk
+
+`gix-blame` has no built-in incremental/persistent cache; each call recomputes from scratch. More importantly, this UI has no caching layer of any kind — `crates/git-forge-ui/src/lib.rs`'s `build_router` only holds `Arc<gix::ThreadSafeRepository>` as shared state. Every `GET /tree?blame=1` would recompute full blame from scratch on every page load. For large files or deep histories this could mean multi-second (or worse) latency with no cutoff.
+
+## On shelling out
+
+The codebase does shell out to `git` in a few places (`user.signingKey` config reads, browser-open, test fixtures) but never for domain data serving — every repository-content read path uses `gix` natively. Given a real `gix` blame API exists and is cheap to wire in, shelling out to `git blame --porcelain` would break that norm for no benefit and should be rejected.
+
+## Open product/UX questions
+
+- Is uncached per-request blame acceptable, or does this need a size/history-depth cutoff with graceful degradation?
+- Introduce a blame result cache now (in-process LRU keyed on `(commit, path)`), or defer until real latency is observed?
+- Enable rename tracking (`Options.rewrites`) initially, or skip it?
+- Whole-file blame-on-toggle for v1, or lazy/incremental blame for very long files?
+
+## Complexity: Medium
+
+The `gix` call itself is small and fits the existing `spawn_blocking` pattern; the dependency delta is modest (2 new crates). The real work is mapping `BlameEntry` onto the render loop without disturbing alignment, and deciding/implementing a caching or cutoff strategy given the total absence of caching in this UI today.
