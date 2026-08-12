@@ -26,7 +26,7 @@ use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
 pub use comment::{Comment, Commentable, binding_genesis};
-pub use decision::{ReviewDecision, ReviewVerdict};
+pub use decision::{ReviewDecision, ReviewDecisionClaim, ReviewVerdict};
 pub use entity::{Entity, EntityOps};
 pub use error::Error;
 pub use facts::ForgeFacts;

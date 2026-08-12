@@ -35,6 +35,54 @@ pub enum ReviewVerdict {
 
 const KIND: &str = "review-decision";
 
+/// A decision in a review's signed claim chain, including structural revocation
+/// information supplied by `gix-attest`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewDecisionClaim {
+    /// The signed claim's object id.
+    pub claim_id: ObjectId,
+    /// The decoded decision payload.
+    pub decision: ReviewDecision,
+    /// The claim that revokes this decision, if one exists.
+    pub revoked_by: Option<ObjectId>,
+    /// The key claim named by the decision's envelope.
+    pub key_claim_id: ObjectId,
+}
+
+impl ReviewDecision {
+    /// Read the resolved signed decisions for a review, newest first.
+    pub fn claims_for_review(
+        repo: &gix::Repository,
+        review_id: &str,
+    ) -> Result<Vec<ReviewDecisionClaim>, Error> {
+        let review_store = crate::open_store(repo);
+        let review = Review::load(&review_store, review_id)?
+            .ok_or_else(|| Error::ReviewNotFound(review_id.to_owned()))?;
+        let target = Target {
+            kind: review.target.attest_kind().to_owned(),
+            id: review.target.target_id()?.into(),
+        };
+        let store = RepoStore::open_with_layout(repo, gix_attest::layout());
+        let claims = gix_attest::Claims::open(&store).resolve(&target)?;
+        let kind = RefSegment::new(KIND).expect("built-in kind is valid");
+        claims
+            .into_iter()
+            .filter(|claim| claim.envelope.payload_kind == KIND)
+            .map(|claim| {
+                let decision = store
+                    .kind::<ReviewDecision>(kind.clone())
+                    .decode(claim.envelope.payload.into())?;
+                Ok(ReviewDecisionClaim {
+                    claim_id: claim.id,
+                    decision,
+                    revoked_by: claim.revoked_by,
+                    key_claim_id: claim.envelope.key.into(),
+                })
+            })
+            .collect()
+    }
+}
+
 impl ReviewDecision {
     /// Publish an authenticated approval for `review_id`.
     pub fn approve_as(

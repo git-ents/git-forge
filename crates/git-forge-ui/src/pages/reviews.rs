@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use gix_forge::{Comment, Commentable, EntityOps, Member, Review, ReviewTarget, Status};
+use gix_forge::{
+    Comment, Commentable, EntityOps, Member, Review, ReviewDecision, ReviewTarget, ReviewVerdict,
+    Status,
+};
 use topcoat::{
     Result,
     context::Cx,
@@ -293,20 +296,6 @@ fn signing_key_of(repo: &gix::Repository, author: &str) -> Option<String> {
     (!key.is_empty()).then(|| key.to_owned())
 }
 
-/// Whether `reviewer` has left any comment on this review's thread -- the
-/// one real, honest signal standing in for a structured verdict. There is no
-/// approve / request-changes state anywhere in the backend (`Review` carries
-/// only a free-text `body` and a `reviewers: Vec<String>` list, and grepping
-/// `gix-forge` for "verdict"/"approve" only turns up an aspirational Datalog
-/// rule set in `lib.rs` with no `Claim`/`Verdict` type behind it) -- so
-/// rather than inventing one, a reviewer who has posted in the thread is
-/// shown as having responded, and everyone else as awaiting a response. This
-/// is a UI-only approximation over real reviewer/comment data, not a verdict
-/// system.
-fn has_responded(reviewer: &str, comments: &[Comment]) -> bool {
-    comments.iter().any(|comment| comment.author == reviewer)
-}
-
 #[page("/reviews")]
 async fn reviews(cx: &Cx) -> Result {
     let data = with_repo(cx, load_review_rows).await;
@@ -416,17 +405,13 @@ async fn review_detail(cx: &Cx) -> Result {
                         (comment.clone(), key)
                     })
                     .collect();
-                let verdict_rows: Vec<(String, bool)> = review
-                    .reviewers
-                    .iter()
-                    .map(|reviewer| (reviewer.clone(), has_responded(reviewer, &comments)))
-                    .collect();
+                let decision_rows = ReviewDecision::claims_for_review(repo, &review.id)?;
                 let review_items = load_review_rows(repo)?;
                 Ok(Some((
                     review_items,
                     review,
                     comment_rows,
-                    verdict_rows,
+                    decision_rows,
                     anchor_clean,
                     anchor_message,
                 )))
@@ -441,12 +426,13 @@ async fn review_detail(cx: &Cx) -> Result {
             review_items,
             review,
             comment_rows,
-            verdict_rows,
+            decision_rows,
             anchor_clean,
             anchor_message,
         ))) => {
             let can_edit = can_update(cx, &review).await;
             let can_comment = can_create::<Comment>(cx).await;
+            let can_decide = can_create::<Review>(cx).await;
             let next_status = if review.status == "open" {
                 "closed"
             } else {
@@ -472,6 +458,9 @@ async fn review_detail(cx: &Cx) -> Result {
                         <div class="detail-heading">
                             <div><h2>"Review " (review.id.as_str())</h2><p class="muted">"A request for focused feedback"</p></div>
                             <div class="detail-actions">
+                                if can_decide {
+                                    <a class="button-link secondary" href=(format!("/reviews/{}/decision", review.id))>"Record decision"</a>
+                                }
                                 if can_edit {
                                     <a class="button-link secondary" href=(format!("/reviews/{}/edit", review.id))>"Edit"</a>
                                     <form class="inline-form" action=(format!("/reviews/{}/status", review.id)) method="post"><input type="hidden" name="status" value=(next_status)><button type="submit">if next_status == "closed" { "Close review" } else { "Reopen review" }</button></form>
@@ -497,18 +486,25 @@ async fn review_detail(cx: &Cx) -> Result {
                             <dt>"Reviewers"</dt><dd>(if review.reviewers.is_empty() { "None".to_owned() } else { review.reviewers.join(", ") })</dd>
                         </dl>
                         <div class="panel-block">
-                            <div class="panel-block-heading">"Verdicts"</div>
-                            <p class="form-help verdicts-note">"Approve / request-changes verdicts are not tracked by the backend yet -- this reflects whether each reviewer has posted in the comment thread below."</p>
-                            if verdict_rows.is_empty() {
-                                <p class="empty panel-block-body">"No reviewers assigned."</p>
+                            <div class="panel-block-heading">"Signed decisions"</div>
+                            <p class="form-help">"Decisions are signed claims about this review target. A revoked decision remains visible in the chain and is marked below."</p>
+                            if decision_rows.is_empty() {
+                                <p class="empty panel-block-body">"No signed decisions yet."</p>
                             } else {
                                 <ul class="verdict-list">
-                                    for (reviewer, responded) in &verdict_rows {
+                                    for decision in &decision_rows {
                                         <li class="verdict-row">
-                                            <span>(reviewer.as_str())</span>
-                                            <span class=(if *responded { "verdict-pill responded" } else { "verdict-pill pending" })>
-                                                if *responded { "responded" } else { "awaiting response" }
+                                            <span>
+                                                if decision.decision.verdict == ReviewVerdict::Approve { "Approve" } else { "Deny" }
+                                                if let Some(message) = &decision.decision.message { <span class="muted">" — " (message.as_str())</span> }
                                             </span>
+                                            <span class=(if decision.revoked_by.is_some() { "verdict-pill pending" } else if decision.decision.verdict == ReviewVerdict::Approve { "verdict-pill responded" } else { "verdict-pill denied" })>
+                                                if decision.revoked_by.is_some() { "revoked" } else { "active" }
+                                            </span>
+                                            <small class="claim-chain">
+                                                "claim " <code>(decision.claim_id.to_string())</code> " · key " <code>(decision.key_claim_id.to_string())</code>
+                                                if let Some(revocation) = decision.revoked_by { " · revoked by " <code>(revocation.to_string())</code> }
+                                            </small>
                                         </li>
                                     }
                                 </ul>
@@ -560,6 +556,83 @@ async fn review_detail(cx: &Cx) -> Result {
     };
 
     view! { split_shell(active: Some(Tab::Reviews), title: "Review", list: list, detail: detail) }
+}
+
+#[page("/reviews/{review_id}/decision")]
+async fn review_decision_page(cx: &Cx) -> Result {
+    let id = path_param::<ReviewId>(cx)?.clone();
+    let content = (view! { cx =>
+        <section class="form-layout">
+            <div class="form-intro">
+                <p class="eyebrow">"SIGNED REVIEW DECISION"</p>
+                <h2>"Record your decision"</h2>
+                <p class="muted">"Your approval or denial will be signed and appended to this review target's claim chain."</p>
+            </div>
+            <form class="entity-form" action=(format!("/reviews/{id}/decision")) method="post">
+                <fieldset>
+                    <legend>"Decision"</legend>
+                    <label for="decision-message">"Message <span class=\"muted\">(optional)</span>"</label>
+                    <textarea id="decision-message" name="message" rows="7" placeholder="Explain your decision."></textarea>
+                </fieldset>
+                <div class="form-actions">
+                    <a class="button-link secondary" href=(format!("/reviews/{id}"))>"Cancel"</a>
+                    <button type="submit" name="verdict" value="approve">"Approve"</button>
+                    <button class="danger-button" type="submit" name="verdict" value="deny">"Deny"</button>
+                </div>
+            </form>
+        </section>
+    })?;
+    view! { shell(active: Some(Tab::Reviews), title: "Record decision", keyword: None, child: content) }
+}
+
+#[page(POST "/reviews/{review_id}/decision")]
+async fn review_decision_submit(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
+    let id = path_param::<ReviewId>(cx)?.clone();
+    let verdict = input.get("verdict").map(String::as_str).unwrap_or_default();
+    let message = input
+        .get("message")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let Some(verdict) = (match verdict {
+        "approve" => Some(ReviewVerdict::Approve),
+        "deny" => Some(ReviewVerdict::Deny),
+        _ => None,
+    }) else {
+        return view! { shell(active: Some(Tab::Reviews), title: "Decision failed", keyword: None, child: (view! { <div class="error-panel"><strong>"Choose Approve or Deny"</strong><a href=(format!("/reviews/{id}/decision"))>"Return to decision form"</a></div> })?) };
+    };
+    if let Some(confirm) = confirm_step(
+        cx,
+        &input,
+        &format!("/reviews/{id}/decision"),
+        &format!("refs/meta/review/{id}"),
+        &format!("/reviews/{id}"),
+        (view! { cx => "Sign a " <strong>(if verdict == ReviewVerdict::Approve { "approval" } else { "denial" })</strong> " for review " <code>(id.as_str())</code> })?,
+    ).await? {
+        return view! { shell(active: Some(Tab::Reviews), title: "Confirm decision", keyword: None, child: confirm) };
+    }
+    let lookup_id = id.clone();
+    let result = with_repo(cx, move |repo| match verdict {
+        ReviewVerdict::Approve => {
+            ReviewDecision::approve_as(repo, &authorization, lookup_id, message)
+        }
+        ReviewVerdict::Deny => ReviewDecision::deny_as(repo, &authorization, lookup_id, message),
+    })
+    .await;
+    match result {
+        Ok(claim_id) => {
+            let content = (view! { <section class="success-panel"><span class="success-icon">"✓"</span><p class="eyebrow">"SIGNED DECISION"</p><h2>"Decision recorded"</h2><p class="muted">"Claim " <code>(claim_id.to_string())</code> " was appended to the review chain."</p><a class="button-link" href=(format!("/reviews/{id}"))>"Return to review"</a></section> })?;
+            view! { shell(active: Some(Tab::Reviews), title: "Decision recorded", keyword: None, child: content) }
+        }
+        Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
+            let content = (view! { <div class="error-panel"><strong>"Decision could not be signed"</strong><p>(error)</p><a href=(format!("/reviews/{id}/decision"))>"Return to decision form"</a></div> })?;
+            view! { shell(active: Some(Tab::Reviews), title: "Decision failed", keyword: None, child: content) }
+        }
+    }
 }
 
 #[page("/reviews/{review_id}/edit")]
