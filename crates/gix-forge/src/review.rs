@@ -8,6 +8,7 @@ use facet::Facet;
 use facet_git_tree::normal_form::{self, NormalForm};
 use facet_git_tree::{RawBlob, RawTree};
 use gix::ObjectId;
+use gix_store::{RefSegment, RepoStore, Typed};
 
 use crate::comment::Commentable;
 use crate::entity::Entity;
@@ -90,6 +91,121 @@ impl Commentable for Review {
     }
 }
 
+impl Review {
+    fn kind<'a>(
+        store: &'a RepoStore<'a>,
+    ) -> gix_store::Kind<'a, Typed<StoredReview>, gix_store::GixRefStore<'a>, &'a gix::OdbHandle>
+    {
+        store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
+    }
+
+    /// Publish the current review schema without asking facet-git-tree to
+    /// describe `RawBlob`.
+    pub fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
+        Self::kind(store)
+            .schema()
+            .put(&facet_git_tree::schema_of::<ReviewSchema>().map_err(gix_store::Error::from)?)
+            .map_err(Error::from)
+    }
+
+    /// Authorized schema publication for review callers.
+    pub fn ensure_schema_as(
+        store: &RepoStore<'_>,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(crate::Capability::ReviewCreate, Ownership::NotApplicable)?;
+        Self::ensure_schema(store)
+    }
+
+    /// Read a review, falling back only to the exact pre-retention shape.
+    /// No object is rewritten and the target OIDs are copied verbatim.
+    pub fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Self>, Error> {
+        let name = gix_store::RefPath::new(id)?;
+        match Self::kind(store).get(&name) {
+            Ok(Some(stored)) => Ok(Some(Self::from_stored(id.to_owned(), stored))),
+            Ok(None) => Ok(None),
+            Err(current) => {
+                let legacy = store.kind::<LegacyStoredReview>(
+                    RefSegment::new(Self::KIND).expect("built-in ref segment is valid"),
+                );
+                match legacy.get(&name) {
+                    Ok(Some(stored)) => Ok(Some(Self::from_stored(
+                        id.to_owned(),
+                        StoredReview::from(stored),
+                    ))),
+                    Ok(None) => Ok(None),
+                    Err(_) => Err(current.into()),
+                }
+            }
+        }
+    }
+
+    /// Repository-backed counterpart to [`load`](Self::load).
+    pub fn load_from_repo(repo: &gix::Repository, id: &str) -> Result<Option<Self>, Error> {
+        Self::load(&crate::open_store(repo), id)
+    }
+
+    /// Store a review using the current canonical retained representation.
+    pub fn save_as(
+        &self,
+        store: &RepoStore<'_>,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(
+            crate::Capability::ReviewUpdate,
+            self.ownership(authorization),
+        )?;
+        Self::kind(store)
+            .put(&gix_store::RefPath::new(self.id())?, &self.to_stored())
+            .map_err(Error::from)
+    }
+
+    pub fn create_in_repo_as(
+        &self,
+        repo: &gix::Repository,
+        authorization: &Authorization,
+    ) -> Result<String, Error> {
+        authorization.check(crate::Capability::ReviewCreate, Ownership::NotApplicable)?;
+        let store = crate::open_store(repo);
+        Self::ensure_schema(&store)?;
+        let mut entity = self.clone();
+        if let crate::Principal::Member(member) = authorization.principal() {
+            entity.attribute_to(member.as_str());
+        }
+        let commit = Self::kind(&store).write(&entity.to_stored()).anonymous()?;
+        Ok(gix_store::entity_name(commit).to_string())
+    }
+
+    pub fn save_in_repo_as(
+        &self,
+        repo: &gix::Repository,
+        authorization: &Authorization,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(
+            crate::Capability::ReviewUpdate,
+            self.ownership(authorization),
+        )?;
+        let store = crate::open_store(repo);
+        Self::ensure_schema(&store)?;
+        self.save_as(&store, authorization)
+    }
+
+    pub fn delete_as(
+        repo: &gix::Repository,
+        id: &str,
+        authorization: &Authorization,
+    ) -> Result<bool, Error> {
+        let store = crate::open_store(repo);
+        let name = gix_store::RefPath::new(id)?;
+        let entity = Self::load(&store, id)?;
+        let ownership = entity
+            .as_ref()
+            .map_or(Ownership::Owned, |review| review.ownership(authorization));
+        authorization.check(crate::Capability::ReviewDelete, ownership)?;
+        Ok(Self::kind(&store).remove(&name)?)
+    }
+}
+
 /// A validated, exact Git object id.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Facet)]
 pub struct ExactOid(String);
@@ -157,6 +273,69 @@ struct StoredBlob {
 #[derive(Debug, Clone, Facet)]
 struct StoredTree {
     oid: RawTree,
+}
+
+/// The schema-only shape for the current retained target encoding.
+///
+/// `RawBlob` is a serializer-level passthrough, but facet-git-tree does not
+/// expose a corresponding schema node. Bytes have the same schema-level
+/// representation and still validate the actual `RawBlob` entry on writes and
+/// reads. The runtime value remains `RawBlob`, so blob reachability and object
+/// identity are unchanged.
+#[derive(Debug, Facet)]
+struct ReviewSchema {
+    status: String,
+    body: String,
+    reviewers: Vec<String>,
+    requesters: Vec<String>,
+    target: ReviewSchemaTarget,
+    edit: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Facet)]
+#[repr(u8)]
+enum ReviewSchemaTarget {
+    Blobs(Vec<ReviewSchemaBlob>),
+    Trees(Vec<ReviewSchemaTree>),
+    TreeRange { base: RawTree, tip: RawTree },
+    Commits(Vec<ExactOid>),
+    CommitRange { base: ExactOid, tip: ExactOid },
+}
+
+#[derive(Debug, Facet)]
+struct ReviewSchemaBlob {
+    path: String,
+    oid: Vec<u8>,
+}
+
+#[derive(Debug, Facet)]
+struct ReviewSchemaTree {
+    oid: RawTree,
+}
+
+/// The target shape written before retention used exact OID strings.
+#[derive(Debug, Facet)]
+struct LegacyStoredReview {
+    status: String,
+    body: String,
+    reviewers: Vec<String>,
+    requesters: Vec<String>,
+    target: ReviewTarget,
+    edit: Option<String>,
+}
+
+impl From<LegacyStoredReview> for StoredReview {
+    fn from(legacy: LegacyStoredReview) -> Self {
+        StoredReview {
+            status: legacy.status,
+            body: legacy.body,
+            reviewers: legacy.reviewers,
+            requesters: legacy.requesters,
+            target: legacy.target.into(),
+            edit: legacy.edit,
+        }
+    }
 }
 
 impl From<ReviewTarget> for StoredReviewTarget {
@@ -472,7 +651,7 @@ impl fmt::Display for ReviewTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::EntityOps;
+
     use crate::{Authorization, Principal, open_store};
     use facet_git_tree::{EntryKind, ObjectStore, serialize_into};
 
@@ -482,6 +661,44 @@ mod tests {
 
     fn oid(byte: u8) -> ExactOid {
         ExactOid::parse(&format!("{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}{byte:02x}")).unwrap()
+    }
+
+    #[test]
+    fn old_retention_free_reviews_remain_readable_without_rewriting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::init_repo(dir.path());
+        let repo = gix::open(dir.path()).expect("open repo");
+        let store = open_store(&repo);
+        let legacy = store.kind::<LegacyStoredReview>(
+            RefSegment::new(Review::KIND).expect("built-in ref segment is valid"),
+        );
+        legacy
+            .schema()
+            .put(&facet_git_tree::schema_of::<LegacyStoredReview>().expect("legacy schema"))
+            .expect("publish legacy schema");
+        let target = ReviewTarget::Blobs(vec![PinnedBlob {
+            path: "old.txt".into(),
+            oid: oid(7),
+        }]);
+        legacy
+            .put(
+                &gix_store::RefPath::new("legacy-1").expect("review id"),
+                &LegacyStoredReview {
+                    status: "open".into(),
+                    body: "legacy".into(),
+                    reviewers: vec!["bob".into()],
+                    requesters: vec!["alice".into()],
+                    target: target.clone(),
+                    edit: None,
+                },
+            )
+            .expect("write legacy review");
+
+        let loaded = Review::load(&store, "legacy-1")
+            .expect("load legacy review")
+            .expect("legacy review exists");
+        assert_eq!(loaded.target, target);
+        assert_eq!(loaded.id, "legacy-1");
     }
 
     #[test]
