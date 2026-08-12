@@ -1,0 +1,66 @@
+Un-stub the v3 UI redesign — tracking
+
+This tracks the plan to eliminate every stub, mock, and deliberately-scoped-down piece of the v3 UI redesign (commits `60d6e162`..`54696f09`), turning `git-forge`'s web UI into a fully real, fully backed product. Ten domain issues cover the full stub inventory:
+
+- #8ee953d9 — Release signing & quorum (/releases)
+- #889a103e — Working-copy status/gates & refs-pane grouping/CI badges (/workingcopy, /tree)
+- #b37dca5d — Git blame gutter (/tree, blob view)
+- #c8bd3822 — Per-file last-touched commit & file history (/tree)
+- #2b98baaa — Raw file serving (/tree, blob header Raw action)
+- #392e7332 — Review anchor rebound detection & review verdicts (/reviews)
+- #0d10bbae — Ahead/behind against upstream (top bar)
+- #468c9faa — Comment/issue/review timestamps
+- #3195b397 — Issue label colors (/issues)
+- #30cc67a0 — Command palette keyboard shortcuts (⌘K/Ctrl-K/Escape) — zero-JS architecture decision
+
+## Prioritization and sequencing
+
+**Tier 0 — no dependencies, ship any time, smallest lift first:**
+- #0d10bbae (ahead/behind) — Small. Pure read-only revwalk, no new deps, directly copies an existing pattern in `tree.rs`. The single easiest win in the whole plan.
+- #2b98baaa (raw serving) — Small. Wiring only; `mime_guess` and the `#[route]`/`IntoResponse` mechanism already exist in-tree.
+- #468c9faa (timestamps) — Small. Turned out to be plumbing, not a schema migration — git commits backing every entity already carry real timestamps; just needs to be surfaced.
+
+**Tier 1 — independent, medium lift, each self-contained:**
+- #b37dca5d (blame) — Medium. `gix` 0.85 already ships a `blame` feature; only 2 net-new crates (`gix-blame`, `imara-diff`). Shares the `blob-diff` feature flag with #c8bd3822 — enable it once, benefit both; sequence these two together to avoid paying the feature-flag cost twice.
+- #c8bd3822 (file history) — Medium. Same `blob-diff` dependency as blame; adds cursor-based pagination (new to this codebase) and a depth-cutoff decision.
+- #3195b397 (label colors) — Small (Option 1) or Medium (Option 2), blocked on a product decision (see open question 8 below) before sizing is final.
+
+**Tier 2 — blocked on a product decision, size varies enormously by answer:**
+- #889a103e (working-copy/CI/refs grouping) — the non-CI engineering half (unpushed commits, dirty-file status, Mine/Others/Machine grouping) is small-to-medium and can proceed independently. The CI-gates half is blocked on open question 1 below and could be anywhere from zero (redesign away) to a multi-week integration.
+- #30cc67a0 (command palette shortcuts) — zero engineering effort either way; entirely blocked on open question 10 (the zero-JS architecture call).
+
+**Tier 3 — sequenced, data-model foundation before dependent feature:**
+- #392e7332 (review anchoring + verdicts) — Domain F (anchor rebound detection, migrating `ReviewTarget` to real `gix-anchor` bindings) must land before Domain G (verdicts) can anchor a verdict to a specific captured target state. This is the one hard sequencing dependency in the whole plan: verdict invalidation/staleness (open question 6) is literally undefined without F's captured-binding data first.
+
+**Cross-cutting dependency worth flagging explicitly:** #8ee953d9 (release claims) and the G-half of #392e7332 (review verdicts) both reference an aspirational, currently-undeclared `Claim`/`signer`/`target`/`verdict` Datalog vocabulary in `gix-forge`'s built-in rules. Worth deciding once (open question 9) whether `Verdict` and release `Claim` share one underlying primitive, rather than designing them twice.
+
+**Suggested implementation order:** Tier 0 (all three, any order, parallelizable) → Tier 1's blame+history pair (shared feature flag) in parallel with label colors once its product question is answered → resolve the CI-integration and zero-JS product questions early since they gate Tier 2 entirely → Domain F (review anchoring) before Domain G (verdicts) once the Claim-sharing question is settled.
+
+## Consolidated open product questions
+
+Numbered for direct reference when answering. Grouped by domain issue.
+
+1. (#889a103e) Does this product talk to CI at all, and how — (a) external CI integration via webhook/polling, (b) local pre-push checks run by the `git-forge` CLI itself with results published somewhere for cross-member visibility, or (c) no CI concept at all, redesigning the "gate predictions" and "CI ref badges" UI slots away?
+2. (#889a103e) If option (b) is chosen for question 1, where do local check results get published for other members to see — a ref, a `refs/notes/*` namespace, something else?
+3. (#889a103e) Should "Machine" (bot/CI-authored refs) be detected via a naming convention (e.g. `refs/heads/bot/*`) or an explicit `is_bot` flag on `Member`?
+4. (#889a103e) Is a second diff pass per dirty file (for working-copy diffstat) acceptable on every page load, or does it need caching?
+5. (#8ee953d9) Does the product want to say "signed" for releases knowing it's an app-level attestation (an audit trail of who clicked confirm), not a cryptographically verified GPG/SSH signature? (Recommended direction in the issue; not decided.)
+6. (#8ee953d9) Who sets the release quorum threshold and where does that configuration live — this needs a new per-repo config concept that doesn't exist anywhere in `gix-forge` today.
+7. (#8ee953d9) Does "artifacts" on a release stay as a real feature (needing its own storage/upload story) or get cut from the release card entirely, since tags don't carry attached binaries in this data model?
+8. (#8ee953d9) Should release claims be revocable by the signer only, or also by maintainers?
+9. (#392e7332) Should `Verdict` (review) and `Claim` (release, #8ee953d9) share one underlying primitive, given the aspirational Datalog rules in `gix-forge/src/lib.rs` already reference a shared `claim`/`signer`/`target`/`verdict` vocabulary?
+10. (#392e7332) Should verdicts stay valid, be invalidated requiring re-approval, or be downgraded to a visible "stale" marker when the review target moves (rebase/force-push)?
+11. (#392e7332) Should non-Blob review target kinds (tree/commit/commit-range) get a real bound/rebound/orphaned projection in this pass, or ship with today's binary clean/orphaned while only Blob targets get full three-state projection (since gix-anchor's rebound-capable oracles only operate on `Position`/`Anchor`, not the other four binding kinds)?
+12. (#392e7332) Does gix-anchor's `Delta` binding (designed for a single file's before/after) need an upstream extension to represent whole-tree commit-range/base-tip reviews, or does git-forge work around the single-path limitation locally?
+13. (#3195b397) Should issue label color be automatic/hash-derived (no schema change, no user control) or genuinely user-configured (schema change, needs deciding whether color is per-issue or a repo-wide label registry)?
+14. (#30cc67a0) Introduce one small (~20-30 line), scoped, progressively-enhancing vanilla-JS file to make ⌘K/Ctrl+K and Escape real keybindings, or leave the command palette permanently click-only to preserve this app's absolute zero-client-JS architecture? Explicitly the user's call — engineering effort for the JS option is small either way.
+15. (#468c9faa) Created-only or created+updated timestamps — and if updated, should it track only body edits or also status/label/assignee changes (relevant mainly for Issue/Review, less for Comment)?
+16. (#468c9faa) Author time or committer time when they diverge (e.g. imported/backfilled history)?
+17. (#c8bd3822) What page size and pagination cursor shape for the new `/tree/.../history` route, and should the per-file "last touched" walk have a worst-case depth/time cutoff with a defined UI fallback for pathological histories?
+18. (#b37dca5d) Is uncached per-request blame computation acceptable given this UI has no caching layer anywhere today, or does blame need an in-process cache (or a size/history-depth cutoff) from day one?
+19. (#2b98baaa) Content-Type strategy for raw serving — extension-based `mime_guess` vs. a fixed `application/octet-stream` vs. content-sniffing — and should raw serving keep the rendered view's 1 MiB size cap or use a separate, more permissive limit?
+20. (#0d10bbae) What should the top-bar ahead/behind indicator show when no upstream is configured — hide it, or show "no upstream" text?
+
+## Notes on scope realism
+
+Two domains turned out smaller than their original framing suggested once the actual dependency graph and storage layer were inspected: ahead/behind (#0d10bbae, pure read-only revwalk, no new deps) and timestamps (#468c9faa, already-implicit git-commit timestamps just need surfacing, not a schema migration). Two domains are genuinely open-ended and should not be estimated further until their product question is answered: the CI-integration half of #889a103e, and the non-Blob rebound-detection scope in #392e7332 (gix-anchor's oracles are asymmetric across binding kinds — only `Position` gets real rebound detection out of the box). No domain required walking back the design's intent; every stub has a real, buildable path forward once its open question is answered.
