@@ -18,7 +18,7 @@ use dialoguer::{
 };
 use gix_forge::{
     Authorization, Comment, Entity, EntityOps, HitKind, Issue, Member, Principal, QueryValue,
-    Review, ReviewTarget, Status,
+    Review, ReviewDecision, ReviewTarget, Status,
 };
 use owo_colors::OwoColorize;
 
@@ -155,7 +155,16 @@ enum ReviewCommand {
         id: String,
     },
     Search(ReviewSearchArgs),
+    Approve(ReviewDecisionArgs),
+    Deny(ReviewDecisionArgs),
     Query(QueryArgs),
+}
+
+#[derive(Args)]
+struct ReviewDecisionArgs {
+    id: String,
+    #[arg(long)]
+    message: Option<String>,
 }
 
 #[derive(Args)]
@@ -1613,6 +1622,22 @@ fn run_review(
                 args.keyword.as_deref(),
             )?;
             print_review_list(repo, &ids)?;
+        }
+        ReviewCommand::Approve(args) => {
+            let id = resolve_review_show_id(repo, &args.id)?
+                .with_context(|| format!("no review {}", args.id))?;
+            println!(
+                "{}",
+                ReviewDecision::approve_as(repo, authorization, id, args.message)?
+            );
+        }
+        ReviewCommand::Deny(args) => {
+            let id = resolve_review_show_id(repo, &args.id)?
+                .with_context(|| format!("no review {}", args.id))?;
+            println!(
+                "{}",
+                ReviewDecision::deny_as(repo, authorization, id, args.message)?
+            );
         }
         ReviewCommand::Query(args) => run_query_args(repo, args)?,
     }

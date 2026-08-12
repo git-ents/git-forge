@@ -651,6 +651,67 @@ fn review_edit_without_args_requires_field_without_terminal() {
 }
 
 #[test]
+fn review_approve_rejects_unsigned_publication_after_resolving_id() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git_stdout(dir.path(), &["config", "gpg.format", "openpgp"]);
+    put_review(dir.path(), "review-approve", "ready for review");
+
+    let (out, err, ok) = run(
+        dir.path(),
+        &["review", "approve", "review-", "--message", "looks good"],
+    );
+    assert!(!ok, "unsigned approval should fail: {out}");
+    assert!(
+        err.contains("missing signing configuration"),
+        "approval stderr: {err}"
+    );
+}
+
+#[test]
+fn review_deny_rejects_unsigned_publication_after_resolving_id() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git_stdout(dir.path(), &["config", "gpg.format", "openpgp"]);
+    put_review(dir.path(), "review-deny", "needs changes");
+
+    let (out, err, ok) = run(
+        dir.path(),
+        &["review", "deny", "review-", "--message", "please revise"],
+    );
+    assert!(!ok, "unsigned denial should fail: {out}");
+    assert!(
+        err.contains("missing signing configuration"),
+        "denial stderr: {err}"
+    );
+}
+
+#[test]
+fn review_decisions_reject_anonymous_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    put_review(dir.path(), "review-anonymous", "ready for review");
+
+    for verdict in ["approve", "deny"] {
+        let (_, err, ok) = run_without_identity(
+            dir.path(),
+            &[
+                "review",
+                verdict,
+                "review-anonymous",
+                "--message",
+                "message",
+            ],
+        );
+        assert!(!ok, "anonymous {verdict} should fail");
+        assert!(
+            err.contains("unauthorized: authentication is required to create review"),
+            "anonymous {verdict} stderr: {err}"
+        );
+    }
+}
+
+#[test]
 fn review_new_show_list_log_and_remove() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
