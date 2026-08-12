@@ -75,9 +75,7 @@ fn ui_crawls_every_internal_route() {
         body: "searchable ui crawl review".to_owned(),
         reviewers: vec![],
         requesters: vec!["alice".to_owned()],
-        target: ReviewTarget::Commit {
-            oid: "deadbeef".to_owned(),
-        },
+        target: ReviewTarget::parse("commit:0000000000000000000000000000000000000000").unwrap(),
         edit: None,
     }
     .save_in_repo_as(&repo, &alice)
@@ -219,7 +217,8 @@ fn ui_crawls_every_internal_route() {
 
     // A real (non-empty) line comment submission must stop at the shared
     // confirm dialog rather than writing immediately -- see confirm.rs.
-    let comment_body = b"reference=HEAD&path=src%2Flib.rs&view=source&comment=1-1&body=Looks%20good".to_vec();
+    let comment_body =
+        b"reference=HEAD&path=src%2Flib.rs&view=source&comment=1-1&body=Looks%20good".to_vec();
     let confirm_response = crawler
         .client
         .request_with_authorization(

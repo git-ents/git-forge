@@ -252,9 +252,12 @@ mod tests {
             body: body.to_string(),
             reviewers: reviewers.iter().map(|s| (*s).to_string()).collect(),
             requesters: requesters.iter().map(|s| (*s).to_string()).collect(),
-            target: ReviewTarget::Commit {
-                oid: gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
-            },
+            target: ReviewTarget::Commits(vec![
+                crate::review::ExactOid::parse(
+                    &gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
+                )
+                .unwrap(),
+            ]),
             edit: None,
         }
     }

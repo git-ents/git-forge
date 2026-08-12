@@ -59,11 +59,10 @@ impl ReviewForm {
 /// commit-shaped -- "Anchor kind colors" in DESIGN-SPEC.md).
 fn anchor_kind(target: &ReviewTarget) -> (&'static str, &'static str) {
     match target {
-        ReviewTarget::Blob { .. } => ("blob", "oid"),
-        ReviewTarget::Tree { .. } => ("tree", "warn"),
-        ReviewTarget::Commit { .. } => ("commit", "mauve"),
-        ReviewTarget::BaseTipTreePair { .. } => ("tree range", "warn"),
-        ReviewTarget::BaseTipCommitPair { .. } => ("commit range", "mauve"),
+        ReviewTarget::Blobs(_) => ("blob", "oid"),
+        ReviewTarget::Trees(_) => ("tree", "warn"),
+        ReviewTarget::Commits(_) => ("commit", "mauve"),
+        ReviewTarget::TreeRange { .. } => ("tree range", "warn"),
         ReviewTarget::CommitRange { .. } => ("commit range", "mauve"),
     }
 }
@@ -73,11 +72,15 @@ fn anchor_kind(target: &ReviewTarget) -> (&'static str, &'static str) {
 /// truncated for display.
 fn anchor_coord(target: &ReviewTarget) -> String {
     match target {
-        ReviewTarget::Blob { path, oid } => format!("{path} @ {oid}"),
-        ReviewTarget::Tree { oid } | ReviewTarget::Commit { oid } => oid.clone(),
-        ReviewTarget::BaseTipTreePair { base, tip }
-        | ReviewTarget::BaseTipCommitPair { base, tip } => format!("{base}..{tip}"),
-        ReviewTarget::CommitRange { start, end } => format!("{start}..{end}"),
+        ReviewTarget::Blobs(items) => items
+            .first()
+            .map_or_else(String::new, |item| format!("{} @ {}", item.path, item.oid)),
+        ReviewTarget::Trees(items) => items
+            .first()
+            .map_or_else(String::new, |item| item.oid.to_string()),
+        ReviewTarget::Commits(items) => items.first().map_or_else(String::new, ToString::to_string),
+        ReviewTarget::TreeRange { base, tip } => format!("{}..{}", base.oid, tip.oid),
+        ReviewTarget::CommitRange { base, tip } => format!("{}..{}", base, tip),
     }
 }
 
@@ -109,26 +112,45 @@ fn object_exists(repo: &gix::Repository, hex: &str) -> bool {
 /// here because there is no cheap, real way to detect it for a bare oid.
 fn anchor_projection(repo: &gix::Repository, target: &ReviewTarget) -> (bool, String) {
     match target {
-        ReviewTarget::Blob { oid, .. } | ReviewTarget::Tree { oid } | ReviewTarget::Commit { oid } => {
-            if object_exists(repo, oid) {
-                (true, format!("projects cleanly onto {oid}"))
-            } else {
-                (
-                    false,
-                    format!("{oid} was not found in this repository -- this review's target is orphaned"),
-                )
-            }
+        ReviewTarget::Blobs(items) => items.first().map_or_else(
+            || (false, "empty target".into()),
+            |item| single_projection(repo, &item.oid.to_string()),
+        ),
+        ReviewTarget::Trees(items) => items.first().map_or_else(
+            || (false, "empty target".into()),
+            |item| single_projection(repo, &item.oid.to_string()),
+        ),
+        ReviewTarget::Commits(items) => items.first().map_or_else(
+            || (false, "empty target".into()),
+            |oid| single_projection(repo, &oid.to_string()),
+        ),
+        ReviewTarget::TreeRange { base, tip } => {
+            range_projection(repo, &base.oid.to_string(), &tip.oid.to_string())
         }
-        ReviewTarget::BaseTipTreePair { base, tip }
-        | ReviewTarget::BaseTipCommitPair { base, tip } => range_projection(repo, base, tip),
-        ReviewTarget::CommitRange { start, end } => range_projection(repo, start, end),
+        ReviewTarget::CommitRange { base, tip } => {
+            range_projection(repo, &base.to_string(), &tip.to_string())
+        }
+    }
+}
+
+fn single_projection(repo: &gix::Repository, oid: &str) -> (bool, String) {
+    if object_exists(repo, oid) {
+        (true, format!("projects cleanly onto {oid}"))
+    } else {
+        (
+            false,
+            format!("{oid} was not found in this repository -- this review's target is orphaned"),
+        )
     }
 }
 
 fn range_projection(repo: &gix::Repository, a: &str, b: &str) -> (bool, String) {
     let (a_ok, b_ok) = (object_exists(repo, a), object_exists(repo, b));
     if a_ok && b_ok {
-        (true, format!("both endpoints resolve -- projects cleanly onto {a}..{b}"))
+        (
+            true,
+            format!("both endpoints resolve -- projects cleanly onto {a}..{b}"),
+        )
     } else {
         let missing = match (a_ok, b_ok) {
             (false, false) => format!("{a} and {b}"),
@@ -138,7 +160,9 @@ fn range_projection(repo: &gix::Repository, a: &str, b: &str) -> (bool, String) 
         };
         (
             false,
-            format!("{missing} not found in this repository -- this review's target range is orphaned"),
+            format!(
+                "{missing} not found in this repository -- this review's target range is orphaned"
+            ),
         )
     }
 }
@@ -240,7 +264,9 @@ async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Re
 
 /// Attach comment counts the same way the detail view needs them, for the
 /// list pane both routes share.
-fn load_review_rows(repo: &gix::Repository) -> std::result::Result<Vec<ReviewRow>, gix_forge::Error> {
+fn load_review_rows(
+    repo: &gix::Repository,
+) -> std::result::Result<Vec<ReviewRow>, gix_forge::Error> {
     let ids = Review::list(repo)?;
     ids.into_iter()
         .map(|id| Review::load_from_repo(repo, &id))
@@ -411,7 +437,14 @@ async fn review_detail(cx: &Cx) -> Result {
     .await;
 
     let (list, detail) = match data {
-        Ok(Some((review_items, review, comment_rows, verdict_rows, anchor_clean, anchor_message))) => {
+        Ok(Some((
+            review_items,
+            review,
+            comment_rows,
+            verdict_rows,
+            anchor_clean,
+            anchor_message,
+        ))) => {
             let can_edit = can_update(cx, &review).await;
             let can_comment = can_create::<Comment>(cx).await;
             let next_status = if review.status == "open" {
@@ -419,10 +452,18 @@ async fn review_detail(cx: &Cx) -> Result {
             } else {
                 "open"
             };
-            let status_class = if review.status == "open" { "status ok" } else { "status neutral" };
+            let status_class = if review.status == "open" {
+                "status ok"
+            } else {
+                "status neutral"
+            };
             let (kind_label, kind_class) = anchor_kind(&review.target);
             let coord = anchor_coord(&review.target);
-            let projection_class = if anchor_clean { "anchor-projection ok" } else { "anchor-projection warn" };
+            let projection_class = if anchor_clean {
+                "anchor-projection ok"
+            } else {
+                "anchor-projection warn"
+            };
             (
                 review_list(cx, &review_items, Some(review.id.as_str())).await?,
                 (view! {

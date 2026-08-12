@@ -2325,6 +2325,7 @@ name = "gix-forge"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "facet-git-tree",
  "gix",
  "gix-anchor",
  "gix-query",

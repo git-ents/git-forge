@@ -586,9 +586,12 @@ mod tests {
             body: "please review".to_string(),
             reviewers: vec!["carol".to_string()],
             requesters: vec!["dave".to_string()],
-            target: ReviewTarget::Commit {
-                oid: gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
-            },
+            target: ReviewTarget::Commits(vec![
+                crate::review::ExactOid::parse(
+                    &gix::ObjectId::null(gix::hash::Kind::Sha1).to_string(),
+                )
+                .unwrap(),
+            ]),
             edit: None,
         };
         let id = review

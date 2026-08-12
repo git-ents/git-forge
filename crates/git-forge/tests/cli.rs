@@ -212,9 +212,7 @@ fn put_review(dir: &Path, id: &str, body: &str) {
         body: body.to_owned(),
         reviewers: vec![],
         requesters: vec![],
-        target: ReviewTarget::Commit {
-            oid: "deadbeef".to_owned(),
-        },
+        target: ReviewTarget::parse("commit:0000000000000000000000000000000000000000").unwrap(),
         edit: None,
     };
     review
@@ -1278,8 +1276,8 @@ proptest! {
         }
 
         let review_rows = vec![
-            ("rev11111", "release reviewed", "carol", "dave", "deadbeef"),
-            ("rev22222", "other note", "mallory", "trent", "feedface"),
+            ("rev11111", "release reviewed", "carol", "dave", "0000000000000000000000000000000000000000"),
+            ("rev22222", "other note", "mallory", "trent", "1111111111111111111111111111111111111111"),
         ];
         for (id, body, reviewer, requester, oid) in &review_rows {
             Review {
@@ -1288,9 +1286,7 @@ proptest! {
                 body: (*body).to_owned(),
                 reviewers: vec![(*reviewer).to_owned()],
                 requesters: vec![(*requester).to_owned()],
-                target: ReviewTarget::Commit {
-                    oid: (*oid).to_owned(),
-                },
+                target: ReviewTarget::parse(&format!("commit:{oid}")).unwrap(),
                 edit: None,
             }
             .save_in_repo_as(
