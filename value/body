@@ -1,0 +1,34 @@
+Un-stub the v3 UI redesign — Domain A: Release signing & quorum (/releases)
+
+## Current state
+
+`crates/git-forge-ui/src/pages/releases.rs` is explicit about its own scope: `real_tag_identities()` pulls tag name/date/oid from the open repo via `gix::Repository::references().tags()`, falling back to three hardcoded `SAMPLE_IDENTITIES` when there are no tags. Everything else — `artifacts: u32`, the `SampleClaim` list (signer/key/date/valid|revoked), and the 2-of-3 `QUORUM_THRESHOLD`/`QUORUM_SLOTS` constants — is fabricated `const`/sample data with no backing entity. `release_publish` runs the shared `confirm_step` (`crates/git-forge-ui/src/confirm.rs`) against `refs/tags/{tag}` but the confirmed branch only renders a "Publish confirmed (no-op)" panel; nothing is written.
+
+Critically, nothing in this codebase does cryptographic signature verification today, for releases or anything else. `Member.signing_key` (`crates/gix-forge/src/member.rs`) is a free-text string only ever displayed next to an author name (`signing_key_of` in `issues.rs`/`reviews.rs`) — it is never checked against anything. "Signed" throughout the app currently means: an HTTP `Authorization: Bearer <member-id>` header resolves to a stored `Member` (`crates/git-forge-ui/src/auth.rs`), and `confirm_step` shows that member id as "Signed as" before the mutation proceeds. There is no keypair, no challenge, no verify step — authentication today is "the bearer claims to be member X and a member X exists."
+
+## What `gix` 0.85 actually gives us
+
+`gix-object` 0.62 (pulled in by `gix` 0.85) parses the raw PGP-armored blob out of both commits and tags (`Commit::signature()`, the `pgp_signature`/`gpgsig` field), but the source literally has a `// TODO: make it possible to verify the signature ... It's quite some work to do it properly`. Verification is not implemented anywhere in the gix ecosystem at this pin. SSH-format signatures (`gpg.format=ssh`, the SSHSIG envelope) aren't touched by gix-object at all — there's no parser for that format in this dependency tree. Real verification of either format would mean a genuinely new dependency (an OpenPGP crate such as `sequoia-openpgp`/`pgp`, or shelling out to `gpg --verify`; and for SSH, an `ssh-key`/sshsig-parsing crate or shelling to `ssh-keygen -Y verify`), plus a source of trusted public keys this app doesn't currently model — `Member.signing_key` is a display string, not a parsed/importable key.
+
+## Recommended direction: attestation, not git-native signature verification
+
+Given the existing auth model is entirely bearer-token + membership lookup, a `Claim` that "verifies a real GPG/SSH signature" would be a different trust model bolted onto a system that doesn't otherwise have one — disproportionate scope for this pass. The pattern-consistent move is an attestation: a `Release`/`Claim` entity recorded the same way an `Issue` comment is — the authenticated `Member` (via the existing `confirm_step`/`Authorization` path) asserts "I sign tag `<tag>` at oid `<oid>`," stored as a claim referencing `member.signing_key` as displayed metadata, not as something cryptographically checked. This is honest about what it is (an audit trail of who clicked confirm) without pretending to non-repudiation gix can't back today. This is an explicit product framing decision — see open questions.
+
+## Concrete changes
+
+- New `Release` entity (`crates/gix-forge/src/release.rs`) following the `Entity`/`EntityOps` pattern (see `review.rs`/`comment.rs`): `KIND = "release"`, fields `tag`, `oid`, `date`, `claims: Vec<Claim>` (or claims as a separate `Commentable`-style entity keyed by `(release, signer)` for individual revoke). Schema published via `ensure_schema_as` like every other kind; needs new `Capability` variants (`ReleaseCreate`/`ReleaseClaim`/`ReleaseRevoke`) in `authorization.rs`.
+- CLI: `git forge release sign <tag>` / `release revoke <tag> --signer`, mirroring the existing subcommand shape in `crates/git-forge/src/main.rs`.
+- UI: `release_publish` becomes a real `Release::save_as`/claim-append call through the existing `confirm_step`; a new claim-submit route for "sign this release" (distinct from "publish").
+- Quorum threshold: no per-repo config surface exists anywhere in `gix-forge` — this is new ground, not a field to bolt on. Needs its own decision (a `RepoConfig`-style entity? a value on `Member`/role count? a CLI flag at install time?).
+- Artifacts: no concept exists; "artifact count" isn't derivable from anything real in the repo today (tags don't carry attached binaries in this data model) — either drop it from the card or define a new artifact-registration concept, which is out of scope for signing alone.
+
+## Open product questions
+
+1. Confirm the attestation framing over git-native verification — does the product want to say "signed" knowing it's an app-level claim, not a cryptographically checked signature?
+2. Who sets the quorum threshold and where does that config live — this needs a new config concept in `gix-forge` that doesn't exist yet.
+3. Is "artifacts" staying as a real feature (needs its own storage/upload story) or getting cut from this card?
+4. Should claims be revocable by the signer only, or also by maintainers (mirrors the `requires_ownership`/`administrator` split already in `authorization.rs`)?
+
+## Complexity: Medium
+
+One new entity + capabilities + CLI subcommands + two UI routes, all following an established pattern (no new storage primitives needed). Sized up from "small" only because quorum-threshold configuration has no existing analog to extend and needs its own small design decision before implementation.
