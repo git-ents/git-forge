@@ -1,0 +1,35 @@
+Un-stub the v3 UI redesign — Domain D: Per-file last-touched commit / file history (/tree)
+
+## Current state
+
+`crates/git-forge-ui/src/pages/files.rs` renders the blob header's "last commit" line by calling `tree::commit_summary(repo, commit_id)` in `crates/git-forge-ui/src/tree.rs`, where `commit_id` is the ref's tip commit — not the last commit that touched the viewed path. The existing doc comment on `commit_summary` already states this honestly and names the correct fix: a real per-file "last commit" would need a pathspec-scoped revwalk (walk from the tip, diffing each commit against its parent(s) restricted to this path, stopping at the first one that touched it). The "History" action in the blob header is a disabled stub (`aria-disabled="true"`, "Per-file history has no route yet"). No `/tree/.../history` route exists. No reusable commit-list UI component exists either — the working-copy page's "unpushed commits" list (closest visual shape) is currently hardcoded mock data, not a reusable real component, though its CSS classes are worth reusing for visual consistency.
+
+## Target state
+
+Blob header shows the true last-touching commit (oid/subject/author/age) per the design's blob-header fields. The "History" link routes to a real, paginated `/tree/{ref}/{path}/history`-style page listing commits that touched the path, newest first.
+
+## Technical approach
+
+`gix` 0.85.0's `Tree::changes()` (part of `gix::object::tree::diff`, gated behind the `blob-diff` feature) returns a `Platform` with `for_each_to_obtain_tree(&other_tree, |change| ...)`, yielding `Change::{Addition,Deletion,Modification,Rewrite}` with a `location: &BStr` path. The walk: start from `repo.rev_walk(Some(tip)).all()` (same API already used in `tree::list_refs`), and for each commit diff its tree against its first parent's tree (mirrors `git log --first-parent` semantics — cheap, avoids merge-simplification complexity), checking whether `location` matches the target path; stop at first match. Root commits diff against an empty tree.
+
+## New dependencies / feature changes
+
+`gix-diff` 0.65.0 is already resolved in `Cargo.lock`, but gix's entire `diff` module (including `Tree::changes()`) is gated behind gix's own `blob-diff` Cargo feature, which is currently not enabled in either `git-forge-ui/Cargo.toml` or `git-forge/Cargo.toml`. Enabling `blob-diff` also transitively pulls in gix's `attributes` feature (`gix-filter`, `gix-pathspec`, `gix-attributes`, `gix-submodule`) and `command` — a real, non-trivial feature/dependency-surface addition, not just a Cargo.lock bump. Shared-dependency note: Domain C (blame) also requires `blob-diff` (gix's `blame` feature explicitly depends on it plus `gix-blame`) — if both domains ship, enable `blob-diff` once and both benefit; worth sequencing together or at least noting in both issues so it isn't paid for twice.
+
+## Performance
+
+The blob-header "last touched" lookup should be its own early-exit walk (cost proportional to commits since last touch, cheap for actively-maintained files, potentially expensive for stale/vendored files with deep history). The `/history` route needs true pagination since walks can't be random-accessed; page-number pagination would force re-walking and discarding from the start for every page (worse each page), so cursor-based pagination (resume by seeding `rev_walk` from the parent of the last-shown commit's oid) is the right shape.
+
+No caching layer exists in this codebase today (the only cache present is topcoat's static-asset bundler cache, unrelated). Every request would be a fresh walk. Since `(commit_id, path) -> last_touching_commit` is a pure function of immutable objects, an in-memory `(tip_oid, path)` memoization (LRU) would be safe with no invalidation concerns and is worth strongly considering rather than shipping uncached.
+
+## Open product/UX questions
+
+- Cursor vs page-number pagination confirmed as cursor; what page size (20? 50?)?
+- Should the "last touched" walk have a worst-case depth/time cutoff for pathological histories, and what does the UI show on cutoff — "older than N commits" vs silently falling back to the old tip-commit behavior?
+- Should first-parent-only diffing be the permanent semantics, or should merge commits get real simplification later?
+- Should this logic live in `gix-forge` (domain layer) instead of `git-forge-ui/src/tree.rs`, given it's real git-log functionality rather than UI-specific rendering?
+- Should an in-memory cache be built now or deferred to a follow-up once real usage/perf data exists?
+
+## Complexity: Medium
+
+The `gix` revwalk + diff APIs are directly usable with patterns already established in this file (`rev_walk` mirrors `list_refs`; the summary rendering mirrors `commit_summary`). The real cost is: (1) the `blob-diff` feature-flag expansion and its transitive surface, (2) building pagination and its cursor encoding from scratch (no precedent anywhere in this codebase), and (3) deciding/implementing the depth-cutoff and (optionally) caching story rather than a pure "just walk it" implementation.
