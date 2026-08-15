@@ -882,7 +882,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1397,7 +1397,7 @@ checksum = "ad5208a115eaba24916f7456929832e310a81518c641f93fee4f89aa93aa3675"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1569,7 +1569,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1628,7 +1628,7 @@ dependencies = [
 [[package]]
 name = "facet-git-tree"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store.git#b824a1815a098a4943cc5b724b9cbac964668600"
+source = "git+https://github.com/git-ents/git-store.git#d3a46c2e9170ffb3e85adbcf031fb83069ea0001"
 dependencies = [
  "facet",
  "facet-value",
@@ -2101,7 +2101,7 @@ dependencies = [
 [[package]]
 name = "gix-anchor"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-anchor.git#2536a8901558bc89ebe45157ae5a0394759a8c82"
+source = "git+https://github.com/git-ents/git-anchor.git#b96013e8d08071c7d602d23cc8d7a452fcafa64c"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -2114,7 +2114,7 @@ dependencies = [
 [[package]]
 name = "gix-attest"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-anchor.git?rev=4b98ae23f47a5415416e68bae7c88913798ad3ea#4b98ae23f47a5415416e68bae7c88913798ad3ea"
+source = "git+https://github.com/git-ents/git-anchor.git?rev=b96013e8d08071c7d602d23cc8d7a452fcafa64c#b96013e8d08071c7d602d23cc8d7a452fcafa64c"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -2128,7 +2128,7 @@ dependencies = [
 [[package]]
 name = "gix-attest"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-anchor.git#2536a8901558bc89ebe45157ae5a0394759a8c82"
+source = "git+https://github.com/git-ents/git-anchor.git#b96013e8d08071c7d602d23cc8d7a452fcafa64c"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -2578,7 +2578,7 @@ dependencies = [
 [[package]]
 name = "gix-query"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "gix",
  "gix-query-check",
@@ -2595,7 +2595,7 @@ dependencies = [
 [[package]]
 name = "gix-query-check"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "gix-query-ir",
  "thiserror 2.0.20",
@@ -2604,7 +2604,7 @@ dependencies = [
 [[package]]
 name = "gix-query-eval"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "async-trait",
  "gix-query-ir",
@@ -2617,12 +2617,12 @@ dependencies = [
 [[package]]
 name = "gix-query-host"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "facet",
  "gix",
  "gix-anchor",
- "gix-attest 0.1.0 (git+https://github.com/git-ents/git-anchor.git?rev=4b98ae23f47a5415416e68bae7c88913798ad3ea)",
+ "gix-attest 0.1.0 (git+https://github.com/git-ents/git-anchor.git?rev=b96013e8d08071c7d602d23cc8d7a452fcafa64c)",
  "gix-query-ir",
  "gix-refstore",
  "gix-store",
@@ -2632,7 +2632,7 @@ dependencies = [
 [[package]]
 name = "gix-query-ir"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -2640,7 +2640,7 @@ dependencies = [
 [[package]]
 name = "gix-query-parse"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "gix-query-ir",
  "thiserror 2.0.20",
@@ -2649,7 +2649,7 @@ dependencies = [
 [[package]]
 name = "gix-query-rules"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-query.git#cca56ac0f7e2ba8cf100d652ba7095757f8e8570"
+source = "git+https://github.com/git-ents/git-query.git#39fa74820751c956c3b3da4d1ae2de776f909500"
 dependencies = [
  "facet",
  "facet-format",
@@ -2713,7 +2713,7 @@ dependencies = [
 [[package]]
 name = "gix-refstore"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store.git#b824a1815a098a4943cc5b724b9cbac964668600"
+source = "git+https://github.com/git-ents/git-store.git#d3a46c2e9170ffb3e85adbcf031fb83069ea0001"
 dependencies = [
  "gix",
  "gix-hash",
@@ -2783,7 +2783,7 @@ dependencies = [
 [[package]]
 name = "gix-store"
 version = "0.1.0"
-source = "git+https://github.com/git-ents/git-store.git#b824a1815a098a4943cc5b724b9cbac964668600"
+source = "git+https://github.com/git-ents/git-store.git#d3a46c2e9170ffb3e85adbcf031fb83069ea0001"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -3393,7 +3393,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4147,7 +4147,7 @@ dependencies = [
  "json-event-parser",
  "oxiri",
  "oxrdf",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4159,7 +4159,7 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "rand 0.8.7",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4172,7 +4172,7 @@ dependencies = [
  "oxrdf",
  "oxrdfxml",
  "oxttl",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4185,7 +4185,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "quick-xml",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4198,7 +4198,7 @@ dependencies = [
  "oxilangtag",
  "oxiri",
  "oxrdf",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4826,7 +4826,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5216,7 +5216,7 @@ dependencies = [
  "oxrdf",
  "peg",
  "rand 0.8.7",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -5425,10 +5425,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6456,7 +6456,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
