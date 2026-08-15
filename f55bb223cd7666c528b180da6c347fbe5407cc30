@@ -1,0 +1,16 @@
+ERRATUM: this commit incorrectly bundles two unrelated changesets.
+
+1. The intended change: canonical store entity/issue/review integration
+   in gix-forge (entity.rs, issue.rs, review.rs) plus git-forge CLI
+   plumbing (main.rs, cli.rs, cli.proptest-regressions).
+
+2. Erroneously included: the entire git-forge-ui "Handoff v5" design
+   redesign (shell.rs, style.css, pages/{gates,inbox,local,theme,
+   members,releases,reviews,root,workingcopy}.rs, Cargo.toml, lib.rs)
+   plus the design-handoff source docs (README.md, github.md at the
+   git-forge crate root). This UI work was staged separately and got
+   swept into this commit by mistake when the branch was paused and
+   resumed; it should have landed as its own commit.
+
+No revert/rebase performed since this commit is already on
+origin/main. Noting for the record; work continues from HEAD.
