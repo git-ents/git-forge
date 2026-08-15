@@ -9,6 +9,7 @@ use std::{fs, sync::Arc};
 
 use topcoat::{
     asset::{AssetBundle, RouterBuilderAssetExt},
+    cookie::RouterBuilderCookieExt,
     router::{Router, RouterBuilderDiscoverExt},
 };
 use topcoat_asset::{Bundler, BundlerConfig};
@@ -49,6 +50,7 @@ pub async fn build_router(
 
     Router::builder()
         .discover()
+        .cookies()
         .app_context(repo)
         .app_context(member_id)
         .assets(assets)

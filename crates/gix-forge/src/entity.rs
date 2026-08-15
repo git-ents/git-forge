@@ -7,9 +7,14 @@
 //! `gix-store`, so `Issue`, `Review`, and `Comment` each write only an
 //! `Entity` impl instead of duplicating the whole CRUD surface.
 
+use std::collections::BTreeMap;
+
 use facet::Facet;
 use gix::{ObjectId, Repository};
-use gix_store::{GixRefStore, Kind, NamedEntries, RefPath, RefSegment, RepoStore, Typed};
+use gix_store::{
+    ApplyError, GixRefStore, Kind, NamedEntries, RefEdit, RefName, RefPath, RefSegment, RefStore,
+    RepoStore, Typed,
+};
 
 use crate::{Authorization, Capability, Error, Ownership, Principal, open_store};
 
@@ -125,7 +130,21 @@ pub trait EntityOps: Entity {
     ) -> Result<ObjectId, Error> {
         authorization.check(Self::update_capability(), self.ownership(authorization))?;
         let name = RefPath::new(self.id())?;
-        Ok(Self::kind(store).put(&name, &self.to_stored())?)
+        let kind = Self::kind(store);
+        let aliases = aliases_for::<Self>(store, &name)?;
+        let commit = kind.put(&name, &self.to_stored())?;
+
+        // A migrated repository can have several names for one entity. Keep
+        // those caller names usable, but make them point at the one commit
+        // produced by this update so a broad ref scan cannot turn an update
+        // into two logical entities.
+        for (alias, previous) in aliases {
+            if alias == name {
+                continue;
+            }
+            retarget(store, kind.reference(&alias), previous, commit)?;
+        }
+        Ok(commit)
     }
 
     /// Legacy creation entry point. Anonymous writes are rejected.
@@ -184,34 +203,71 @@ pub trait EntityOps: Entity {
         Self::load(&open_store(repo), id)
     }
 
-    /// Every entity of this kind, ascending by id, in one pass: `gix-store`
-    /// pairs each name with the commit its ref already points at, so no ref
-    /// is resolved twice and the schema those commits bind is parsed once for
-    /// the whole scan.
+    /// Every logical entity of this kind, ascending by its canonical id.
+    ///
+    /// `gix-store` deliberately exposes every source ref, including caller
+    /// aliases. Forge treats refs carrying the same bound document tree as
+    /// one entity for collection and query APIs, while [`load`](Self::load)
+    /// keeps the name supplied by the caller for compatibility.
     fn load_all(store: &RepoStore<'_>) -> Result<Vec<Self>, Error> {
-        Ok(Self::rebuild(Self::kind(store).entries()?))
+        let kind = Self::kind(store);
+        let entries = logical_entries::<Self>(store)?;
+        entries
+            .into_iter()
+            .map(|(name, commit)| {
+                kind.get_entry_at(commit)
+                    .map(|entry| Self::from_stored(name.to_string(), entry.value))
+                    .map_err(Error::from)
+            })
+            .collect()
     }
 
     /// [`load_all`](Self::load_all) narrowed to the entities nested under
     /// `group`.
     fn load_all_under(store: &RepoStore<'_>, group: &RefPath) -> Result<Vec<Self>, Error> {
-        Ok(Self::rebuild(Self::kind(store).entries_under(group)?))
-    }
-
-    /// The one place stored entries become public entities.
-    fn rebuild(entries: NamedEntries<Self::Stored>) -> Vec<Self> {
+        let kind = Self::kind(store);
+        let entries = logical_entries_under::<Self>(store, group)?;
         entries
             .into_iter()
-            .map(|(name, entry)| Self::from_stored(name.to_string(), entry.value))
+            .map(|(name, commit)| {
+                kind.get_entry_at(commit)
+                    .map(|entry| Self::from_stored(name.to_string(), entry.value))
+                    .map_err(Error::from)
+            })
             .collect()
     }
 
-    /// Every id of this kind, ascending.
-    fn list(repo: &Repository) -> Result<Vec<String>, Error> {
-        Ok(Self::kind(&open_store(repo))
-            .list()?
+    /// Convert bulk store entries into public entities, retaining one
+    /// representative when the same publication commit has multiple names.
+    fn rebuild(entries: NamedEntries<Self::Stored>) -> Vec<Self> {
+        let mut seen = BTreeMap::new();
+        for (name, entry) in entries {
+            seen.entry(entry.commit)
+                .or_insert_with(|| Self::from_stored(name.to_string(), entry.value));
+        }
+        seen.into_values().collect()
+    }
+
+    /// Every direct source name of this kind, including canonical refs and
+    /// nested caller aliases. Unlike [`list`](Self::list), this does not
+    /// collapse names that identify the same logical entity.
+    fn source_names(repo: &Repository) -> Result<Vec<String>, Error> {
+        let store = open_store(repo);
+        let mut names: Vec<_> = source_entries::<Self>(&store)?
             .into_iter()
-            .map(|path| path.to_string())
+            .map(|(name, _)| name.to_string())
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// Every canonical id of this kind, ascending. Caller aliases remain
+    /// directly loadable, but are not reported as separate entities.
+    fn list(repo: &Repository) -> Result<Vec<String>, Error> {
+        let store = open_store(repo);
+        Ok(logical_entries::<Self>(&store)?
+            .into_iter()
+            .map(|(name, _)| name.to_string())
             .collect())
     }
 
@@ -237,13 +293,199 @@ pub trait EntityOps: Entity {
     ) -> Result<bool, Error> {
         let store = open_store(repo);
         let name = RefPath::new(id)?;
+        let kind = Self::kind(&store);
         let entity = Self::load(&store, id)?;
         let ownership = entity
             .as_ref()
             .map_or(Ownership::Owned, |entity| entity.ownership(authorization));
         authorization.check(Self::delete_capability(), ownership)?;
-        Ok(Self::kind(&store).remove(&name)?)
+
+        let aliases = aliases_for::<Self>(&store, &name)?;
+        if aliases.is_empty() {
+            return Ok(false);
+        }
+        for (alias, _) in aliases {
+            kind.remove(&alias)?;
+        }
+        Ok(true)
     }
 }
 
 impl<T: Entity> EntityOps for T {}
+
+fn retarget(
+    store: &RepoStore<'_>,
+    name: RefName,
+    expected: ObjectId,
+    new: ObjectId,
+) -> Result<(), Error> {
+    store
+        .refs()
+        .apply(RefEdit::Update {
+            name,
+            expected,
+            new,
+        })
+        .map_err(|error: ApplyError<_>| {
+            Error::Store(gix_store::Error::Backend(Box::new(std::io::Error::other(
+                error.to_string(),
+            ))))
+        })
+}
+
+fn logical_entries<T: Entity>(store: &RepoStore<'_>) -> Result<Vec<(RefPath, ObjectId)>, Error> {
+    logical_entries_from(store, source_entries::<T>(store)?)
+}
+
+fn logical_entries_under<T: Entity>(
+    store: &RepoStore<'_>,
+    group: &RefPath,
+) -> Result<Vec<(RefPath, ObjectId)>, Error> {
+    let entries = source_entries::<T>(store)?
+        .into_iter()
+        .filter(|(name, _)| {
+            name.segments().len() > group.segments().len()
+                && name.segments().starts_with(group.segments())
+        })
+        .collect();
+    logical_entries_from(store, entries)
+}
+
+/// Read the refs themselves instead of a materialized kind index. Indexes are
+/// an optimization and older repositories can have valid indexes that predate
+/// a migrated compatibility alias.
+fn source_entries<T: Entity>(store: &RepoStore<'_>) -> Result<Vec<(RefPath, ObjectId)>, Error> {
+    let prefix = store
+        .layout()
+        .data
+        .child(&RefSegment::new(T::KIND).expect("built-in ref segment is valid"));
+    store
+        .refs()
+        .prefixed(&prefix)
+        .map_err(|error| Error::Store(gix_store::Error::Backend(Box::new(error))))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .filter_map(|(name, commit)| name.relative_to(&prefix).map(|name| (name, commit)))
+                .collect()
+        })
+}
+
+fn logical_entries_from(
+    store: &RepoStore<'_>,
+    entries: Vec<(RefPath, ObjectId)>,
+) -> Result<Vec<(RefPath, ObjectId)>, Error> {
+    let mut by_identity: BTreeMap<ObjectId, Vec<(RefPath, ObjectId)>> = BTreeMap::new();
+    for (name, commit) in entries {
+        // A publication commit is not the entity identity: two refs can point
+        // at different commits carrying the same bound document. The document
+        // tree is the stable identity used by the store compatibility layer.
+        let identity = document_identity(store.objects(), commit).unwrap_or(commit);
+        by_identity
+            .entry(identity)
+            .or_default()
+            .push((name, commit));
+    }
+
+    let mut logical: Vec<_> = by_identity
+        .into_values()
+        .map(|refs| {
+            let name = canonical_name(store.objects(), &refs);
+            let commit = refs
+                .iter()
+                .find(|(candidate, _)| *candidate == name)
+                .map_or(refs[0].1, |(_, commit)| *commit);
+            (name, commit)
+        })
+        .collect();
+    logical.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Ok(logical)
+}
+
+fn aliases_for<T: Entity>(
+    store: &RepoStore<'_>,
+    name: &RefPath,
+) -> Result<Vec<(RefPath, ObjectId)>, Error> {
+    let entries = source_entries::<T>(store)?;
+    let Some((_, target)) = entries.iter().find(|(candidate, _)| candidate == name) else {
+        return Ok(Vec::new());
+    };
+    let identity = document_identity(store.objects(), *target).unwrap_or(*target);
+    Ok(entries
+        .into_iter()
+        .filter(|(_, commit)| {
+            document_identity(store.objects(), *commit).unwrap_or(*commit) == identity
+        })
+        .collect())
+}
+
+/// Select the stable public name used by collection APIs for one commit's
+/// refs. Caller aliases remain visible to forge users; canonical document-tree
+/// names are used only when no alias exists. The lexical choice is
+/// deterministic when several aliases address the same document.
+fn canonical_name(objects: &gix::OdbHandle, refs: &[(RefPath, ObjectId)]) -> RefPath {
+    // Anonymous creation retains the old commit-named path as a direct
+    // compatibility alias. Prefer it over caller-chosen aliases so the
+    // primary id returned by creation remains stable.
+    if let Some((name, _)) = refs.iter().find(|(name, commit)| {
+        name.segments().len() == 1 && *name == gix_store::entity_name(*commit)
+    }) {
+        return name.clone();
+    }
+
+    let mut aliases: Vec<_> = refs
+        .iter()
+        .filter(|(name, commit)| {
+            let markers = commit_markers(objects, *commit);
+            !markers
+                .iter()
+                .skip(1)
+                .step_by(2)
+                .any(|marker| name.to_string() == marker.to_string())
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    aliases.sort();
+    aliases
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| refs[0].0.clone())
+}
+
+/// The complete bound document tree is the compatibility identity shared by
+/// separate publication commits for one entity.
+fn document_identity(objects: &gix::OdbHandle, commit: ObjectId) -> Option<ObjectId> {
+    commit_markers(objects, commit).get(1).copied()
+}
+
+/// Return the commit and root-tree ids along the first-parent chain. A
+/// migrated canonical ref names an earlier root tree, so looking only at the
+/// current commit would make an alias win after the first update.
+fn commit_markers(objects: &gix::OdbHandle, mut commit: ObjectId) -> Vec<ObjectId> {
+    use gix::objs::{Find, Kind as ObjectKind};
+
+    let mut markers = Vec::new();
+    let mut buffer = Vec::new();
+    for _ in 0..1024 {
+        markers.push(commit);
+        let Some(data) = objects
+            .try_find(commit.as_ref(), &mut buffer)
+            .ok()
+            .flatten()
+        else {
+            break;
+        };
+        if data.kind != ObjectKind::Commit {
+            break;
+        }
+        let Ok(parsed) = gix::objs::CommitRef::from_bytes(data.data, gix::hash::Kind::Sha1) else {
+            break;
+        };
+        markers.push(parsed.tree());
+        let Some(parent) = parsed.parents().next() else {
+            break;
+        };
+        commit = parent;
+    }
+    markers
+}

@@ -1,6 +1,10 @@
+mod annotations;
 mod comments;
 mod files;
+mod gates;
+mod inbox;
 mod issues;
+mod local;
 mod members;
 mod palette;
 mod query;
@@ -8,8 +12,9 @@ mod releases;
 mod reviews;
 mod root;
 mod search;
-mod workingcopy;
+mod theme;
 
+pub(crate) use local::local_strip;
 pub(crate) use palette::{palette_mount, palette_trigger};
 
 use topcoat::context::{Cx, app_context};

@@ -16,7 +16,7 @@ use crate::{
     confirm::confirm_step,
     pages::{csv_values, with_repo},
     render::render_asciidoc,
-    shell::{Tab, shell, split_shell},
+    shell::{Tab, route_shell, shell},
 };
 
 #[path_param(error = bad_request)]
@@ -70,20 +70,16 @@ fn anchor_kind(target: &ReviewTarget) -> (&'static str, &'static str) {
     }
 }
 
-/// The literal coordinates a target names -- object ids stay in full, per
-/// DESIGN-SPEC's "object ids are always visible" rule; nothing here is
-/// truncated for display.
-fn anchor_coord(target: &ReviewTarget) -> String {
+/// The `ReviewTarget` enum variant's own name, for the Request band's
+/// "ReviewTarget::Variant" header -- distinct from [`anchor_kind`]'s
+/// collapsed six-kind label, which the nav list badges use instead.
+const fn target_variant_name(target: &ReviewTarget) -> &'static str {
     match target {
-        ReviewTarget::Blobs(items) => items
-            .first()
-            .map_or_else(String::new, |item| format!("{} @ {}", item.path, item.oid)),
-        ReviewTarget::Trees(items) => items
-            .first()
-            .map_or_else(String::new, |item| item.oid.to_string()),
-        ReviewTarget::Commits(items) => items.first().map_or_else(String::new, ToString::to_string),
-        ReviewTarget::TreeRange { base, tip } => format!("{}..{}", base.oid, tip.oid),
-        ReviewTarget::CommitRange { base, tip } => format!("{}..{}", base, tip),
+        ReviewTarget::Blobs(_) => "Blobs",
+        ReviewTarget::Trees(_) => "Trees",
+        ReviewTarget::Commits(_) => "Commits",
+        ReviewTarget::TreeRange { .. } => "TreeRange",
+        ReviewTarget::CommitRange { .. } => "CommitRange",
     }
 }
 
@@ -217,16 +213,17 @@ async fn review_form(cx: &Cx, action: &str, form: &ReviewForm, error: Option<&st
 }
 
 /// One master-list row's worth of real data: the review plus its comment
-/// count.
-type ReviewRow = (Review, usize);
+/// count and its signed-decision count (active and revoked together, same
+/// total the Decisions band shows).
+type ReviewRow = (Review, usize, usize);
 
 async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Result {
     let can_create = can_create::<Review>(cx).await;
     view! { cx =>
-        <div class="list-heading">
-            <div><h2>"Reviews"</h2><span class="muted">(items.len())</span></div>
+        <div class="route-nav-header">
+            <h2>"Reviews"</h2>
             if can_create {
-                <a class="button-link" href="/reviews/new">"New review"</a>
+                <a class="route-nav-action" href="/reviews/new">"+ request"</a>
             }
         </div>
         if items.is_empty() {
@@ -239,34 +236,33 @@ async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Re
                 }
             </div>
         } else {
-            <ul class="entity-list">
-                for (review, comment_count) in items {
-                    let dot_class = if review.status == "open" { "status-dot ok" } else { "status-dot" };
-                    let row_class = if selected == Some(review.id.as_str()) { "list-row selected" } else { "list-row" };
-                    let (kind_label, kind_class) = anchor_kind(&review.target);
-                    let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
-                    <li>
-                        <a class=(row_class) href=(format!("/reviews/{}", review.id))>
-                            <div class="row-top">
-                                <span class=(dot_class)></span>
-                                <strong class="row-title">"Review " (review.id.as_str())</strong>
-                            </div>
-                            <div class="row-meta">
-                                <span class="row-id">(review.id.as_str())</span>
-                                <span>(author)</span>
-                                <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
-                                <span class="row-comments">(*comment_count) " comments"</span>
-                            </div>
-                        </a>
-                    </li>
-                }
-            </ul>
+            for (review, comment_count, decision_count) in items {
+                let (kind_label, kind_class) = anchor_kind(&review.target);
+                let (status_label, status_class, edge_token) = if review.status == "open" { ("open", "ok", "ok") } else { ("closed", "neutral", "faint") };
+                let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
+                let decisions_label = match decision_count {
+                    0 => "no decisions".to_owned(),
+                    1 => "1 decision".to_owned(),
+                    n => format!("{n} decisions"),
+                };
+                let is_selected = selected == Some(review.id.as_str());
+                let row_class = if is_selected { "nav-row active" } else { "nav-row" };
+                let edge_style = (!is_selected).then(|| format!("--nav-edge:var(--{edge_token})"));
+                <a class=(row_class) style=(edge_style.unwrap_or_default()) href=(format!("/reviews/{}", review.id))>
+                    <div class="nav-row-top">
+                        <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
+                        <span class=(format!("nav-row-status {status_class}"))>(status_label)</span>
+                    </div>
+                    <span class="nav-row-title">"Review " (review.id.as_str())</span>
+                    <span class="nav-row-sub">(author) " · " (decisions_label) " · " (*comment_count) " comments"</span>
+                </a>
+            }
         }
     }
 }
 
-/// Attach comment counts the same way the detail view needs them, for the
-/// list pane both routes share.
+/// Attach comment and decision counts the same way the detail view needs
+/// them, for the nav pane both routes share.
 fn load_review_rows(
     repo: &gix::Repository,
 ) -> std::result::Result<Vec<ReviewRow>, gix_forge::Error> {
@@ -280,7 +276,10 @@ fn load_review_rows(
                 .flatten()
                 .map(|review| {
                     let comment_count = review.get_comments(repo).map(|c| c.len()).unwrap_or(0);
-                    (review, comment_count)
+                    let decision_count = ReviewDecision::claims_for_review(repo, &review.id)
+                        .map(|claims| claims.len())
+                        .unwrap_or(0);
+                    (review, comment_count, decision_count)
                 })
                 .collect()
         })
@@ -317,7 +316,7 @@ async fn reviews(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Some(Tab::Reviews), title: "Reviews", list: list, detail: detail) }
+    view! { route_shell(active: Tab::Reviews, title: "Reviews", nav_width: "21rem", nav: list, detail: detail) }
 }
 
 #[page("/reviews/new")]
@@ -438,80 +437,72 @@ async fn review_detail(cx: &Cx) -> Result {
             } else {
                 "open"
             };
+            let toggle_label = if next_status == "closed" {
+                "Close review"
+            } else {
+                "Reopen review"
+            };
             let status_class = if review.status == "open" {
                 "status ok"
             } else {
                 "status neutral"
             };
-            let (kind_label, kind_class) = anchor_kind(&review.target);
-            let coord = anchor_coord(&review.target);
-            let projection_class = if anchor_clean {
-                "anchor-projection ok"
+            let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
+            let reviewers_label = if review.reviewers.is_empty() {
+                "none invited".to_owned()
             } else {
-                "anchor-projection warn"
+                review.reviewers.join(", ")
             };
+            let target_shorthand = review.target.to_string();
+            let target_variant = target_variant_name(&review.target);
+            // Non-negotiable #8: status is a plain manual field the owner
+            // sets by hand -- this only *suggests* they might want to, never
+            // computes or sets it itself.
+            let has_active_decision = decision_rows.iter().any(|decision| decision.revoked_by.is_none());
+            let show_nudge = can_edit && review.status == "open" && has_active_decision;
+            // Non-negotiable #4: once the pinned oid no longer resolves, the
+            // decisions signed against it are shown as quiet muted lines
+            // rather than hidden or specially flagged.
+            let verdict_list_class = if anchor_clean { "verdict-list" } else { "verdict-list stale" };
             (
                 review_list(cx, &review_items, Some(review.id.as_str())).await?,
-                (view! {
-                    <article>
-                        <div class="detail-meta"><span class=(status_class)>(review.status.as_str())</span><span class="muted">"#" (review.id.as_str())</span></div>
-                        <div class="detail-heading">
-                            <div><h2>"Review " (review.id.as_str())</h2><p class="muted">"A request for focused feedback"</p></div>
+                (view! { cx =>
+                    <article class="route-main-width-lg">
+                        <h1 class="review-title">"Review " (review.id.as_str())</h1>
+                        <p class="review-subtitle">(review.id.as_str()) " · requested by " (author)</p>
+
+                        if can_edit {
                             <div class="detail-actions">
-                                if can_decide {
-                                    <a class="button-link secondary" href=(format!("/reviews/{}/decision", review.id))>"Record decision"</a>
-                                }
-                                if can_edit {
-                                    <a class="button-link secondary" href=(format!("/reviews/{}/edit", review.id))>"Edit"</a>
-                                    <form class="inline-form" action=(format!("/reviews/{}/status", review.id)) method="post"><input type="hidden" name="status" value=(next_status)><button type="submit">if next_status == "closed" { "Close review" } else { "Reopen review" }</button></form>
-                                    <form class="inline-form" action=(format!("/reviews/{}/delete", review.id)) method="post"><button class="danger-button" type="submit">"Delete"</button></form>
-                                } else {
-                                    <span class="action-note">"Only the requester or a maintainer can change this review."</span>
-                                }
+                                <a class="button-link secondary" href=(format!("/reviews/{}/edit", review.id))>"Edit"</a>
+                                <form class="inline-form" action=(format!("/reviews/{}/delete", review.id)) method="post"><button class="danger-button" type="submit">"Delete"</button></form>
                             </div>
-                        </div>
+                        } else {
+                            <p class="action-note">"Only the requester or a maintainer can change this review."</p>
+                        }
+
+                        <h3 class="step-heading"><span class="step-badge">"1"</span>"Request"</h3>
                         <div class="body-copy rendered-file">(Unescaped::new_unchecked(render_asciidoc(&review.body)))</div>
-                        <div class="panel-block">
-                            <div class="panel-block-heading">"Anchor"</div>
-                            <div class="panel-block-body anchor-block-body">
-                                <div class="anchor-kind-row">
-                                    <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
-                                    <code class="anchor-coord">(coord)</code>
+                        <div class="panel-block target-box">
+                            <div class="panel-block-heading target-box-head">
+                                <span>"ReviewTarget::" (target_variant)</span>
+                                <span class="target-box-note">"exact oid — resolves or is orphaned, never drifts"</span>
+                            </div>
+                            <div class="panel-block-body">
+                                <div class="target-cmd">
+                                    <span class="target-cmd-prompt">"$"</span>
+                                    <code>"gf review show " <span class="target-cmd-value">(target_shorthand.as_str())</span></code>
                                 </div>
-                                <div class=(projection_class)>(anchor_message)</div>
+                                <p class="target-explain">(anchor_message.as_str())</p>
+                                <div class="target-parties">
+                                    <span><strong>"requester"</strong> " — " (author) " (owns this record)"</span>
+                                    <span><strong>"reviewers"</strong> " — " (reviewers_label.as_str()) " (invited, no powers)"</span>
+                                </div>
                             </div>
                         </div>
-                        <dl class="facts">
-                            <dt>"Requesters"</dt><dd>(if review.requesters.is_empty() { "None".to_owned() } else { review.requesters.join(", ") })</dd>
-                            <dt>"Reviewers"</dt><dd>(if review.reviewers.is_empty() { "None".to_owned() } else { review.reviewers.join(", ") })</dd>
-                        </dl>
-                        <div class="panel-block">
-                            <div class="panel-block-heading">"Signed decisions"</div>
-                            <p class="form-help">"Decisions are signed claims about this review target. A revoked decision remains visible in the chain and is marked below."</p>
-                            if decision_rows.is_empty() {
-                                <p class="empty panel-block-body">"No signed decisions yet."</p>
-                            } else {
-                                <ul class="verdict-list">
-                                    for decision in &decision_rows {
-                                        <li class="verdict-row">
-                                            <span>
-                                                if decision.decision.verdict == ReviewVerdict::Approve { "Approve" } else { "Deny" }
-                                                if let Some(message) = &decision.decision.message { <span class="muted">" — " (message.as_str())</span> }
-                                            </span>
-                                            <span class=(if decision.revoked_by.is_some() { "verdict-pill pending" } else if decision.decision.verdict == ReviewVerdict::Approve { "verdict-pill responded" } else { "verdict-pill denied" })>
-                                                if decision.revoked_by.is_some() { "revoked" } else { "active" }
-                                            </span>
-                                            <small class="claim-chain">
-                                                "claim " <code>(decision.claim_id.to_string())</code> " · key " <code>(decision.key_claim_id.to_string())</code>
-                                                if let Some(revocation) = decision.revoked_by { " · revoked by " <code>(revocation.to_string())</code> }
-                                            </small>
-                                        </li>
-                                    }
-                                </ul>
-                            }
-                        </div>
+
+                        <h3 class="step-heading"><span class="step-badge">"2"</span>"Discussion"</h3>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comment_rows.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            <div class="panel-heading"><div><span class="muted">(comment_rows.len()) " comments, scoped under (\"review\", " (review.id.as_str()) ")"</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
                             if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
@@ -541,6 +532,75 @@ async fn review_detail(cx: &Cx) -> Result {
                                 <p class="form-context">"Sign in as a forge member to join this discussion."</p>
                             }
                         </section>
+
+                        <h3 class="step-heading"><span class="step-badge">"3"</span>"Decisions"</h3>
+                        if show_nudge {
+                            <div class="decision-nudge">
+                                <span>"This review already has a signed decision on record."</span>
+                                <form action=(format!("/reviews/{}/status", review.id)) method="post">
+                                    <input type="hidden" name="status" value="closed">
+                                    <button type="submit">"Close review"</button>
+                                </form>
+                            </div>
+                        }
+                        <div class="panel-block">
+                            <div class="panel-block-heading">"Signed decisions"</div>
+                            <p class="verdicts-note">
+                                "Decisions are signed claims about this review target. A revoked decision remains visible in the chain and is marked below."
+                                if !anchor_clean { " The pinned target no longer resolves, so every decision below is shown muted." }
+                            </p>
+                            if decision_rows.is_empty() {
+                                <p class="empty panel-block-body">"No signed decisions yet."</p>
+                            } else {
+                                <ul class=(verdict_list_class)>
+                                    for decision in &decision_rows {
+                                        <li class="verdict-row">
+                                            <span>
+                                                if decision.decision.verdict == ReviewVerdict::Approve { "Approve" } else { "Deny" }
+                                                if let Some(message) = &decision.decision.message { <span class="muted">" — " (message.as_str())</span> }
+                                            </span>
+                                            <span class=(if decision.revoked_by.is_some() { "verdict-pill pending" } else if decision.decision.verdict == ReviewVerdict::Approve { "verdict-pill responded" } else { "verdict-pill denied" })>
+                                                if decision.revoked_by.is_some() { "revoked" } else { "active" }
+                                            </span>
+                                            <small class="claim-chain">
+                                                "claim " <code>(decision.claim_id.to_string())</code> " · key " <code>(decision.key_claim_id.to_string())</code>
+                                                if let Some(revocation) = decision.revoked_by { " · revoked by " <code>(revocation.to_string())</code> }
+                                            </small>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                            if can_decide {
+                                <p class="form-help"><a href=(format!("/reviews/{}/decision", review.id))>"Sign with a written message instead"</a></p>
+                            }
+                        </div>
+
+                        <h3 class="step-heading"><span class="step-badge">"4"</span>"Status"</h3>
+                        <div class="status-band">
+                            <span class=(status_class)>(review.status.as_str())</span>
+                            if can_edit {
+                                <form class="inline-form" action=(format!("/reviews/{}/status", review.id)) method="post">
+                                    <input type="hidden" name="status" value=(next_status)>
+                                    <button type="submit">(toggle_label)</button>
+                                </form>
+                            } else {
+                                <span class="action-note">"Set by the requester or a maintainer."</span>
+                            }
+                            <span class="status-band-note">"A plain toggle the requester or a maintainer sets by hand — nothing here computes it from the decisions above."</span>
+                        </div>
+
+                        if can_decide {
+                            <div class="final-actions">
+                                <form action=(format!("/reviews/{}/decision", review.id)) method="post">
+                                    <input type="hidden" name="verdict" value="approve">
+                                    <button type="submit">"Sign approval"</button>
+                                </form>
+                                <form action=(format!("/reviews/{}/decision", review.id)) method="post">
+                                    <input type="hidden" name="verdict" value="deny">
+                                    <button class="button-secondary" type="submit">"Sign denial"</button>
+                                </form>
+                            </div>
+                        }
                     </article>
                 })?,
             )
@@ -555,7 +615,7 @@ async fn review_detail(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Some(Tab::Reviews), title: "Review", list: list, detail: detail) }
+    view! { route_shell(active: Tab::Reviews, title: "Review", nav_width: "21rem", nav: list, detail: detail) }
 }
 
 #[page("/reviews/{review_id}/decision")]

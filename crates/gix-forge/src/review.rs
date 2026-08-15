@@ -11,7 +11,7 @@ use gix::ObjectId;
 use gix_store::{RefSegment, RepoStore, Typed};
 
 use crate::comment::Commentable;
-use crate::entity::Entity;
+use crate::entity::{Entity, EntityOps};
 use crate::error::Error;
 use crate::{Authorization, Ownership};
 
@@ -155,9 +155,11 @@ impl Review {
             crate::Capability::ReviewUpdate,
             self.ownership(authorization),
         )?;
-        Self::kind(store)
-            .put(&gix_store::RefPath::new(self.id())?, &self.to_stored())
-            .map_err(Error::from)
+        // Keep the shared content-identity alias handling used by the other
+        // entities. In particular, a migrated caller name may coexist with a
+        // canonical ref; updating through either name must retarget every
+        // name with CAS protection instead of leaving a stale publication.
+        <Self as EntityOps>::save_as(self, store, authorization)
     }
 
     pub fn create_in_repo_as(
@@ -196,13 +198,16 @@ impl Review {
         authorization: &Authorization,
     ) -> Result<bool, Error> {
         let store = crate::open_store(repo);
-        let name = gix_store::RefPath::new(id)?;
         let entity = Self::load(&store, id)?;
         let ownership = entity
             .as_ref()
             .map_or(Ownership::Owned, |review| review.ownership(authorization));
         authorization.check(crate::Capability::ReviewDelete, ownership)?;
-        Ok(Self::kind(&store).remove(&name)?)
+        // Deletion is likewise by logical document identity, not merely by
+        // the spelling supplied by the caller. This removes canonical and
+        // migrated aliases together while retaining gix-store's ref/CAS
+        // semantics.
+        <Self as EntityOps>::delete_as(repo, id, authorization)
     }
 }
 
@@ -654,8 +659,10 @@ mod tests {
 
     use crate::{
         Authorization, Comment, Commentable, EntityOps, Principal, ReviewDecision, open_store,
+        query_goal,
     };
     use facet_git_tree::{EntryKind, ObjectStore, serialize_into};
+    use gix_store::{RefEdit, RefStore};
     use std::io::Write;
     use std::process::Command;
 
@@ -703,6 +710,202 @@ mod tests {
             .expect("legacy review exists");
         assert_eq!(loaded.target, target);
         assert_eq!(loaded.id, "legacy-1");
+    }
+
+    /// Build a migrated review with a canonical document-tree ref and a
+    /// caller/legacy alias pointing at the same publication.
+    fn migrated_alias_fixture() -> (tempfile::TempDir, gix::Repository, String, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::init_repo(dir.path());
+        let repo = gix::open(dir.path()).expect("open repo");
+        let store = open_store(&repo);
+        let segment = RefSegment::new(Review::KIND).expect("review segment");
+        let legacy_kind = store.kind::<LegacyStoredReview>(segment);
+        legacy_kind
+            .schema()
+            .put(&facet_git_tree::schema_of::<LegacyStoredReview>().expect("legacy schema"))
+            .expect("publish legacy schema");
+
+        let legacy = LegacyStoredReview {
+            status: "open".to_owned(),
+            body: "Migrated review contains the sentinel".to_owned(),
+            reviewers: vec!["carol".to_owned()],
+            requesters: vec!["alice".to_owned()],
+            target: ReviewTarget::Commits(vec![oid(7)]),
+            edit: None,
+        };
+        let commit = legacy_kind
+            .write(&legacy)
+            .anonymous()
+            .expect("write legacy review");
+
+        Review::ensure_schema_as(&store, &auth()).expect("publish current schema");
+        let current_kind = Review::kind(&store);
+        let commit_name = gix_store::entity_name(commit);
+        let canonical = gix_store::RefPath::new(
+            repo.find_commit(commit)
+                .expect("legacy commit")
+                .tree_id()
+                .expect("legacy root tree")
+                .detach()
+                .to_string(),
+        )
+        .expect("canonical tree id");
+        let canonical_ref = current_kind.reference(&canonical);
+        if let Some(expected) = store
+            .refs()
+            .read(&canonical_ref)
+            .expect("read canonical ref")
+        {
+            store
+                .refs()
+                .apply(RefEdit::Delete {
+                    name: canonical_ref.clone(),
+                    expected,
+                })
+                .expect("remove auto-published canonical ref");
+        }
+        store
+            .refs()
+            .apply(RefEdit::Create {
+                name: canonical_ref,
+                new: commit,
+            })
+            .expect("publish canonical ref");
+        store
+            .refs()
+            .apply(RefEdit::Delete {
+                name: current_kind.reference(&commit_name),
+                expected: commit,
+            })
+            .expect("remove pre-migration ref name");
+        let alias = gix_store::RefPath::new("legacy-review-id").expect("alias id");
+        store
+            .refs()
+            .apply(RefEdit::Create {
+                name: current_kind.reference(&alias),
+                new: commit,
+            })
+            .expect("publish caller alias");
+
+        (dir, repo, canonical.to_string(), alias.to_string())
+    }
+
+    #[test]
+    fn migrated_aliases_are_one_review_across_crud_and_broad_queries() {
+        let (_dir, repo, canonical, alias) = migrated_alias_fixture();
+        let store = open_store(&repo);
+
+        let loaded = Review::load(&store, &alias)
+            .expect("load alias")
+            .expect("alias exists");
+        assert_eq!(loaded.id, alias, "direct loads preserve the caller id");
+        assert_eq!(loaded.body, "Migrated review contains the sentinel");
+
+        let source_names = Review::source_names(&repo).expect("source names");
+        assert_eq!(source_names.len(), 2);
+        assert!(source_names.contains(&canonical));
+        assert!(source_names.contains(&alias));
+        assert_eq!(Review::list(&repo).expect("list"), vec![alias.clone()]);
+        let all = Review::load_all(&store).expect("load all");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, alias);
+        assert_eq!(
+            query_goal(&repo, "review(Id)", &["Id"])
+                .expect("query")
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::search_review(&repo, None, None, Some("SENTINEL")).expect("search"),
+            vec![alias.clone()]
+        );
+
+        let extra_alias = gix_store::RefPath::new("second-legacy-review-id").expect("second alias");
+        let commit = Review::kind(&store)
+            .get_entry(&gix_store::RefPath::new(&canonical).expect("canonical path"))
+            .expect("read canonical entry")
+            .expect("canonical entry")
+            .commit;
+        store
+            .refs()
+            .apply(RefEdit::Create {
+                name: Review::kind(&store).reference(&extra_alias),
+                new: commit,
+            })
+            .expect("publish second alias");
+
+        let mut changed = Review::load(&store, &alias)
+            .expect("load alias")
+            .expect("alias exists");
+        changed.status = "closed".to_owned();
+        changed.body = "Updated through the legacy alias".to_owned();
+        changed
+            .save_as(&store, &auth())
+            .expect("save through alias");
+        assert_eq!(
+            Review::load(&store, &canonical)
+                .expect("load canonical")
+                .expect("canonical exists")
+                .status,
+            "closed"
+        );
+        assert_eq!(
+            Review::load(&store, &extra_alias.to_string())
+                .expect("load extra alias")
+                .expect("extra alias exists")
+                .body,
+            "Updated through the legacy alias"
+        );
+        assert_eq!(
+            Review::history(&repo, &canonical).expect("canonical history"),
+            Review::history(&repo, &alias).expect("alias history")
+        );
+
+        assert!(Review::delete_as(&repo, &alias, &auth()).expect("delete alias"));
+        assert!(Review::list(&repo).expect("list after delete").is_empty());
+        for id in [&canonical, &alias, &extra_alias.to_string()] {
+            assert!(
+                Review::load(&store, id)
+                    .expect("load after delete")
+                    .is_none(),
+                "{id} should be deleted"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_only_legacy_review_refs_are_discoverable() {
+        let (_dir, repo, canonical, alias) = migrated_alias_fixture();
+        let store = open_store(&repo);
+        let canonical_path = gix_store::RefPath::new(&canonical).expect("canonical path");
+        let commit = Review::kind(&store)
+            .get_entry(&canonical_path)
+            .expect("read canonical ref")
+            .expect("canonical ref exists")
+            .commit;
+        store
+            .refs()
+            .apply(RefEdit::Delete {
+                name: Review::kind(&store).reference(&canonical_path),
+                expected: commit,
+            })
+            .expect("remove canonical ref");
+
+        assert_eq!(Review::list(&repo).expect("list"), vec![alias.clone()]);
+        let all = Review::load_all(&store).expect("load all");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, alias);
+        assert_eq!(
+            query_goal(&repo, "review(Id)", &["Id"])
+                .expect("query")
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::search_review(&repo, None, None, Some("sentinel")).expect("search"),
+            vec![alias]
+        );
     }
 
     #[test]

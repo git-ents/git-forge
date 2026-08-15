@@ -415,6 +415,81 @@ fn issue_new_show_list_log_and_remove() {
 }
 
 #[test]
+fn issue_aliases_are_single_cli_entities_but_exact_aliases_stay_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let repo = gix::open(path).unwrap();
+    let issue = Issue {
+        id: String::new(),
+        status: "open".to_owned(),
+        title: "alias fixture".to_owned(),
+        body: "canonical body".to_owned(),
+        labels: vec!["bug".to_owned()],
+        assignees: vec!["alice".to_owned()],
+        reporters: vec!["alice".to_owned()],
+        edit: None,
+    };
+    let canonical = issue
+        .create_in_repo_as(
+            &repo,
+            &Authorization::new(Principal::member_id("alice")).administrator(),
+        )
+        .unwrap();
+    let alias = "legacy-caller-id";
+    let alias_ref = format!("refs/forge/issue/{alias}");
+    git_stdout(path, &["update-ref", &alias_ref, &canonical]);
+
+    let (out, err, ok) = run(path, &["issue", "ls"]);
+    assert!(ok, "issue ls failed: {err}");
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&canonical))],
+        "aliases must not produce duplicate list rows: {out}"
+    );
+
+    let show_args = ["issue", "show", alias];
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "issue show by alias failed: {err}");
+    assert!(out.contains("#legacy-c"), "show output: {out}");
+    assert!(out.contains("canonical body"), "show output: {out}");
+
+    let canonical_prefix = display_id(&canonical);
+    let show_args = ["issue", "show", canonical_prefix.as_str()];
+    let (out, err, ok) = run(path, &show_args);
+    assert!(ok, "issue show by canonical prefix failed: {err}");
+    assert!(out.contains("canonical body"), "show output: {out}");
+
+    let log_args = ["issue", "log", alias];
+    let (out, err, ok) = run(path, &log_args);
+    assert!(ok, "issue log by alias failed: {err}");
+    assert!(out.contains("issue history #legacy-c"), "log output: {out}");
+
+    let query_args = ["issue", "query", "--goal", "issue(Id)", "--select", "Id"];
+    let (out, err, ok) = run(path, &query_args);
+    assert!(ok, "issue query failed: {err}");
+    assert_eq!(out.matches(&canonical).count(), 1, "query output: {out}");
+
+    let search_args = ["issue", "search", "--keyword", "canonical"];
+    let (out, err, ok) = run(path, &search_args);
+    assert!(ok, "issue search failed: {err}");
+    assert_eq!(table_ids(&out).len(), 1, "search output: {out}");
+
+    let edit_args = ["issue", "edit", alias, "--body", "updated through alias"];
+    let (_, err, ok) = run(path, &edit_args);
+    assert!(ok, "issue edit by alias failed: {err}");
+    let (out, err, ok) = run(path, &["issue", "show", &canonical]);
+    assert!(ok, "canonical show after alias edit failed: {err}");
+    assert!(out.contains("updated through alias"), "show output: {out}");
+
+    let rm_args = ["issue", "rm", alias];
+    let (_, err, ok) = run(path, &rm_args);
+    assert!(ok, "issue rm by alias failed: {err}");
+    let (_, _, ok) = run(path, &["issue", "show", &canonical]);
+    assert!(!ok, "canonical issue should be removed with its alias");
+}
+
+#[test]
 fn issue_show_accepts_min_unique_prefix_and_renders_ambiguous_matches() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
@@ -565,6 +640,99 @@ fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
     assert!(ok, "issue show after edit failed: {err}");
     assert!(out.contains("second title"), "issue show output: {out}");
     assert!(out.contains("first body"), "issue show output: {out}");
+}
+
+#[test]
+fn review_aliases_are_single_cli_entities_but_exact_aliases_stay_usable() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    let repo = gix::open(path).unwrap();
+    let review = Review {
+        id: String::new(),
+        status: "open".to_owned(),
+        body: "canonical review body".to_owned(),
+        reviewers: vec!["carol".to_owned()],
+        requesters: vec!["alice".to_owned()],
+        target: ReviewTarget::parse("commit:0000000000000000000000000000000000000000").unwrap(),
+        edit: None,
+    };
+    let canonical = review
+        .create_in_repo_as(&repo, &Authorization::new(Principal::member_id("alice")))
+        .unwrap();
+    let alias = "legacy-review-cli-id";
+    let alias_ref = format!("refs/forge/review/{alias}");
+    git_stdout(path, &["update-ref", &alias_ref, &canonical]);
+
+    let (out, err, ok) = run(path, &["review", "ls"]);
+    assert!(ok, "review ls failed: {err}");
+    assert_eq!(
+        table_ids(&out),
+        vec![format!("#{}", display_id(&canonical))],
+        "aliases must not produce duplicate list rows: {out}"
+    );
+
+    let (out, err, ok) = run(path, &["review", "show", alias]);
+    assert!(ok, "review show by alias failed: {err}");
+    assert!(out.contains("#legacy-r"), "show output: {out}");
+    assert!(out.contains("canonical review body"), "show output: {out}");
+
+    let canonical_prefix = display_id(&canonical);
+    let (out, err, ok) = run(path, &["review", "show", &canonical_prefix]);
+    assert!(ok, "review show by canonical prefix failed: {err}");
+    assert!(out.contains("canonical review body"), "show output: {out}");
+
+    let (out, err, ok) = run(path, &["review", "log", alias]);
+    assert!(ok, "review log by alias failed: {err}");
+    assert!(
+        out.contains("review history #legacy-r"),
+        "log output: {out}"
+    );
+
+    let (out, err, ok) = run(path, &["review", "search", "--keyword", "canonical"]);
+    assert!(ok, "review search failed: {err}");
+    assert_eq!(table_ids(&out).len(), 1, "search output: {out}");
+
+    let (out, err, ok) = run(
+        path,
+        &["review", "query", "--goal", "review(Id)", "--select", "Id"],
+    );
+    assert!(ok, "review query failed: {err}");
+    assert_eq!(out.matches(&canonical).count(), 1, "query output: {out}");
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "add",
+            "--on",
+            "review",
+            "--subject",
+            alias,
+            "--body",
+            "comment through review alias",
+        ],
+    );
+    assert!(
+        ok,
+        "comment subject resolution by review alias failed: {err}"
+    );
+
+    let (_, err, ok) = run(
+        path,
+        &["review", "edit", alias, "--body", "updated through alias"],
+    );
+    assert!(ok, "review edit by alias failed: {err}");
+    let (out, err, ok) = run(path, &["review", "show", &canonical]);
+    assert!(ok, "canonical show after alias edit failed: {err}");
+    assert!(out.contains("updated through alias"), "show output: {out}");
+    let (_, err, ok) = run(path, &["review", "show", alias]);
+    assert!(ok, "alias show after edit failed: {err}");
+
+    let (_, err, ok) = run(path, &["review", "rm", alias]);
+    assert!(ok, "review rm by alias failed: {err}");
+    let (_, _, ok) = run(path, &["review", "show", &canonical]);
+    assert!(!ok, "canonical review should be removed with its alias");
 }
 
 #[test]

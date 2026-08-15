@@ -1645,12 +1645,30 @@ fn run_review(
 }
 
 fn resolve_issue_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
-    let ids = Issue::list(repo)?;
+    // Collection APIs intentionally hide duplicate alias rows, but an exact
+    // caller/legacy alias remains a valid public id for show/edit/comment
+    // subject resolution.
+    if Issue::load_from_repo(repo, id)?.is_some() {
+        return Ok(Some(id.to_owned()));
+    }
+    let mut ids = Issue::list(repo)?;
+    ids.extend(Issue::source_names(repo)?);
+    ids.sort();
+    ids.dedup();
     resolve_show_id("issue", id, &ids)
 }
 
 fn resolve_review_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
-    let ids = Review::list(repo)?;
+    // Collection APIs intentionally collapse aliases, but an exact caller or
+    // legacy alias remains a valid public id for show/edit/decision and comment
+    // subject resolution.
+    if Review::load_from_repo(repo, id)?.is_some() {
+        return Ok(Some(id.to_owned()));
+    }
+    let mut ids = Review::list(repo)?;
+    ids.extend(Review::source_names(repo)?);
+    ids.sort();
+    ids.dedup();
     resolve_show_id("review", id, &ids)
 }
 
