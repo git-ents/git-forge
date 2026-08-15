@@ -373,7 +373,7 @@ async fn comment_delete(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     view! { shell(active: None, title: "Delete comment", keyword: None, child: content) }
 }
 
-fn subject_href(subject: &str) -> Option<String> {
+pub(crate) fn subject_href(subject: &str) -> Option<String> {
     let (kind, id) = subject.split_once(':')?;
     matches!(kind, "issue" | "review").then(|| format!("/{kind}s/{id}"))
 }

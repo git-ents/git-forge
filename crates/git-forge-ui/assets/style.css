@@ -608,6 +608,49 @@ h3 {
     background: var(--nav-edge, var(--faint));
 }
 
+/* ---------- Annotations (Handoff v5) ---------- */
+
+.annotation-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--line);
+}
+.annotation-filter {
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 0.64rem;
+    font-weight: 600;
+    color: var(--dim);
+}
+.annotation-filter:hover {
+    border-color: var(--line2);
+    color: var(--text2);
+}
+.annotation-filter.active {
+    border-color: var(--acc-b);
+    background: var(--acc-t);
+    color: var(--acc);
+}
+.confidence-label.confidence-unattached {
+    color: var(--faint);
+}
+.status.confidence-bound {
+    background: color-mix(in srgb, var(--ok) 20%, transparent);
+    color: var(--ok);
+}
+.status.confidence-rebound {
+    background: color-mix(in srgb, var(--warn) 20%, transparent);
+    color: var(--warn);
+}
+.status.confidence-orphaned,
+.status.confidence-unattached {
+    background: var(--border-subtle);
+    color: var(--text-muted);
+}
+
 /* ---------- Local strip ---------- */
 
 .local-strip {

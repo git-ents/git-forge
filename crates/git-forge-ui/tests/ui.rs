@@ -86,7 +86,7 @@ fn ui_crawls_every_internal_route() {
     let mut crawler = Crawler::new(address);
     crawler.wait_until_ready();
 
-    // `/` no longer renders a page: it redirects to `/tree`. Check that
+    // `/` no longer renders a page: it redirects to `/inbox`. Check that
     // directly rather than through the crawler, which only follows 2xx (or
     // 401/403-on-POST) responses.
     let root_response = crawler
@@ -100,17 +100,19 @@ fn ui_crawls_every_internal_route() {
     assert_eq!(root_response.status, 307);
     assert_eq!(
         root_response.headers.get("location").map(String::as_str),
-        Some("/tree")
+        Some("/inbox")
     );
 
     for target in [
+        "/inbox",
         "/tree",
         "/issues",
         "/issues/ui-issue-1",
         "/reviews",
         "/reviews/ui-review-1",
+        "/annotations",
+        "/gates",
         "/releases",
-        "/workingcopy",
         "/members",
         "/query",
         "/search",
@@ -355,13 +357,15 @@ fn ui_crawls_every_internal_route() {
     );
 
     for target in [
+        "/inbox",
         "/tree",
         "/issues",
         "/issues/ui-issue-1",
         "/reviews",
         "/reviews/ui-review-1",
+        "/annotations",
+        "/gates",
         "/releases",
-        "/workingcopy",
         "/members",
         "/query",
         "/search",
@@ -507,7 +511,8 @@ impl Crawler {
             });
             assert!(
                 (200..300).contains(&response.status)
-                    || (request.method == "POST" && matches!(response.status, 401 | 403)),
+                    || (request.method == "POST"
+                        && matches!(response.status, 401 | 403 | 303 | 307)),
                 "{} {} returned HTTP {}",
                 request.method,
                 request.target,

@@ -13,7 +13,7 @@ use crate::{
     confirm::confirm_step,
     pages::{csv_values, with_repo},
     render::render_asciidoc,
-    shell::{Tab, shell, split_shell},
+    shell::{Tab, route_shell, shell},
 };
 
 #[path_param(error = bad_request)]
@@ -204,7 +204,7 @@ async fn issues(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Some(Tab::Issues), title: "Issues", list: list, detail: detail) }
+    view! { route_shell(active: Tab::Issues, title: "Issues", nav_width: "21rem", nav: list, detail: detail) }
 }
 
 #[page("/issues/new")]
@@ -393,7 +393,7 @@ async fn issue_detail(cx: &Cx) -> Result {
         ),
     };
 
-    view! { split_shell(active: Some(Tab::Issues), title: "Issue", list: list, detail: detail) }
+    view! { route_shell(active: Tab::Issues, title: "Issue", nav_width: "21rem", nav: list, detail: detail) }
 }
 
 #[page("/issues/{issue_id}/edit")]

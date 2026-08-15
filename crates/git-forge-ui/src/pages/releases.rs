@@ -280,14 +280,14 @@ async fn release_samples(cx: &Cx) -> Vec<SampleRelease> {
 /// row's sub-line states the raw claim tally as a fact ("2/3 signed"),
 /// colored by the same real threshold check the old quorum bar used --
 /// see the module docs for why the detail pane itself stops there.
-async fn release_nav(cx: &Cx, releases: &[SampleRelease], selected: Option<&str>) -> Result {
+async fn release_nav(cx: &Cx, release_list: &[SampleRelease], selected: Option<&str>) -> Result {
     view! { cx =>
         <div class="route-nav-header">
             <h2>"Releases"</h2>
             <span class="route-nav-action is-disabled" title="No draft-release backend yet -- releases are read from this repository's real tags">"+ draft"</span>
         </div>
         <p class="route-nav-note">"an annotated tag with a typed body — like an issue, anchored to a tag"</p>
-        for release in releases {
+        for release in release_list {
             let valid = release.valid_count();
             let total = release.claims.len();
             let quorum_class = format!("quorum-label {}", if release.quorum_met() { "ok" } else { "warn" });
@@ -307,9 +307,9 @@ async fn release_nav(cx: &Cx, releases: &[SampleRelease], selected: Option<&str>
 
 /// The detail pane for one release: identity + typed body, attachments,
 /// and the claims ledger, deferring any shippability read to Gates.
-async fn release_detail(release: &SampleRelease) -> Result {
+async fn release_detail(cx: &Cx, release: &SampleRelease) -> Result {
     let sign_action = format!("/releases/{}/publish", release.identity.tag);
-    view! {
+    view! { cx =>
         <article class="route-main-width-md">
             <div class="detail-meta">
                 <div class="detail-meta-group">
@@ -367,25 +367,25 @@ async fn release_placeholder() -> Result {
 
 #[page("/releases")]
 async fn releases(cx: &Cx) -> Result {
-    let releases = release_samples(cx).await;
-    let nav = release_nav(cx, &releases, None).await?;
+    let release_list = release_samples(cx).await;
+    let nav = release_nav(cx, &release_list, None).await?;
     let detail = release_placeholder().await?;
     view! { route_shell(active: Tab::Releases, title: "Releases", nav_width: "19rem", nav: nav, detail: detail) }
 }
 
-#[page("/releases/{tag}")]
+#[page("/releases/{release_tag}")]
 async fn release_page(cx: &Cx) -> Result {
     let tag = path_param::<ReleaseTag>(cx)?.clone();
-    let releases = release_samples(cx).await;
-    let nav = release_nav(cx, &releases, Some(tag.as_str())).await?;
-    let detail = match releases.iter().find(|release| release.identity.tag == tag) {
-        Some(release) => release_detail(release).await?,
+    let release_list = release_samples(cx).await;
+    let nav = release_nav(cx, &release_list, Some(tag.as_str())).await?;
+    let detail = match release_list.iter().find(|release| release.identity.tag == tag) {
+        Some(release) => release_detail(cx, release).await?,
         None => (view! { <p class="empty">"Release not found."</p> })?,
     };
     view! { route_shell(active: Tab::Releases, title: "Release", nav_width: "19rem", nav: nav, detail: detail) }
 }
 
-#[page(POST "/releases/{tag}/publish")]
+#[page(POST "/releases/{release_tag}/publish")]
 async fn release_publish(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
     authorization(cx).await?;
     let tag = path_param::<ReleaseTag>(cx)?.clone();

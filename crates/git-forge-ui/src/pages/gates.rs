@@ -320,7 +320,7 @@ async fn render(cx: &Cx, selected_id: &str) -> Result {
     let gate = find_gate(selected_id).unwrap_or(&GATES[0]);
     let nav = gates_nav(cx, gate).await?;
     let detail = gate_detail(cx, gate).await?;
-    view! { route_shell(active: Tab::Gates, title: "Gates", nav_width: "19rem", nav: nav, detail: detail) }
+    view! { cx => route_shell(active: Tab::Gates, title: "Gates", nav_width: "19rem", nav: nav, detail: detail) }
 }
 
 #[page("/gates")]

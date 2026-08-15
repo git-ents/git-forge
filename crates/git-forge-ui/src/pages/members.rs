@@ -91,7 +91,7 @@ fn load_members(repo: &gix::Repository) -> std::result::Result<Vec<Member>, gix_
     ids.into_iter()
         .map(|id| Member::load_from_repo(repo, &id))
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map(|members| members.into_iter().flatten().collect())
+        .map(|roster| roster.into_iter().flatten().collect())
 }
 
 /// How many issues, reviews, and comments carry `member_id` as an author --
@@ -238,8 +238,8 @@ async fn members(cx: &Cx) -> Result {
     let data = with_repo(cx, load_members).await;
 
     let (nav, detail) = match data {
-        Ok(members) => (
-            member_nav(cx, &members, None).await?,
+        Ok(roster) => (
+            member_nav(cx, &roster, None).await?,
             (view! {
                 <div class="route-main-width-sm">
                     <p class="eyebrow">"TRUST"</p>
@@ -262,31 +262,31 @@ async fn member_detail_page(cx: &Cx) -> Result {
     let id = path_param::<MemberId>(cx)?.clone().to_string();
     let lookup_id = id.clone();
     let data = with_repo(cx, move |repo| {
-        let members = load_members(repo)?;
-        let member = members.iter().find(|m| m.id == lookup_id).cloned();
+        let roster = load_members(repo)?;
+        let member = roster.iter().find(|m| m.id == lookup_id).cloned();
         let counts = count_attributions(repo, &lookup_id)?;
-        Ok((members, member, counts))
+        Ok((roster, member, counts))
     })
     .await;
 
     let (nav, detail) = match data {
-        Ok((members, Some(member), counts)) => (
-            member_nav(cx, &members, Some(member.id.as_str())).await?,
+        Ok((roster, Some(member), counts)) => (
+            member_nav(cx, &roster, Some(member.id.as_str())).await?,
             member_detail(cx, &member, &counts, false).await?,
         ),
-        Ok((members, None, counts)) if counts.issues + counts.reviews + counts.comments > 0 => {
+        Ok((roster, None, counts)) if counts.issues + counts.reviews + counts.comments > 0 => {
             let orphan = Member {
                 id: id.clone(),
                 signing_key: String::new(),
                 role: String::new(),
             };
             (
-                member_nav(cx, &members, None).await?,
+                member_nav(cx, &roster, None).await?,
                 member_detail(cx, &orphan, &counts, true).await?,
             )
         }
-        Ok((members, None, _)) => (
-            member_nav(cx, &members, None).await?,
+        Ok((roster, None, _)) => (
+            member_nav(cx, &roster, None).await?,
             (view! { <div class="route-main-width-sm empty-panel"><h2>"Member not found"</h2><a href="/members">"Back to members"</a></div> })?,
         ),
         Err(error) => (

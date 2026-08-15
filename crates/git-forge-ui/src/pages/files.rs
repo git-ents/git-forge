@@ -57,7 +57,7 @@ async fn files(cx: &Cx) -> Result {
         Err(error) => error_panel(cx, "Could not load repository tree", &error).await?,
     };
 
-    view! { shell(active: Some(Tab::Files), title: "Files", keyword: None, child: content) }
+    view! { shell(active: Some(Tab::Code), title: "Files", keyword: None, child: content) }
 }
 
 #[page(POST "/tree/comments")]
@@ -157,7 +157,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
     .await?
     {
         return view! { cx =>
-            shell(active: Some(Tab::Files), title: "Confirm comment", keyword: None, child: confirm)
+            shell(active: Some(Tab::Code), title: "Confirm comment", keyword: None, child: confirm)
         };
     }
 
@@ -195,7 +195,7 @@ async fn file_comment_create(cx: &Cx, Form(input): Form<HashMap<String, String>>
                     <a class="button-link" href=(href)>"Return to file"</a>
                 </section>
             })?;
-            view! { shell(active: Some(Tab::Files), title: "Comment published", keyword: None, child: content) }
+            view! { shell(active: Some(Tab::Code), title: "Comment published", keyword: None, child: content) }
         }
         Err(error) => {
             if let Some(error) = crate::auth::authorization_error(&error) {
@@ -764,7 +764,7 @@ async fn comment_failure(
             <a href=(href)>"Return to comment composer"</a>
         </div>
     })?;
-    view! { cx => shell(active: Some(Tab::Files), title: "File comment", keyword: None, child: content) }
+    view! { cx => shell(active: Some(Tab::Code), title: "File comment", keyword: None, child: content) }
 }
 
 async fn error_panel(cx: &Cx, title: &str, error: &str) -> Result {
@@ -826,14 +826,14 @@ impl CommentTarget {
 /// - `Orphaned`: the anchor no longer resolves against current content at
 ///   all.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Confidence {
+pub(crate) enum Confidence {
     Bound,
     Rebound,
     Orphaned,
 }
 
 impl Confidence {
-    fn css_class(self) -> &'static str {
+    pub(crate) fn css_class(self) -> &'static str {
         match self {
             Self::Bound => "confidence-bound",
             Self::Rebound => "confidence-rebound",
@@ -841,7 +841,7 @@ impl Confidence {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Bound => "bound here",
             Self::Rebound => "rebound",
@@ -851,8 +851,11 @@ impl Confidence {
 }
 
 /// `None` when `comment` has no position anchor at all (a plain subject
-/// comment), in which case no confidence badge applies.
-fn comment_confidence(
+/// comment), in which case no confidence badge applies. Shared with the
+/// Annotations route (`pages::annotations`), which needs the same
+/// real bound/rebound/orphaned read for every anchored comment repo-wide,
+/// not just the ones on the file currently open here.
+pub(crate) fn comment_confidence(
     comment: &Comment,
     current_commit: gix::ObjectId,
     path: &str,
