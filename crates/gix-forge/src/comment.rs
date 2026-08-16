@@ -11,12 +11,14 @@
 
 use facet::Facet;
 use gix::{ObjectId, Repository};
-use gix_anchor::{Binding, LineRange, capture};
-use gix_store::{RefPath, RefSegment};
+use gix_anchor::{Binding, LineRange, RebindPin, capture};
+use gix_attest::{Claims, Envelope, Target, register_claim_schema, register_key_schema};
+use gix_query::Value;
+use gix_store::{RefPath, RefSegment, RepoStore, schema_of};
 
 use crate::entity::{Entity, EntityOps};
 use crate::error::Error;
-use crate::{Authorization, Ownership, Principal};
+use crate::{Authorization, Capability, Ownership, Principal};
 
 #[derive(Debug, Clone, Facet)]
 pub struct Comment {
@@ -88,7 +90,172 @@ impl Entity for Comment {
     }
 }
 
+/// The selected binding state returned by query's `bind/5` lattice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationState {
+    /// The original anchor is on the requested revision.
+    Bound,
+    /// A signed rebind pin selected the location.
+    Pinned,
+    /// An oracle selected a location different from the original anchor.
+    Drifted,
+    /// No candidate was produced by the bind query.
+    Orphaned,
+}
+
+/// The location selected by `bind/5` for an annotation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotationBinding {
+    /// The selected path.
+    pub path: String,
+    /// The selected byte span.
+    pub span: (u64, u64),
+    /// The oracle selected by query.
+    pub oracle: String,
+    /// Query confidence in basis points.
+    pub confidence: i64,
+}
+
 impl Comment {
+    /// Resolve an anchored comment through the real anchor-oracle chain and
+    /// query `bind/5`. `None` means the comment is unattached.
+    pub fn annotation_binding(
+        repo: &Repository,
+        comment: &Comment,
+        revision: ObjectId,
+    ) -> Result<Option<AnnotationBinding>, Error> {
+        let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
+            return Ok(None);
+        };
+        let anchor_id = anchor.id()?.to_string();
+        if anchor.identity.genesis_rev == revision.into() {
+            return Ok(Some(AnnotationBinding {
+                path: anchor.identity.path.clone(),
+                span: (anchor.identity.span.start, anchor.identity.span.end),
+                oracle: "anchor".to_owned(),
+                confidence: 100,
+            }));
+        }
+        let rows = gix_query::run_predicate(
+            repo,
+            "bind",
+            &[
+                (0, Value::sym(anchor_id)),
+                (1, Value::sym(revision.to_string())),
+            ],
+        )?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(Some(AnnotationBinding {
+                path: anchor.identity.path.clone(),
+                span: (anchor.identity.span.start, anchor.identity.span.end),
+                oracle: String::new(),
+                confidence: 0,
+            }));
+        };
+        let location = row
+            .first()
+            .and_then(Value::as_sym)
+            .ok_or_else(|| Error::QueryRules("bind returned no location".to_owned()))?;
+        let (path, span) = parse_location(location)?;
+        Ok(Some(AnnotationBinding {
+            path,
+            span,
+            oracle: row
+                .get(1)
+                .and_then(Value::as_sym)
+                .unwrap_or_default()
+                .to_owned(),
+            confidence: row.get(2).and_then(Value::as_int).unwrap_or_default(),
+        }))
+    }
+
+    /// Read the annotation state from query's selected bind, with pins taking
+    /// precedence over the original capture and oracle drift.
+    pub fn annotation_state(
+        repo: &Repository,
+        comment: &Comment,
+        revision: ObjectId,
+    ) -> Result<Option<AnnotationState>, Error> {
+        let Some(binding) = Self::annotation_binding(repo, comment, revision)? else {
+            return Ok(None);
+        };
+        if binding.confidence == 0 {
+            return Ok(Some(AnnotationState::Orphaned));
+        }
+        if binding.oracle == "pin" {
+            return Ok(Some(AnnotationState::Pinned));
+        }
+        if let Some(Binding::Position(anchor)) = comment.binding.as_ref()
+            && anchor.identity.genesis_rev == revision.into()
+        {
+            return Ok(Some(AnnotationState::Bound));
+        }
+        Ok(Some(AnnotationState::Drifted))
+    }
+
+    /// Sign a rebind pin for the best current `bind/5` result.
+    pub fn rebind_pin_as(
+        repo: &Repository,
+        authorization: &Authorization,
+        comment: &Comment,
+        revision: ObjectId,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(Capability::AnnotationRebind, Ownership::NotApplicable)?;
+        let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
+            return Err(Error::QueryRules(
+                "an unattached comment cannot be pinned".to_owned(),
+            ));
+        };
+        let binding = Self::annotation_binding(repo, comment, revision)?
+            .filter(|binding| binding.confidence > 0)
+            .ok_or_else(|| Error::QueryRules("bind produced no repair candidate".to_owned()))?;
+        publish_annotation_claim(repo, "rebind-pin", anchor.id()?.into(), |store| {
+            let payload = RebindPin {
+                rev: revision.into(),
+                path: binding.path,
+                span: binding.span,
+            };
+            let kind = RefSegment::new(gix_anchor::REBIND_PIN_KIND).expect("built-in kind");
+            store
+                .kind::<RebindPin>(kind)
+                .schema()
+                .put(&schema_of::<RebindPin>().map_err(gix_store::Error::from)?)?;
+            Ok(store
+                .kind::<RebindPin>(
+                    RefSegment::new(gix_anchor::REBIND_PIN_KIND).expect("built-in kind"),
+                )
+                .compile(&payload)?)
+        })
+    }
+
+    /// Sign an obsolete claim for an anchored annotation.
+    pub fn obsolete_as(
+        repo: &Repository,
+        authorization: &Authorization,
+        comment: &Comment,
+    ) -> Result<ObjectId, Error> {
+        authorization.check(Capability::AnnotationObsolete, Ownership::NotApplicable)?;
+        let Some(Binding::Position(anchor)) = comment.binding.as_ref() else {
+            return Err(Error::QueryRules(
+                "an unattached comment cannot be marked obsolete".to_owned(),
+            ));
+        };
+        publish_annotation_claim(repo, "obsolete-annotation", anchor.id()?.into(), |store| {
+            let kind = RefSegment::new("obsolete-annotation").expect("built-in kind");
+            store
+                .kind::<ObsoleteAnnotation>(kind)
+                .schema()
+                .put(&schema_of::<ObsoleteAnnotation>().map_err(gix_store::Error::from)?)?;
+            Ok(store
+                .kind::<ObsoleteAnnotation>(
+                    RefSegment::new("obsolete-annotation").expect("built-in kind"),
+                )
+                .compile(&ObsoleteAnnotation {
+                    comment_id: comment.id.clone(),
+                })?)
+        })
+    }
+
     /// Legacy anonymous creation entry point; always fails closed. Use
     /// [`Self::create_under_as`] for an authenticated write.
     pub fn create_under(
@@ -168,6 +335,64 @@ impl Comment {
         let store = crate::open_store(repo);
         let group = subject_group(subject_kind, subject_id)?;
         Self::load_all_under(&store, &group)
+    }
+}
+
+#[derive(Debug, Facet)]
+struct ObsoleteAnnotation {
+    comment_id: String,
+}
+
+fn parse_location(value: &str) -> Result<(String, (u64, u64)), Error> {
+    let (path, span) = value
+        .rsplit_once(':')
+        .ok_or_else(|| Error::QueryRules(format!("invalid bind location `{value}`")))?;
+    let (start, end) = span
+        .split_once('-')
+        .ok_or_else(|| Error::QueryRules(format!("invalid bind span `{span}`")))?;
+    let start = start
+        .parse()
+        .map_err(|_| Error::QueryRules(format!("invalid bind start `{start}`")))?;
+    let end = end
+        .parse()
+        .map_err(|_| Error::QueryRules(format!("invalid bind end `{end}`")))?;
+    Ok((path.to_owned(), (start, end)))
+}
+
+fn publish_annotation_claim<F>(
+    repo: &Repository,
+    payload_kind: &str,
+    anchor_id: ObjectId,
+    payload: F,
+) -> Result<ObjectId, Error>
+where
+    F: FnOnce(&RepoStore<'_>) -> Result<ObjectId, Error>,
+{
+    let signer = crate::decision::SigningKey::from_config(repo)?;
+    let store = RepoStore::open_with_layout(repo, gix_attest::layout()).with_signer(signer);
+    register_claim_schema(&store)?;
+    register_key_schema(&store)?;
+    if payload_kind == gix_anchor::REBIND_PIN_KIND {
+        gix_anchor::register_rebind_pin_schema(&store)?;
+    }
+    let payload_oid = payload(&store)?;
+    let envelope = Envelope {
+        target: Target {
+            kind: "anchor".to_owned(),
+            id: anchor_id.into(),
+        },
+        payload: payload_oid.into(),
+        payload_kind: payload_kind.to_owned(),
+        key: ObjectId::null(gix::hash::Kind::Sha1).into(),
+    };
+    let claim = Claims::open(&store).sign(&envelope)?;
+    if store
+        .signature(claim)?
+        .is_some_and(|signature| !signature.is_empty())
+    {
+        Ok(claim)
+    } else {
+        Err(Error::UnsignedDecision)
     }
 }
 

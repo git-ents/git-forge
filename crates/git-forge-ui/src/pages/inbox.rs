@@ -1,42 +1,12 @@
 //! The Inbox route (Handoff v5): `GET /inbox`, the app's landing page.
-//! Grouped by which lifecycle event moved -- Asked, Said, Decided, Drifted,
-//! Blocked -- not by urgency, per the design mock.
-//!
-//! ## Real vs. sample data
-//!
-//! There is no notification/inbox backend in this codebase (no read/unread
-//! state, no "while you were away" digest, no drift-reprojection engine --
-//! see `gix-forge`'s query surface and `local.rs`'s doc comment for the same
-//! observation about drift/gate state). Rather than leave every row as
-//! sample content, this route wires up what is cheaply real from the
-//! existing entity store, and keeps the rest as clearly-commented sample
-//! content, matching the precedent set by `local.rs` and the former
-//! `workingcopy.rs` board:
-//!
-//! - **Asked** is real: every open [`Issue`], approximated as "something a
-//!   reporter opened that needs a reply." Neither `Issue` nor `Comment`
-//!   stores a timestamp anywhere in this codebase (see `issues.rs`'s
-//!   `signing_key_of` doc comment), so there is no honest "age" to show for
-//!   these rows -- the age chip is simply omitted rather than fabricated.
-//! - **Decided** is real: every [`Review`] with at least one active (i.e.
-//!   not revoked) signed [`ReviewDecision`] claim, via
-//!   `ReviewDecision::claims_for_review` -- the same signed-claim chain
-//!   `reviews.rs`'s detail view reads. Claims carry no reviewer identity
-//!   this UI can cheaply resolve to a name (only object ids), so the row
-//!   shows the verdict and message, not a "who" -- consistent with how
-//!   `reviews.rs` itself displays decisions.
-//! - **Blocked** is real: every open `Review` with *no* active decision yet
-//!   -- the review is waiting on a human, per the "blocked" semantic.
-//! - **Said** ("replies to you") and **Drifted** (bindings that fell below
-//!   the rule threshold) have no honest backend to approximate cheaply:
-//!   "to you" requires notification directionality this store doesn't
-//!   record, and binding re-projection/drift detection doesn't exist here
-//!   yet (per `local.rs`). Both groups, and the "while you were away"
-//!   digest banner, are sample content previewing the intended design --
-//!   the one exception is the drift banner's numbers, which were chosen to
-//!   agree with the sample Drifted row count below.
+//! The Inbox route, grouped by real lifecycle state. Said is intentionally
+//! absent: the forge store has no notification directionality, so it cannot
+//! honestly answer whether a reply was addressed to the current user.
 
-use gix_forge::{EntityOps, Issue, Review, ReviewDecision, ReviewDecisionClaim, ReviewVerdict};
+use gix_forge::{
+    AnnotationState, Comment, EntityOps, Issue, Review, ReviewDecision, ReviewDecisionClaim,
+    ReviewVerdict,
+};
 use topcoat::{Result, context::Cx, router::page, view::view};
 
 use crate::{
@@ -51,17 +21,13 @@ struct InboxItem {
     /// The actual forge ref this row's entity lives at (real rows), or a
     /// representative sample path (sample rows) -- see module doc comment.
     reference: String,
-    /// `None` when there is no honest age to report (every real row: this
-    /// store keeps no per-entity timestamp -- see module doc comment).
+    /// The store has no per-entity timestamp, so real rows omit age.
     age: Option<&'static str>,
     action: &'static str,
     href: String,
 }
 
-/// One inbox group. `slug` doubles as the CSS modifier class that supplies
-/// this group's semantic color (`assets/style.css`, "Inbox" section) --
-/// Asked/Said share `--acc`, Decided is `--ok`, Drifted is `--warn`,
-/// Blocked is `--bad`, per the design mock's non-negotiable color mapping.
+/// One inbox group. `slug` supplies this group's semantic color.
 struct InboxGroup {
     slug: &'static str,
     label: &'static str,
@@ -69,12 +35,12 @@ struct InboxGroup {
     fix_all_href: Option<&'static str>,
 }
 
-/// Real data pulled from the repository for the Asked/Decided/Blocked
-/// groups.
+/// Real data pulled from the repository for every displayed group.
 struct InboxRepoData {
     asked: Vec<Issue>,
     decided: Vec<(Review, ReviewDecisionClaim)>,
     blocked: Vec<Review>,
+    drifted: Vec<Comment>,
 }
 
 fn load_inbox_data(repo: &gix::Repository) -> std::result::Result<InboxRepoData, gix_forge::Error> {
@@ -93,6 +59,19 @@ fn load_inbox_data(repo: &gix::Repository) -> std::result::Result<InboxRepoData,
 
     let mut decided = Vec::new();
     let mut blocked = Vec::new();
+    let head = repo.head_id().ok().map(|id| id.detach());
+    let drifted = Comment::list(repo)?
+        .into_iter()
+        .filter_map(|id| Comment::load_from_repo(repo, &id).ok().flatten())
+        .filter(|comment| {
+            head.is_some_and(|head| {
+                matches!(
+                    Comment::annotation_state(repo, comment, head),
+                    Ok(Some(AnnotationState::Drifted))
+                )
+            })
+        })
+        .collect();
     for review in reviews {
         // Best-effort: a review whose target no longer resolves can make
         // the attest layer error; that review is neither decided nor
@@ -110,6 +89,7 @@ fn load_inbox_data(repo: &gix::Repository) -> std::result::Result<InboxRepoData,
         asked,
         decided,
         blocked,
+        drifted,
     })
 }
 
@@ -179,59 +159,23 @@ fn blocked_items(reviews: Vec<Review>) -> Vec<InboxItem> {
         .collect()
 }
 
-/// Sample content: there is no notification backend recording who replied
-/// "to you" specifically -- see module doc comment.
-fn sample_said_items() -> Vec<InboxItem> {
-    vec![
-        InboxItem {
-            title: "Re: binding drift on gix-panic-fix".to_owned(),
-            sub: "maria replied on your comment".to_owned(),
-            reference: "refs/forge/comment/8f2c1a0".to_owned(),
-            age: Some("2h"),
-            action: "reply",
-            href: "/issues".to_owned(),
-        },
-        InboxItem {
-            title: "Re: review target orphaned after rebase".to_owned(),
-            sub: "devon replied on your review comment".to_owned(),
-            reference: "refs/forge/comment/3a91be4".to_owned(),
-            age: Some("6h"),
-            action: "reply",
-            href: "/reviews".to_owned(),
-        },
-    ]
-}
-
-/// Sample content: no binding re-projection/drift engine exists yet -- see
-/// module doc comment. The count here (3) matches the "while you were
-/// away" banner's "3 fell below the rule threshold" figure.
-fn sample_drifted_items() -> Vec<InboxItem> {
-    vec![
-        InboxItem {
-            title: "src/engine/dispatch.rs:142".to_owned(),
-            sub: "binding confidence 0.61, below the 0.80 rule threshold".to_owned(),
-            reference: "refs/forge/comment/c771e02".to_owned(),
-            age: Some("9h"),
+fn drifted_items(comments: Vec<Comment>) -> Vec<InboxItem> {
+    comments
+        .into_iter()
+        .map(|comment| InboxItem {
+            title: comment
+                .body
+                .lines()
+                .next()
+                .unwrap_or("Drifted annotation")
+                .to_owned(),
+            sub: "binding resolved away from its captured anchor".to_owned(),
+            reference: format!("refs/forge/comment/{}", comment.id),
+            age: None,
             action: "repair",
-            href: "/annotations".to_owned(),
-        },
-        InboxItem {
-            title: "src/engine/panic.rs:58".to_owned(),
-            sub: "binding confidence 0.74, below the 0.80 rule threshold".to_owned(),
-            reference: "refs/forge/comment/9d4f710".to_owned(),
-            age: Some("9h"),
-            action: "repair",
-            href: "/annotations".to_owned(),
-        },
-        InboxItem {
-            title: "src/store/schema.rs:23".to_owned(),
-            sub: "binding confidence 0.55, below the 0.80 rule threshold".to_owned(),
-            reference: "refs/forge/comment/1b6a9f3".to_owned(),
-            age: Some("9h"),
-            action: "repair",
-            href: "/annotations".to_owned(),
-        },
-    ]
+            href: format!("/annotations/{}?repair=1", comment.id),
+        })
+        .collect()
 }
 
 async fn inbox_group_section(cx: &Cx, group: &InboxGroup) -> Result {
@@ -282,12 +226,6 @@ async fn inbox(cx: &Cx) -> Result {
                     fix_all_href: None,
                 },
                 InboxGroup {
-                    slug: "said",
-                    label: "Said",
-                    items: sample_said_items(),
-                    fix_all_href: None,
-                },
-                InboxGroup {
                     slug: "decided",
                     label: "Decided",
                     items: decided_items(data.decided),
@@ -296,7 +234,7 @@ async fn inbox(cx: &Cx) -> Result {
                 InboxGroup {
                     slug: "drifted",
                     label: "Drifted",
-                    items: sample_drifted_items(),
+                    items: drifted_items(data.drifted),
                     fix_all_href: Some("/annotations"),
                 },
                 InboxGroup {
@@ -314,19 +252,7 @@ async fn inbox(cx: &Cx) -> Result {
                         <h1>"Inbox"</h1>
                         <span class="inbox-meta">(total) " items need you · last opened 3h ago"</span>
                     </div>
-                    <p class="inbox-sub">"Grouped by which lifecycle moved — asked, said, decided, drifted, blocked. Not by urgency."</p>
-
-                    <div class="inbox-away">
-                        <div class="inbox-away-head">
-                            <strong>"While you were away"</strong>
-                            <span class="inbox-away-sep">"·"</span>
-                            <span class="inbox-away-detail">"you rebased " <span class="inbox-away-hl">"maria/gix-panic-fix"</span> " onto " <span class="inbox-away-hl">"main"</span> " (14 commits)"</span>
-                        </div>
-                        <p class="inbox-away-body body-copy">
-                            <span class="inbox-away-ok">"11 bindings"</span> " re-projected cleanly and their comments moved with the code. "
-                            <span class="inbox-away-warn">"3"</span> " fell below the rule threshold of 0.80 and are waiting on a human. One merge gate went red as a result."
-                        </p>
-                    </div>
+                    <p class="inbox-sub">"Grouped by which lifecycle moved — asked, decided, drifted, blocked. Not by urgency."</p>
 
                     for group in &groups {
                         (inbox_group_section(cx, group).await?)
@@ -334,12 +260,14 @@ async fn inbox(cx: &Cx) -> Result {
                 </div>
             })?
         }
-        Err(error) => (view! { cx =>
-            <div class="inbox">
-                <div class="inbox-header"><h1>"Inbox"</h1></div>
-                <p class="error-text">(error)</p>
-            </div>
-        })?,
+        Err(error) => {
+            (view! { cx =>
+                <div class="inbox">
+                    <div class="inbox-header"><h1>"Inbox"</h1></div>
+                    <p class="error-text">(error)</p>
+                </div>
+            })?
+        }
     };
 
     view! { full_shell(active: Tab::Inbox, title: "Inbox", child: content) }

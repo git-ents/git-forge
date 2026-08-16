@@ -9,8 +9,9 @@ path = "src/bin/git-forge-ui.rs"
 
 [dependencies]
 gix-forge = { path = "../gix-forge" }
+gix-attest.workspace = true
 clap = { version = "4", features = ["derive"] }
-gix = { workspace = true, features = ["parallel"] }
+gix = { workspace = true, features = ["parallel", "status"] }
 topcoat = { path = "../../vendor/topcoat/crates/topcoat", default-features = false, features = ["asset", "cookie", "router", "serve", "view", "discover"] }
 topcoat-asset = { path = "../../vendor/topcoat/crates/topcoat-asset", features = ["bundler"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }

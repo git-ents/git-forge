@@ -3,7 +3,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use gix_forge::{Binding, Comment, LineRange, binding_genesis};
+use gix_forge::{AnnotationState, Binding, Comment, LineRange};
 use topcoat::{
     Result,
     context::Cx,
@@ -345,7 +345,7 @@ async fn file_view(
     // orphaned confidence (below) requires seeing comments whose anchor was
     // captured elsewhere and may have moved or broken since.
     let comments = with_repo(cx, move |repo| {
-        Ok(Comment::list_all(repo)?
+        let comments = Comment::list_all(repo)?
             .into_iter()
             .filter(|comment| {
                 comment.subject.as_deref() == Some(file_subject.as_str())
@@ -354,7 +354,12 @@ async fn file_view(
                         Some(Binding::Position(anchor)) if anchor.identity.path == comment_path
                     )
             })
-            .collect::<Vec<_>>())
+            .map(|comment| {
+                let state = Comment::annotation_state(repo, &comment, commit_id)?;
+                Ok((comment, state))
+            })
+            .collect::<std::result::Result<Vec<_>, gix_forge::Error>>()?;
+        Ok(comments)
     })
     .await
     .unwrap_or_default();
@@ -362,11 +367,9 @@ async fn file_view(
     let source_bytes = file.text.as_bytes();
     let anchored_comments = comments
         .iter()
-        .filter_map(|comment| {
+        .filter_map(|(comment, state)| {
             anchored_line_range(comment, current_path, source_bytes).map(|range| {
-                let confidence =
-                    comment_confidence(comment, commit_id, current_path, source_bytes)
-                        .unwrap_or(Confidence::Orphaned);
+                let confidence = state.map(Confidence::from).unwrap_or(Confidence::Orphaned);
                 AnchoredComment {
                     comment: comment.clone(),
                     range,
@@ -433,8 +436,7 @@ async fn file_view(
                         if blame { "blame: on" } else { "blame" }
                     </a>
                 }
-                <a class="stub-action" href="#" aria-disabled="true" title="Raw blob serving has no route yet">"raw"</a>
-                <a class="stub-action" href="#" aria-disabled="true" title="Per-file history has no route yet">"history"</a>
+
             </div>
         </div>
     })?;
@@ -490,10 +492,10 @@ async fn file_view(
     // -- they no longer resolve to any line, so the file panel is the only
     // place left to surface them (previously they were silently dropped).
     let mut file_threads = Vec::new();
-    for comment in comments.iter() {
-        let confidence = comment_confidence(comment, commit_id, current_path, source_bytes);
-        let is_whole_file = comment.binding.is_none()
-            || is_file_anchor(comment, current_path, source_bytes);
+    for (comment, state) in comments.iter() {
+        let confidence = state.map(Confidence::from);
+        let is_whole_file =
+            comment.binding.is_none() || is_file_anchor(comment, current_path, source_bytes);
         let is_orphaned = confidence == Some(Confidence::Orphaned);
         if is_whole_file || is_orphaned {
             file_threads.push((view! { cx =>
@@ -828,50 +830,39 @@ impl CommentTarget {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Confidence {
     Bound,
-    Rebound,
+    Drifted,
     Orphaned,
+    Pinned,
 }
 
 impl Confidence {
     pub(crate) fn css_class(self) -> &'static str {
         match self {
             Self::Bound => "confidence-bound",
-            Self::Rebound => "confidence-rebound",
+            Self::Drifted => "confidence-drifted",
             Self::Orphaned => "confidence-orphaned",
+            Self::Pinned => "confidence-pinned",
         }
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Bound => "bound here",
-            Self::Rebound => "rebound",
+            Self::Drifted => "drifted",
             Self::Orphaned => "orphaned",
+            Self::Pinned => "pinned",
         }
     }
 }
 
-/// `None` when `comment` has no position anchor at all (a plain subject
-/// comment), in which case no confidence badge applies. Shared with the
-/// Annotations route (`pages::annotations`), which needs the same
-/// real bound/rebound/orphaned read for every anchored comment repo-wide,
-/// not just the ones on the file currently open here.
-pub(crate) fn comment_confidence(
-    comment: &Comment,
-    current_commit: gix::ObjectId,
-    path: &str,
-    source: &[u8],
-) -> Option<Confidence> {
-    let binding = comment.binding.as_ref()?;
-    if !matches!(binding, Binding::Position(_)) {
-        return None;
-    }
-    if binding_genesis(binding) == Some(current_commit) {
-        return Some(Confidence::Bound);
-    }
-    if is_file_anchor(comment, path, source) || anchored_line_range(comment, path, source).is_some() {
-        Some(Confidence::Rebound)
-    } else {
-        Some(Confidence::Orphaned)
+impl From<AnnotationState> for Confidence {
+    fn from(state: AnnotationState) -> Self {
+        match state {
+            AnnotationState::Bound => Self::Bound,
+            AnnotationState::Drifted => Self::Drifted,
+            AnnotationState::Orphaned => Self::Orphaned,
+            AnnotationState::Pinned => Self::Pinned,
+        }
     }
 }
 
@@ -1248,7 +1239,10 @@ mod tests {
         let lines = highlighted_source_lines("example.rs", source, 2);
         assert_eq!(lines.len(), 2);
         for line in &lines {
-            assert_eq!(line.matches("<span").count(), line.matches("</span>").count());
+            assert_eq!(
+                line.matches("<span").count(),
+                line.matches("</span>").count()
+            );
         }
         assert!(lines[0].contains('a'));
         assert!(lines[1].contains('b'));
@@ -1260,7 +1254,10 @@ mod tests {
         let lines = highlighted_source_lines("example.rs", source, 3);
         assert_eq!(lines.len(), 3);
         for line in &lines {
-            assert_eq!(line.matches("<span").count(), line.matches("</span>").count());
+            assert_eq!(
+                line.matches("<span").count(),
+                line.matches("</span>").count()
+            );
         }
         assert!(lines[0].contains("one"));
         assert!(lines[1].contains("two"));

@@ -15,8 +15,10 @@ mod decision;
 mod entity;
 mod error;
 mod facts;
+mod gate;
 mod issue;
 mod member;
+mod release;
 mod review;
 mod search;
 mod status;
@@ -25,15 +27,17 @@ use gix::{ObjectId, Repository};
 use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
-pub use comment::{Comment, Commentable, binding_genesis};
+pub use comment::{AnnotationBinding, AnnotationState, Comment, Commentable, binding_genesis};
 pub use decision::{ReviewDecision, ReviewDecisionClaim, ReviewVerdict};
 pub use entity::{Entity, EntityOps};
 pub use error::Error;
 pub use facts::ForgeFacts;
+pub use gate::{GATE_NAMES, GateResult};
 pub use gix_anchor::{Binding, LineRange};
 pub use gix_query::Value as QueryValue;
 pub use issue::Issue;
 pub use member::Member;
+pub use release::{Release, ReleaseAttachment, ReleaseClaim, ReleaseTarget};
 pub use review::{Review, ReviewTarget};
 pub use search::{
     HitKind, SearchHit, search_assignee, search_comment, search_find, search_issue, search_keyword,
@@ -103,6 +107,14 @@ pub fn ensure_review_schema_as(
     authorization: &Authorization,
 ) -> Result<ObjectId, Error> {
     Review::ensure_schema_as(&open_store(repo), authorization)
+}
+
+/// Publish (or evolve) the `release` schema after authorization.
+pub fn ensure_release_schema_as(
+    repo: &Repository,
+    authorization: &Authorization,
+) -> Result<ObjectId, Error> {
+    Release::ensure_schema_as(&open_store(repo), authorization)
 }
 
 /// Publish (or evolve) the `member` schema.
@@ -176,6 +188,7 @@ pub fn install_builtin_query_rules_as(
     store
         .put("review", BUILTIN_REVIEW_RULES)
         .map_err(|e| Error::QueryRules(e.to_string()))?;
+    gate::install_rules(repo, authorization)?;
     gix_query::checked_program_with(repo, &ForgeFacts::registry())?;
     Ok(())
 }
@@ -186,7 +199,13 @@ pub fn install_builtin_query_rules_as(
 /// Returns an error if any forge entity remains or a reference cannot be removed.
 pub fn uninstall(repo: &Repository) -> Result<(), Error> {
     let store = open_store(repo);
-    for kind in [Issue::KIND, Review::KIND, Member::KIND, Comment::KIND] {
+    for kind in [
+        Issue::KIND,
+        Review::KIND,
+        Member::KIND,
+        Comment::KIND,
+        Release::KIND,
+    ] {
         let kind = RefSegment::new(kind).expect("built-in kind is valid");
         let kind_name = kind.to_string();
         if !store.dynamic(kind).list()?.is_empty() {
@@ -195,6 +214,11 @@ pub fn uninstall(repo: &Repository) -> Result<(), Error> {
     }
 
     let rules = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
+    for name in ["merge_gate", "release_signable", "docs_coverage"] {
+        rules
+            .delete(name)
+            .map_err(|e| Error::QueryRules(e.to_string()))?;
+    }
     let has_review_rule = rules
         .get("review")
         .map_err(|e| Error::QueryRules(e.to_string()))?
@@ -210,6 +234,7 @@ pub fn uninstall(repo: &Repository) -> Result<(), Error> {
         Review::KIND,
         Member::KIND,
         Comment::KIND,
+        Release::KIND,
         "rules",
     ] {
         delete_reference_if_present(repo, &format!("refs/schema/{kind}"))?;
@@ -227,6 +252,20 @@ fn delete_reference_if_present(repo: &Repository, name: &str) -> Result<(), Erro
     reference
         .delete()
         .map_err(|e| Error::Uninstall(e.to_string()))
+}
+
+/// Evaluate the installed built-in gates against the repository's current refs.
+pub fn evaluate_gates(repo: &Repository) -> Result<Vec<GateResult>, Error> {
+    gate::evaluate(repo)
+}
+
+/// Promote a derived gate verdict as a signed attest claim.
+pub fn promote_gate_as(
+    repo: &Repository,
+    authorization: &Authorization,
+    result: &GateResult,
+) -> Result<ObjectId, Error> {
+    gate::promote_as(repo, authorization, result)
 }
 
 /// Run `goal`, selecting `select`'s columns, against every host predicate

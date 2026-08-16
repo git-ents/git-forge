@@ -447,7 +447,11 @@ async fn review_detail(cx: &Cx) -> Result {
             } else {
                 "status neutral"
             };
-            let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
+            let author = review
+                .requesters
+                .first()
+                .map(String::as_str)
+                .unwrap_or("unassigned");
             let reviewers_label = if review.reviewers.is_empty() {
                 "none invited".to_owned()
             } else {
@@ -458,12 +462,18 @@ async fn review_detail(cx: &Cx) -> Result {
             // Non-negotiable #8: status is a plain manual field the owner
             // sets by hand -- this only *suggests* they might want to, never
             // computes or sets it itself.
-            let has_active_decision = decision_rows.iter().any(|decision| decision.revoked_by.is_none());
+            let has_active_decision = decision_rows
+                .iter()
+                .any(|decision| decision.revoked_by.is_none());
             let show_nudge = can_edit && review.status == "open" && has_active_decision;
             // Non-negotiable #4: once the pinned oid no longer resolves, the
             // decisions signed against it are shown as quiet muted lines
             // rather than hidden or specially flagged.
-            let verdict_list_class = if anchor_clean { "verdict-list" } else { "verdict-list stale" };
+            let verdict_list_class = if anchor_clean {
+                "verdict-list"
+            } else {
+                "verdict-list stale"
+            };
             (
                 review_list(cx, &review_items, Some(review.id.as_str())).await?,
                 (view! { cx =>

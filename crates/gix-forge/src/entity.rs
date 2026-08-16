@@ -71,6 +71,7 @@ pub trait EntityOps: Entity {
         match Self::KIND {
             "issue" => Capability::IssueCreate,
             "review" => Capability::ReviewCreate,
+            "release" => Capability::ReleaseCreate,
             "comment" => Capability::CommentCreate,
             "member" => Capability::MemberCreate,
             _ => unreachable!("built-in entity kind has a capability"),
@@ -82,6 +83,7 @@ pub trait EntityOps: Entity {
         match Self::KIND {
             "issue" => Capability::IssueUpdate,
             "review" => Capability::ReviewUpdate,
+            "release" => Capability::ReleaseUpdate,
             "comment" => Capability::CommentUpdate,
             "member" => Capability::MemberUpdate,
             _ => unreachable!("built-in entity kind has a capability"),
@@ -93,6 +95,7 @@ pub trait EntityOps: Entity {
         match Self::KIND {
             "issue" => Capability::IssueDelete,
             "review" => Capability::ReviewDelete,
+            "release" => Capability::ReleaseUpdate,
             "comment" => Capability::CommentDelete,
             "member" => Capability::MemberDelete,
             _ => unreachable!("built-in entity kind has a capability"),

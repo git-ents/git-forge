@@ -1,24 +1,9 @@
-//! Releases route (Handoff v5): a master/detail pane over annotated tags --
-//! "an annotated tag with a typed body, like an issue, anchored to a tag."
-//!
-//! There is no `Release` entity, signature-verification, or CI/gate
-//! prediction backend in this codebase yet -- that scope was explicitly
-//! deferred. This route is a UI-only preview: the tag *identity* (name,
-//! date, commit oid) is read from the real repository via `gix` when tags
-//! exist there, but the title, body, attachment listing, and claims/quorum
-//! data layered on top are fabricated sample content, not a real release
-//! ledger or signature store. "Sign claim on this tag" below is a no-op
-//! that only demonstrates the shared confirm step; it does not write a
-//! real signature anywhere.
-//!
-//! Per the design handoff, whether a release is actually signable is a
-//! question for the Gates route's (also sample) `release_signable` goal,
-//! not something this page computes or asserts -- this page shows the raw
-//! claim tally (real counting logic over the fabricated claims above) and
-//! links out rather than rendering its own ship/no-ship verdict.
+//! Releases backed by annotated tags, typed release documents, and attest claims.
 
 use std::collections::HashMap;
 
+use gix_attest::{Target, target_key};
+use gix_forge::{EntityOps, Release, ReleaseAttachment, ReleaseTarget};
 use topcoat::{
     Result,
     context::Cx,
@@ -27,393 +12,323 @@ use topcoat::{
 };
 
 use crate::{
-    auth::authorization,
+    auth::{authorization, authorization_error, can_create},
     confirm::confirm_step,
-    pages::with_repo,
+    pages::{csv_values, with_repo},
     shell::{Tab, route_shell, shell},
 };
 
 #[path_param(error = bad_request)]
 struct ReleaseTag(String);
 
-/// Signers required out of a release's claim slots for the tally shown per
-/// release to read "signed" rather than "needs sigs" -- real counting logic
-/// over the (fabricated) claims below, kept from the pre-handoff page. This
-/// only colors the raw count; see the module docs for why this page stops
-/// short of asserting a ship/no-ship verdict from it.
-const QUORUM_THRESHOLD: usize = 2;
-/// How many release rows the page always shows, real tags or not.
-const RELEASE_CARDS: usize = 3;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ClaimStatus {
-    Valid,
-    Revoked,
-}
-
-impl ClaimStatus {
-    const fn css_class(self) -> &'static str {
-        match self {
-            Self::Valid => "ok",
-            Self::Revoked => "danger",
-        }
-    }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Valid => "valid",
-            Self::Revoked => "revoked",
-        }
-    }
-}
-
 #[derive(Clone)]
-struct SampleClaim {
-    signer: &'static str,
-    key: &'static str,
-    date: &'static str,
-    status: ClaimStatus,
+struct ReleaseForm {
+    target: String,
+    body: String,
+    attachments: String,
 }
 
-#[derive(Clone)]
-struct SampleAttachment {
-    name: &'static str,
-    size: &'static str,
-}
-
-/// A tag's real identity: name, tagged-commit date, and short oid.
-struct ReleaseIdentity {
-    tag: String,
-    date: String,
-    oid: String,
-}
-
-struct SampleRelease {
-    identity: ReleaseIdentity,
-    title: &'static str,
-    body: &'static str,
-    attachments: Vec<SampleAttachment>,
-    claims: Vec<SampleClaim>,
-}
-
-impl SampleRelease {
-    /// Claims with `status == Valid`.
-    fn valid_count(&self) -> usize {
-        self.claims
-            .iter()
-            .filter(|claim| claim.status == ClaimStatus::Valid)
-            .count()
-    }
-
-    fn quorum_met(&self) -> bool {
-        self.valid_count() >= QUORUM_THRESHOLD
+fn form_from_input(input: &HashMap<String, String>) -> ReleaseForm {
+    ReleaseForm {
+        target: input.get("target").cloned().unwrap_or_default(),
+        body: input.get("body").cloned().unwrap_or_default(),
+        attachments: input.get("attachments").cloned().unwrap_or_default(),
     }
 }
 
-/// Three fabricated claim sets, cycled across whatever tag identities back
-/// the rows: one clean 2-of-2, one 1-valid-1-revoked (below threshold), one
-/// 2-valid-1-revoked (met, with a revoked claim still on record).
-fn sample_claim_sets() -> [Vec<SampleClaim>; RELEASE_CARDS] {
-    [
-        vec![
-            SampleClaim {
-                signer: "maria@forge.dev",
-                key: "ed25519·AA…f2",
-                date: "Jul 28",
-                status: ClaimStatus::Valid,
-            },
-            SampleClaim {
-                signer: "priya@forge.dev",
-                key: "ed25519·77…0b",
-                date: "Jul 29",
-                status: ClaimStatus::Valid,
-            },
-        ],
-        vec![
-            SampleClaim {
-                signer: "maria@forge.dev",
-                key: "ed25519·AA…f2",
-                date: "Jun 14",
-                status: ClaimStatus::Valid,
-            },
-            SampleClaim {
-                signer: "devon@forge.dev",
-                key: "ed25519·9c…41",
-                date: "Jun 14",
-                status: ClaimStatus::Revoked,
-            },
-        ],
-        vec![
-            SampleClaim {
-                signer: "maria@forge.dev",
-                key: "ed25519·AA…f2",
-                date: "May 02",
-                status: ClaimStatus::Valid,
-            },
-            SampleClaim {
-                signer: "priya@forge.dev",
-                key: "ed25519·77…0b",
-                date: "May 03",
-                status: ClaimStatus::Valid,
-            },
-            SampleClaim {
-                signer: "devon@forge.dev",
-                key: "ed25519·9c…41",
-                date: "Apr 30",
-                status: ClaimStatus::Revoked,
-            },
-        ],
-    ]
-}
-
-/// Fabricated attachment listings, one set per release row.
-fn sample_attachment_sets() -> [Vec<SampleAttachment>; RELEASE_CARDS] {
-    [
-        vec![
-            SampleAttachment { name: "git-forge-ui-x86_64-linux.tar.gz", size: "18.4 MB" },
-            SampleAttachment { name: "git-forge-ui-aarch64-macos.tar.gz", size: "17.9 MB" },
-            SampleAttachment { name: "git-forge-ui-x86_64-windows.zip", size: "19.1 MB" },
-            SampleAttachment { name: "SHA256SUMS", size: "412 B" },
-        ],
-        vec![
-            SampleAttachment { name: "git-forge-ui-x86_64-linux.tar.gz", size: "18.1 MB" },
-            SampleAttachment { name: "git-forge-ui-aarch64-macos.tar.gz", size: "17.6 MB" },
-            SampleAttachment { name: "git-forge-ui-x86_64-windows.zip", size: "18.8 MB" },
-            SampleAttachment { name: "SHA256SUMS", size: "412 B" },
-        ],
-        vec![
-            SampleAttachment { name: "git-forge-ui-x86_64-linux.tar.gz", size: "16.9 MB" },
-            SampleAttachment { name: "git-forge-ui-aarch64-macos.tar.gz", size: "16.4 MB" },
-            SampleAttachment { name: "SHA256SUMS", size: "298 B" },
-        ],
-    ]
-}
-
-const SAMPLE_TITLES: [&str; RELEASE_CARDS] = [
-    "Bulk query cache, dark mode polish",
-    "Patch: annotation confidence rebind fix",
-    "Initial annotations API preview",
-];
-
-const SAMPLE_BODIES: [&str; RELEASE_CARDS] = [
-    "Introduces a store-side schema cache that cuts bulk forge queries from roughly 340ms to 130ms on a real repository, plus the light/dark theme pass across every route. No schema or ref-layout changes; safe to adopt without a migration step.",
-    "Fixes a rounding error in the quorum indicator that could show one segment short on narrow panes, and rebinds two annotation confidence states that drifted after a HEAD move. No API changes.",
-    "First preview of the annotations API: bind a comment to a line range and track whether it stays bound, rebinds, or orphans as history moves. Feedback welcome before the API is considered stable.",
-];
-
-/// Fallback tag identities, used for any row slot a real tag didn't fill.
-const SAMPLE_IDENTITIES: [(&str, &str, &str); RELEASE_CARDS] = [
-    ("v0.4.0", "2026-07-28", "9b31d4a"),
-    ("v0.3.2", "2026-06-14", "4c02e17"),
-    ("v0.2.9", "2026-05-03", "d81aa4e"),
-];
-
-/// Real tag identities from the open repository, most-recently-tagged
-/// commit first, capped at `RELEASE_CARDS`. Best-effort: any reference or
-/// peel failure just drops that tag rather than failing the page.
-fn real_tag_identities(repo: &gix::Repository) -> Vec<ReleaseIdentity> {
-    let Ok(references) = repo.references() else {
-        return Vec::new();
-    };
-    let Ok(tags) = references.tags() else {
-        return Vec::new();
-    };
-    let mut identities = tags
-        .flatten()
-        .filter_map(|mut reference| {
-            let name = reference.name().shorten().to_string();
-            let commit = reference.peel_to_commit().ok()?;
-            let time = commit.time().ok();
-            let seconds = time.map(|time| time.seconds).unwrap_or_default();
-            let date = time.map_or_else(
-                || "unknown date".to_owned(),
-                |time| time.format_or_unix(gix::date::time::format::SHORT),
-            );
-            let oid = commit.id.to_hex_with_len(7).to_string();
-            Some((
-                seconds,
-                ReleaseIdentity {
-                    tag: name,
-                    date,
-                    oid,
-                },
-            ))
-        })
-        .collect::<Vec<_>>();
-    identities.sort_by_key(|(seconds, _)| std::cmp::Reverse(*seconds));
-    identities
-        .into_iter()
-        .map(|(_, identity)| identity)
-        .take(RELEASE_CARDS)
-        .collect()
-}
-
-async fn release_samples(cx: &Cx) -> Vec<SampleRelease> {
-    let real = with_repo(cx, |repo| Ok(real_tag_identities(repo)))
-        .await
-        .unwrap_or_default();
-    let mut real = real.into_iter();
-    let claim_sets = sample_claim_sets();
-    let attachment_sets = sample_attachment_sets();
-    (0..RELEASE_CARDS)
-        .map(|index| {
-            let identity = real.next().unwrap_or_else(|| {
-                let (tag, date, oid) = SAMPLE_IDENTITIES[index];
-                ReleaseIdentity {
-                    tag: tag.to_owned(),
-                    date: date.to_owned(),
-                    oid: oid.to_owned(),
-                }
-            });
-            SampleRelease {
-                identity,
-                title: SAMPLE_TITLES[index],
-                body: SAMPLE_BODIES[index],
-                attachments: attachment_sets[index].clone(),
-                claims: claim_sets[index].clone(),
-            }
-        })
-        .collect()
-}
-
-/// The nav pane: sticky header, intro note, and one row per release. Each
-/// row's sub-line states the raw claim tally as a fact ("2/3 signed"),
-/// colored by the same real threshold check the old quorum bar used --
-/// see the module docs for why the detail pane itself stops there.
-async fn release_nav(cx: &Cx, release_list: &[SampleRelease], selected: Option<&str>) -> Result {
+async fn release_form(cx: &Cx, action: &str, form: &ReleaseForm, error: Option<&str>) -> Result {
     view! { cx =>
-        <div class="route-nav-header">
-            <h2>"Releases"</h2>
-            <span class="route-nav-action is-disabled" title="No draft-release backend yet -- releases are read from this repository's real tags">"+ draft"</span>
-        </div>
-        <p class="route-nav-note">"an annotated tag with a typed body — like an issue, anchored to a tag"</p>
-        for release in release_list {
-            let valid = release.valid_count();
-            let total = release.claims.len();
-            let quorum_class = format!("quorum-label {}", if release.quorum_met() { "ok" } else { "warn" });
-            let claims_label = format!("{valid}/{total} signed");
-            let tag = release.identity.tag.as_str();
-            let row_class = if selected == Some(tag) { "nav-row active" } else { "nav-row" };
-            <a class=(row_class) href=(format!("/releases/{tag}"))>
-                <div class="nav-row-top">
-                    <span class="nav-row-title oid">(tag)</span>
-                    <span class="nav-row-aside">(release.attachments.len()) " artifacts"</span>
-                </div>
-                <span class="nav-row-sub">(release.identity.date.as_str()) " · " <span class=(quorum_class)>(claims_label)</span></span>
+        <section class="form-layout">
+            <div class="form-intro">
+                <p class="eyebrow">"RELEASE DOCUMENT"</p>
+                <h2>"Describe an annotated tag"</h2>
+                <p class="muted">"The tag object id is immutable. This document stores only the release body and optional attachment references."</p>
+            </div>
+            if let Some(error) = error { <div class="error-panel"><strong>"Release could not be saved"</strong><p>(error)</p></div> }
+            <form class="entity-form" action=(action) method="post">
+                <fieldset>
+                    <legend>"Release"</legend>
+                    <label for="release-target">"Annotated tag target"</label>
+                    <input id="release-target" name="target" value=(form.target.as_str()) placeholder="tag:v1.2.3@<full-tag-object-oid>" required="">
+                    <label for="release-body">"Body"</label>
+                    <textarea id="release-body" name="body" rows="10" placeholder="What does this release contain?">(form.body.as_str())</textarea>
+                    <label for="release-attachments">"Attachments <span class=\"muted\">(comma-separated name@blob-oid values)</span>"</label>
+                    <input id="release-attachments" name="attachments" value=(form.attachments.as_str()) placeholder="SHA256SUMS@<blob-oid>">
+                </fieldset>
+                <div class="form-actions"><a class="button-link secondary" href="/releases">"Cancel"</a><button type="submit">"Save release"</button></div>
+            </form>
+        </section>
+    }
+}
+
+fn attachment_text(release: &Release) -> String {
+    release
+        .attachments
+        .iter()
+        .map(|a| format!("{}@{}", a.name, a.oid))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn parse_attachments(value: &str) -> Result<Vec<ReleaseAttachment>, String> {
+    csv_values(value)
+        .into_iter()
+        .map(|item| {
+            let (name, oid) = item
+                .rsplit_once('@')
+                .ok_or_else(|| format!("attachment `{item}` must be name@blob-oid"))?;
+            gix::ObjectId::from_hex(oid.as_bytes())
+                .map_err(|_| format!("attachment `{item}` has an invalid object id"))?;
+            Ok(ReleaseAttachment {
+                name: name.to_owned(),
+                oid: oid.to_ascii_lowercase(),
+            })
+        })
+        .collect()
+}
+
+type ReleaseRow = (ReleaseTarget, Option<Release>, Vec<gix_forge::ReleaseClaim>);
+
+fn load_rows(repo: &gix::Repository) -> std::result::Result<Vec<ReleaseRow>, gix_forge::Error> {
+    Release::annotated_tags(repo)?
+        .into_iter()
+        .map(|target| {
+            let release = Release::load_from_repo(repo, &target.tag)?;
+            let claims = Release::claims_for_tag(repo, &target).unwrap_or_default();
+            Ok((target, release, claims))
+        })
+        .collect()
+}
+
+async fn release_nav(cx: &Cx, rows: &[ReleaseRow], selected: Option<&str>) -> Result {
+    let can_create = can_create::<Release>(cx).await;
+    view! { cx =>
+        <div class="route-nav-header"><h2>"Releases"</h2>{if can_create { <a class="route-nav-action" href="/releases/new">"+ document"</a> }}</div>
+        <p class="route-nav-note">"annotated tags with typed bodies and signed claims"</p>
+        if rows.is_empty() { <div class="empty-panel"><p>"No annotated tags found."</p></div> }
+        for (target, release, claims) in rows {
+            let active = selected == Some(target.tag.as_str());
+            let row_class = if active { "nav-row active" } else { "nav-row" };
+            let valid = claims.iter().filter(|claim| claim.valid && claim.revoked.is_none()).count();
+            let label = if claims.is_empty() { "no claims".to_owned() } else { format!("{valid}/{} valid", claims.len()) };
+            <a class=(row_class) href=(format!("/releases/{}", target.tag))>
+                <div class="nav-row-top"><span class="anchor-kind oid">"tag"</span><span class="nav-row-status neutral">if release.is_some() { "documented" } else { "undocumented" }</span></div>
+                <span class="nav-row-title">(target.tag.as_str())</span><span class="nav-row-sub">(target.oid.as_str()) " · " (label)</span>
             </a>
         }
     }
 }
 
-/// The detail pane for one release: identity + typed body, attachments,
-/// and the claims ledger, deferring any shippability read to Gates.
-async fn release_detail(cx: &Cx, release: &SampleRelease) -> Result {
-    let sign_action = format!("/releases/{}/publish", release.identity.tag);
+async fn release_detail(
+    cx: &Cx,
+    target: &ReleaseTarget,
+    release: Option<&Release>,
+    claims: &[gix_forge::ReleaseClaim],
+) -> Result {
+    let claim_ref = target_key(&Target {
+        kind: "tag".into(),
+        id: target.object_id().into(),
+    })
+    .map(|id| format!("refs/claims/{id}"))
+    .unwrap_or_else(|_| "refs/claims/<target-key>".into());
     view! { cx =>
         <article class="route-main-width-md">
-            <div class="detail-meta">
-                <div class="detail-meta-group">
-                    <span class="status neutral">"TAGGED"</span>
-                    <strong class="oid">(release.identity.tag.as_str())</strong>
-                </div>
-                <span class="muted">"target " <span class="oid">(release.identity.oid.as_str())</span></span>
-            </div>
-            <h1>(release.title)</h1>
-            <p class="muted">"tagged " (release.identity.date.as_str())</p>
-            <div class="body-copy">(release.body)</div>
-
-            <h3>"Attachments"</h3>
-            <div class="attachment-list">
-                for attachment in &release.attachments {
-                    <div class="attachment-row">
-                        <span>(attachment.name)</span>
-                        <span class="muted">(attachment.size)</span>
-                    </div>
-                }
-            </div>
-
-            <h3>"Claims — signed statements about " <span class="oid">(release.identity.oid.as_str())</span></h3>
-            <ul class="claim-list panel-block">
-                for claim in &release.claims {
-                    let row_class = if claim.status == ClaimStatus::Revoked { "claim-row revoked" } else { "claim-row" };
-                    <li class=(row_class)>
-                        <strong>(claim.signer)</strong>
-                        <span class=(format!("claim-verdict {}", claim.status.css_class()))>(claim.status.label())</span>
-                        <span class="muted">(claim.date)</span>
-                        <span class="claim-key">(claim.key)</span>
-                    </li>
-                }
-            </ul>
-            <p class="muted">"See " <a href="/gates">"release_signable"</a> " in Gates for whether this can ship — quorum, if any, is computed there, not fabricated here."</p>
-
-            <div class="detail-actions">
-                <form class="inline-form" action=(sign_action) method="post">
-                    <button type="submit">"Sign claim on this tag"</button>
-                </form>
-            </div>
+            <div class="detail-meta"><div class="detail-meta-group"><span class="status neutral">"ANNOTATED TAG"</span><strong class="oid">(target.tag.as_str())</strong></div><span class="muted">"tag object " <span class="oid">(target.oid.as_str())</span></span></div>
+            if let Some(release) = release {
+                <div class="body-copy">(release.body.as_str())</div>
+                <h3>"Attachments"</h3>
+                if release.attachments.is_empty() { <p class="empty">"No attachments recorded."</p> } else { <div class="attachment-list">for attachment in &release.attachments { <div class="attachment-row"><span>(attachment.name.as_str())</span><span class="oid">(attachment.oid.as_str())</span></div> }</div> }
+                <div class="detail-actions"><a class="button-link secondary" href=(format!("/releases/{}/edit", target.tag))>"Edit document"</a></div>
+            } else { <div class="empty-panel"><p>"No release document is recorded for this annotated tag."</p><a class="button-link" href=(format!("/releases/new?target={}", target))>"Create document"</a></div> }
+            <h3>"Signed claims"</h3><p class="muted">"Claims target the immutable annotated tag object. Validity includes cryptographic verification; revocations and key rotations are resolved by gix-attest."</p>
+            if claims.is_empty() { <p class="empty panel-block-body">"No signed claims yet."</p> } else { <ul class="claim-list panel-block">for claim in claims { let status = if claim.revoked.is_some() { "revoked" } else if claim.valid { "valid" } else { "invalid" }; let class = if status == "valid" { "ok" } else { "danger" }; <li class="claim-row"><strong>(claim.signer.as_str())</strong><span class=(format!("claim-verdict {class}"))>(status)</span><span class="muted">(claim.date.as_str())</span><span class="claim-key">"key " (claim.key.to_string())</span></li> }</ul> }
+            <p class="form-help">"claim ref " <code>(claim_ref.as_str())</code></p>
+            <form class="inline-form" action=(format!("/releases/{}/publish", target.tag)) method="post"><button type="submit">"Sign claim on this tag"</button></form>
         </article>
-    }
-}
-
-async fn release_placeholder() -> Result {
-    view! {
-        <div class="placeholder-detail">
-            <p class="eyebrow">"RELEASE DETAIL"</p>
-            <h2>"Select a release"</h2>
-            <p class="muted">"Choose a tag from the list to read its body, attachments, and claims."</p>
-        </div>
     }
 }
 
 #[page("/releases")]
 async fn releases(cx: &Cx) -> Result {
-    let release_list = release_samples(cx).await;
-    let nav = release_nav(cx, &release_list, None).await?;
-    let detail = release_placeholder().await?;
-    view! { route_shell(active: Tab::Releases, title: "Releases", nav_width: "19rem", nav: nav, detail: detail) }
+    let rows = with_repo(cx, load_rows)
+        .await
+        .map_err(|error| topcoat::Error::from(anyhow::anyhow!(error)))?;
+    let nav = release_nav(cx, &rows, None).await?;
+    let detail = (view! { <div class="placeholder-detail"><p class="eyebrow">"RELEASE DETAIL"</p><h2>"Select an annotated tag"</h2><p class="muted">"Only repository tags and stored release documents appear here."</p></div> })?;
+    view! { route_shell(active: Tab::Releases, title: "Releases", nav_width: "21rem", nav: nav, detail: detail) }
 }
 
 #[page("/releases/{release_tag}")]
 async fn release_page(cx: &Cx) -> Result {
     let tag = path_param::<ReleaseTag>(cx)?.clone();
-    let release_list = release_samples(cx).await;
-    let nav = release_nav(cx, &release_list, Some(tag.as_str())).await?;
-    let detail = match release_list.iter().find(|release| release.identity.tag == tag) {
-        Some(release) => release_detail(cx, release).await?,
-        None => (view! { <p class="empty">"Release not found."</p> })?,
+    let rows = with_repo(cx, load_rows)
+        .await
+        .map_err(|error| topcoat::Error::from(anyhow::anyhow!(error)))?;
+    let nav = release_nav(cx, &rows, Some(tag.as_str())).await?;
+    let detail = match rows.iter().find(|(target, _, _)| target.tag == tag) {
+        Some((target, release, claims)) => {
+            release_detail(cx, target, release.as_ref(), claims).await?
+        }
+        None => (view! { <p class="empty">"Annotated tag not found."</p> })?,
     };
-    view! { route_shell(active: Tab::Releases, title: "Release", nav_width: "19rem", nav: nav, detail: detail) }
+    view! { route_shell(active: Tab::Releases, title: "Release", nav_width: "21rem", nav: nav, detail: detail) }
+}
+
+#[page("/releases/new")]
+async fn release_new(cx: &Cx) -> Result {
+    let content = release_form(
+        cx,
+        "/releases",
+        &ReleaseForm {
+            target: String::new(),
+            body: String::new(),
+            attachments: String::new(),
+        },
+        None,
+    )
+    .await?;
+    view! { shell(active: Some(Tab::Releases), title: "New release", keyword: None, child: content) }
+}
+
+#[page(POST "/releases")]
+async fn release_create(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
+    let form = form_from_input(&input);
+    let form_for_repo = form.clone();
+    let result = with_repo(cx, move |repo| {
+        let target = ReleaseTarget::parse(form_for_repo.target.trim())?;
+        if !Release::annotated_tags(repo)?.contains(&target) {
+            return Err(gix_forge::Error::InvalidTarget(
+                "target is not an annotated tag in this repository".into(),
+            ));
+        }
+        let attachments = parse_attachments(&form_for_repo.attachments)
+            .map_err(gix_forge::Error::InvalidTarget)?;
+        let release = Release {
+            id: target.tag.clone(),
+            target,
+            body: form_for_repo.body,
+            attachments,
+            edit: None,
+        };
+        release
+            .create_in_repo_as(repo, &authorization)
+            .map(|_| release.id)
+    })
+    .await;
+    match result {
+        Ok(tag) => {
+            view! { shell(active: Some(Tab::Releases), title: "Release saved", keyword: None, child: (view! { <div class="success-panel"><h2>"Release document saved"</h2><a class="button-link" href=(format!("/releases/{tag}"))>"Open release"</a></div> })?) }
+        }
+        Err(error) => {
+            let content = release_form(cx, "/releases", &form, Some(&error)).await?;
+            view! { shell(active: Some(Tab::Releases), title: "Release failed", keyword: None, child: content) }
+        }
+    }
+}
+
+#[page("/releases/{release_tag}/edit")]
+async fn release_edit(cx: &Cx) -> Result {
+    let tag = path_param::<ReleaseTag>(cx)?.clone();
+    let tag_for_repo = tag.clone();
+    let release = with_repo(cx, move |repo| Release::load_from_repo(repo, &tag_for_repo))
+        .await
+        .map_err(|error| topcoat::Error::from(anyhow::anyhow!(error)))?
+        .ok_or_else(|| {
+            topcoat::Error::from(anyhow::anyhow!(topcoat::router::error::not_found()))
+        })?;
+    let attachments = attachment_text(&release);
+    let form = ReleaseForm {
+        target: release.target.to_string(),
+        body: release.body,
+        attachments,
+    };
+    let content = release_form(cx, &format!("/releases/{tag}/edit"), &form, None).await?;
+    view! { shell(active: Some(Tab::Releases), title: "Edit release", keyword: None, child: content) }
+}
+
+#[page(POST "/releases/{release_tag}/edit")]
+async fn release_update(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
+    let authorization = authorization(cx).await?;
+    let tag = path_param::<ReleaseTag>(cx)?.clone();
+    let form = form_from_input(&input);
+    let form_for_repo = form.clone();
+    let tag_for_repo = tag.clone();
+    let result = with_repo(cx, move |repo| {
+        let target = ReleaseTarget::parse(form_for_repo.target.trim())?;
+        if target.tag != tag_for_repo || !Release::annotated_tags(repo)?.contains(&target) {
+            return Err(gix_forge::Error::InvalidTarget(
+                "release target must remain the same annotated tag".into(),
+            ));
+        }
+        Release {
+            id: tag_for_repo.clone(),
+            target,
+            body: form_for_repo.body,
+            attachments: parse_attachments(&form_for_repo.attachments)
+                .map_err(gix_forge::Error::InvalidTarget)?,
+            edit: None,
+        }
+        .save_in_repo_as(repo, &authorization)
+        .map(|_| tag_for_repo)
+    })
+    .await;
+    match result {
+        Ok(tag) => {
+            view! { shell(active: Some(Tab::Releases), title: "Release saved", keyword: None, child: (view! { <div class="success-panel"><h2>"Release document saved"</h2><a class="button-link" href=(format!("/releases/{tag}"))>"Open release"</a></div> })?) }
+        }
+        Err(error) => {
+            let content =
+                release_form(cx, &format!("/releases/{tag}/edit"), &form, Some(&error)).await?;
+            view! { shell(active: Some(Tab::Releases), title: "Edit failed", keyword: None, child: content) }
+        }
+    }
 }
 
 #[page(POST "/releases/{release_tag}/publish")]
 async fn release_publish(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
-    authorization(cx).await?;
+    let authorization = authorization(cx).await?;
     let tag = path_param::<ReleaseTag>(cx)?.clone();
-    let summary = (view! { cx =>
-        "Preview only: this records nothing. There is no signature-ledger backend yet, so signing a claim on "
-        <code>(tag.as_str())</code>
-        " here only demonstrates the confirm step."
-    })?;
+    let tag_for_repo = tag.clone();
+    let target = with_repo(cx, move |repo| {
+        Release::annotated_tags(repo)?
+            .into_iter()
+            .find(|target| target.tag == tag_for_repo)
+            .ok_or_else(|| gix_forge::Error::InvalidTarget("annotated tag not found".into()))
+    })
+    .await
+    .map_err(|error| topcoat::Error::from(anyhow::anyhow!(error)))?;
+    let ref_name = target_key(&Target {
+        kind: "tag".into(),
+        id: target.object_id().into(),
+    })
+    .map(|id| format!("refs/claims/{id}"))
+    .unwrap_or_else(|_| "refs/claims/<target-key>".into());
     if let Some(confirm) = confirm_step(
         cx,
         &input,
-        &format!("/releases/{tag}/publish"),
-        &format!("refs/tags/{tag}"),
-        &format!("/releases/{tag}"),
-        summary,
+        &format!("/releases/{}/publish", target.tag),
+        &ref_name,
+        &format!("/releases/{}", target.tag),
+        (view! { cx => "Sign a release claim for " <code>(target.tag.as_str())</code> })?,
     )
     .await?
     {
         return view! { shell(active: Some(Tab::Releases), title: "Confirm claim signature", keyword: None, child: confirm) };
     }
-    let content = (view! { cx =>
-        <section class="success-panel">
-            <span class="success-icon">"✓"</span>
-            <p class="eyebrow">"PREVIEW"</p>
-            <h2>"Claim signature confirmed (no-op)"</h2>
-            <p class="muted">"This UI has no signature-ledger backend yet, so nothing was actually signed for " <code>(tag.as_str())</code> "."</p>
-            <a class="button-link" href=(format!("/releases/{tag}"))>"Back to release"</a>
-        </section>
-    })?;
-    view! { shell(active: Some(Tab::Releases), title: "Claim signature (preview)", keyword: None, child: content) }
+    let result = with_repo(cx, move |repo| {
+        Release::publish_claim_as(repo, &authorization, &target)
+    })
+    .await;
+    match result {
+        Ok(_) => {
+            view! { shell(active: Some(Tab::Releases), title: "Claim signed", keyword: None, child: (view! { <div class="success-panel"><h2>"Release claim signed"</h2><a class="button-link" href=(format!("/releases/{}", tag))>"Back to release"</a></div> })?) }
+        }
+        Err(error) => {
+            if let Some(error) = authorization_error(&error) {
+                return Err(error);
+            }
+            view! { shell(active: Some(Tab::Releases), title: "Claim failed", keyword: None, child: (view! { <div class="error-panel"><strong>"Release claim could not be signed"</strong><p>(error)</p></div> })?) }
+        }
+    }
 }

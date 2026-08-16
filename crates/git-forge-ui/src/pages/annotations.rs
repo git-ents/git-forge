@@ -15,24 +15,19 @@
 //! occupy, but write nothing.
 
 use gix_forge::{Binding, Comment, EntityOps};
+use std::collections::HashMap;
 use topcoat::{
     Result,
     context::Cx,
     router::{content::Form, page, path_param, query_params},
     view::view,
 };
-use std::collections::HashMap;
 
 use crate::{
     auth::authorization,
     confirm::confirm_step,
-    pages::{
-        comments::subject_href,
-        files::{Confidence, comment_confidence},
-        with_repo,
-    },
-    shell::{Tab, route_shell},
-    tree,
+    pages::{comments::subject_href, files::Confidence, with_repo},
+    shell::{Tab, route_shell, shell},
 };
 
 #[path_param(error = bad_request)]
@@ -54,8 +49,9 @@ impl AnnotationRow {
     fn state_key(&self) -> &'static str {
         match self.confidence {
             Some(Confidence::Bound) => "bound",
-            Some(Confidence::Rebound) => "rebound",
+            Some(Confidence::Drifted) => "drifted",
             Some(Confidence::Orphaned) => "orphaned",
+            Some(Confidence::Pinned) => "pinned",
             None => "unattached",
         }
     }
@@ -87,43 +83,37 @@ impl AnnotationRow {
 /// a path that no longer resolves at `HEAD` (moved, deleted, or the whole
 /// tree lookup failing) reads as `Orphaned` directly, matching what
 /// `comment_confidence` itself would conclude if it could see the miss.
-fn load_annotation_rows(repo: &gix::Repository) -> std::result::Result<Vec<AnnotationRow>, gix_forge::Error> {
+fn load_annotation_rows(
+    repo: &gix::Repository,
+) -> std::result::Result<Vec<AnnotationRow>, gix_forge::Error> {
     let head = repo.head_id().ok().map(|id| id.detach());
     let ids = Comment::list(repo)?;
     let rows = ids
         .into_iter()
         .filter_map(|id| Comment::load_from_repo(repo, &id).ok().flatten())
         .map(|comment| {
-            let confidence = match (&comment.binding, head) {
-                (Some(Binding::Position(anchor)), Some(head)) => {
-                    match tree::load(repo, None, Some(anchor.identity.path.as_str())) {
-                        Ok(browse) => match browse.view {
-                            tree::BrowseView::File(file) => Some(comment_confidence(
-                                &comment,
-                                head,
-                                anchor.identity.path.as_str(),
-                                file.text.as_bytes(),
-                            ).unwrap_or(Confidence::Orphaned)),
-                            tree::BrowseView::Directory { .. } => Some(Confidence::Orphaned),
-                        },
-                        Err(_) => Some(Confidence::Orphaned),
-                    }
-                }
-                (Some(Binding::Position(_)), None) => Some(Confidence::Orphaned),
-                _ => None,
-            };
-            AnnotationRow { comment, confidence }
+            let confidence = head
+                .map(|head| Comment::annotation_state(repo, &comment, head))
+                .transpose()?
+                .flatten()
+                .map(Confidence::from);
+            Ok(AnnotationRow {
+                comment,
+                confidence,
+            })
         })
-        .collect();
+        .collect::<std::result::Result<Vec<_>, gix_forge::Error>>()?;
     Ok(rows)
 }
 
-fn filter_rows<'rows>(rows: &'rows [AnnotationRow], state: Option<&str>) -> Vec<&'rows AnnotationRow> {
+fn filter_rows<'rows>(
+    rows: &'rows [AnnotationRow],
+    state: Option<&str>,
+) -> Vec<&'rows AnnotationRow> {
     match state {
-        Some(state) if !state.is_empty() && state != "all" => rows
-            .iter()
-            .filter(|row| row.state_key() == state)
-            .collect(),
+        Some(state) if !state.is_empty() && state != "all" => {
+            rows.iter().filter(|row| row.state_key() == state).collect()
+        }
         _ => rows.iter().collect(),
     }
 }
@@ -145,10 +135,11 @@ async fn annotation_nav(
     active_state: &str,
     selected: Option<&str>,
 ) -> Result {
-    let counts: HashMap<&'static str, usize> = rows.iter().fold(HashMap::new(), |mut counts, row| {
-        *counts.entry(row.state_key()).or_insert(0) += 1;
-        counts
-    });
+    let counts: HashMap<&'static str, usize> =
+        rows.iter().fold(HashMap::new(), |mut counts, row| {
+            *counts.entry(row.state_key()).or_insert(0) += 1;
+            counts
+        });
     let filtered = filter_rows(rows, Some(active_state));
     view! { cx =>
         <div class="route-nav-header">
@@ -156,7 +147,7 @@ async fn annotation_nav(
             <span class="route-nav-note">(rows.len()) " total"</span>
         </div>
         <div class="annotation-filters">
-            for (key, label) in [("all", "All"), ("bound", "Bound"), ("rebound", "Drifted"), ("orphaned", "Orphaned"), ("unattached", "Unattached")] {
+            for (key, label) in [("all", "All"), ("bound", "Bound"), ("drifted", "Drifted"), ("orphaned", "Orphaned"), ("pinned", "Pinned"), ("unattached", "Unattached")] {
                 let count = if key == "all" { rows.len() } else { *counts.get(key).unwrap_or(&0) };
                 let class = if active_state == key { "annotation-filter active" } else { "annotation-filter" };
                 <a class=(class) href=(state_filter_href(key))>(label) " " <span class="muted">(count)</span></a>
@@ -200,7 +191,10 @@ async fn annotation_placeholder() -> Result {
 /// preview-only repair actions.
 async fn annotation_detail(cx: &Cx, row: &AnnotationRow) -> Result {
     let comment = &row.comment;
-    let needs_repair = matches!(row.confidence, Some(Confidence::Rebound) | Some(Confidence::Orphaned));
+    let needs_repair = matches!(
+        row.confidence,
+        Some(Confidence::Drifted) | Some(Confidence::Orphaned)
+    );
     let subject_label = comment.subject.as_deref();
     let subject_link = comment.subject.as_deref().and_then(subject_href);
     view! { cx =>
@@ -229,13 +223,13 @@ async fn annotation_detail(cx: &Cx, row: &AnnotationRow) -> Result {
             <p class="action-note">"Edit or delete this comment from " <a href=(format!("/comments/{}", comment.id))>"its comment page"</a> "."</p>
             if needs_repair {
                 <h3>"Repair mode"</h3>
-                <p class="muted">"There is no oracle re-projection or attest-claim backend yet, so these only demonstrate the confirm step -- nothing is written."</p>
+                <p class="muted">"Repair resolves the real bind/5 oracle chain. Pin and obsolete actions publish signed attest claims after confirmation."</p>
                 <div class="detail-actions">
                     <form class="inline-form" action=(format!("/annotations/pin/{}", comment.id)) method="post">
-                        <button type="submit">"Pin here (preview)"</button>
+                        <button type="submit">"Sign rebind pin"</button>
                     </form>
                     <form class="inline-form" action=(format!("/annotations/obsolete/{}", comment.id)) method="post">
-                        <button class="button-link secondary" type="submit">"Mark obsolete (preview)"</button>
+                        <button class="button-link secondary" type="submit">"Sign obsolete claim"</button>
                     </form>
                 </div>
             }
@@ -278,18 +272,16 @@ async fn annotation_detail_page(cx: &Cx) -> Result {
 
 #[page(POST "/annotations/pin/{*annotation_id}")]
 async fn annotation_pin(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
-    authorization(cx).await?;
+    let authorization = authorization(cx).await?;
     let id = path_param::<AnnotationId>(cx)?.clone();
     let summary = (view! { cx =>
-        "Preview only: this records nothing. There is no attest-claim backend yet, so pinning "
-        <code>(id.as_str())</code>
-        " here only demonstrates the confirm step."
+        "Resolve the best bind/5 candidate for " <code>(id.as_str())</code> " and sign a rebind pin."
     })?;
     if let Some(confirm) = confirm_step(
         cx,
         &input,
         &format!("/annotations/pin/{id}"),
-        &format!("refs/meta/annotations/{id}/pin"),
+        &format!("refs/claims/annotation/{id}/rebind-pin"),
         &format!("/annotations/{id}"),
         summary,
     )
@@ -297,23 +289,39 @@ async fn annotation_pin(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     {
         return render_with_confirm(cx, "Confirm pin", confirm).await;
     }
-    render(cx, "all", Some(id.as_str())).await
+    let write_id = id.clone();
+    let result = with_repo(cx, move |repo| {
+        let head = repo
+            .head_id()
+            .map_err(|error| gix_forge::Error::QueryRules(error.to_string()))?
+            .detach();
+        let comment = Comment::load_from_repo(repo, &write_id)?.ok_or_else(|| {
+            gix_forge::Error::QueryRules(format!("annotation `{write_id}` was not found"))
+        })?;
+        Comment::rebind_pin_as(repo, &authorization, &comment, head).map(|_| ())
+    })
+    .await;
+    match result {
+        Ok(()) => render(cx, "all", Some(id.as_str())).await,
+        Err(error) => {
+            let content = (view! { cx => <div class="error-panel"><strong>"Repair failed"</strong><p>(error)</p></div> })?;
+            view! { shell(active: Some(Tab::Annotations), title: "Repair failed", keyword: None, child: content) }
+        }
+    }
 }
 
 #[page(POST "/annotations/obsolete/{*annotation_id}")]
 async fn annotation_obsolete(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> Result {
-    authorization(cx).await?;
+    let authorization = authorization(cx).await?;
     let id = path_param::<AnnotationId>(cx)?.clone();
     let summary = (view! { cx =>
-        "Preview only: this records nothing. There is no attest-claim backend yet, so marking "
-        <code>(id.as_str())</code>
-        " obsolete here only demonstrates the confirm step."
+        "Sign an obsolete claim for annotation " <code>(id.as_str())</code> "."
     })?;
     if let Some(confirm) = confirm_step(
         cx,
         &input,
         &format!("/annotations/obsolete/{id}"),
-        &format!("refs/meta/annotations/{id}/obsolete"),
+        &format!("refs/claims/annotation/{id}/obsolete"),
         &format!("/annotations/{id}"),
         summary,
     )
@@ -321,7 +329,21 @@ async fn annotation_obsolete(cx: &Cx, Form(input): Form<HashMap<String, String>>
     {
         return render_with_confirm(cx, "Confirm obsolete", confirm).await;
     }
-    render(cx, "all", Some(id.as_str())).await
+    let write_id = id.clone();
+    let result = with_repo(cx, move |repo| {
+        let comment = Comment::load_from_repo(repo, &write_id)?.ok_or_else(|| {
+            gix_forge::Error::QueryRules(format!("annotation `{write_id}` was not found"))
+        })?;
+        Comment::obsolete_as(repo, &authorization, &comment).map(|_| ())
+    })
+    .await;
+    match result {
+        Ok(()) => render(cx, "all", Some(id.as_str())).await,
+        Err(error) => {
+            let content = (view! { cx => <div class="error-panel"><strong>"Repair failed"</strong><p>(error)</p></div> })?;
+            view! { shell(active: Some(Tab::Annotations), title: "Repair failed", keyword: None, child: content) }
+        }
+    }
 }
 
 async fn render_with_confirm(cx: &Cx, title: &str, confirm: topcoat::view::View) -> Result {

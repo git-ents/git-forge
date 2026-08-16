@@ -87,6 +87,9 @@ pub enum Capability {
     ReviewCreate,
     ReviewUpdate,
     ReviewDelete,
+    ReleaseCreate,
+    ReleaseUpdate,
+    ReleasePublish,
     CommentCreate,
     CommentUpdate,
     CommentDelete,
@@ -94,6 +97,9 @@ pub enum Capability {
     MemberUpdate,
     MemberDelete,
     ForgeInstall,
+    GatePromote,
+    AnnotationRebind,
+    AnnotationObsolete,
 }
 
 impl Capability {
@@ -126,6 +132,9 @@ impl fmt::Display for Capability {
             Self::ReviewCreate => "create review",
             Self::ReviewUpdate => "update review",
             Self::ReviewDelete => "delete review",
+            Self::ReleaseCreate => "create release",
+            Self::ReleaseUpdate => "update release",
+            Self::ReleasePublish => "publish release claim",
             Self::CommentCreate => "create comment",
             Self::CommentUpdate => "update comment",
             Self::CommentDelete => "delete comment",
@@ -133,6 +142,9 @@ impl fmt::Display for Capability {
             Self::MemberUpdate => "update member",
             Self::MemberDelete => "delete member",
             Self::ForgeInstall => "install forge data",
+            Self::GatePromote => "promote a gate verdict",
+            Self::AnnotationRebind => "rebind an annotation",
+            Self::AnnotationObsolete => "mark an annotation obsolete",
         };
         f.write_str(name)
     }

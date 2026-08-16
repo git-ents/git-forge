@@ -179,12 +179,12 @@ impl ReviewTarget {
 }
 
 /// The configured SSH signing key used by Git's `gpg.format = ssh` backend.
-struct SigningKey {
+pub(crate) struct SigningKey {
     private: PathBuf,
 }
 
 impl SigningKey {
-    fn from_config(repo: &gix::Repository) -> Result<Self, Error> {
+    pub(crate) fn from_config(repo: &gix::Repository) -> Result<Self, Error> {
         let config = repo.config_snapshot();
         let format = config
             .string("gpg.format")
@@ -211,6 +211,16 @@ impl SigningKey {
             )));
         }
         Ok(Self { private })
+    }
+
+    pub(crate) fn public_openssh(&self) -> Result<String, Error> {
+        let public = self.private.with_extension("pub");
+        std::fs::read_to_string(&public).map_err(|error| {
+            Error::MissingSigner(format!(
+                "cannot read public signing key {}: {error}",
+                public.display()
+            ))
+        })
     }
 }
 

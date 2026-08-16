@@ -30,12 +30,18 @@ pub enum Error {
     /// The requested review does not exist.
     #[error("review `{0}` was not found")]
     ReviewNotFound(String),
+    /// Reading annotated-tag references failed.
+    #[error("could not read release tags: {0}")]
+    ReleaseRepository(String),
     /// The repository has no usable authenticated signing configuration.
     #[error("missing signing configuration: {0}")]
     MissingSigner(String),
     /// A decision claim was unexpectedly written without a Git signature.
     #[error("review decision claim is unsigned")]
     UnsignedDecision,
+    /// A release claim was unexpectedly written without a Git signature.
+    #[error("release claim is unsigned")]
+    UnsignedRelease,
     /// Failed to publish or read an attest claim.
     #[error(transparent)]
     Attest(#[from] gix_attest::Error),
