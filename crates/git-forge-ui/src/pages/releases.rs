@@ -52,7 +52,7 @@ async fn release_form(cx: &Cx, action: &str, form: &ReleaseForm, error: Option<&
                     <input id="release-target" name="target" value=(form.target.as_str()) placeholder="tag:v1.2.3@<full-tag-object-oid>" required="">
                     <label for="release-body">"Body"</label>
                     <textarea id="release-body" name="body" rows="10" placeholder="What does this release contain?">(form.body.as_str())</textarea>
-                    <label for="release-attachments">"Attachments <span class=\"muted\">(comma-separated name@blob-oid values)</span>"</label>
+                    <label for="release-attachments">"Attachments " <span class="muted">"(comma-separated name@blob-oid values)"</span></label>
                     <input id="release-attachments" name="attachments" value=(form.attachments.as_str()) placeholder="SHA256SUMS@<blob-oid>">
                 </fieldset>
                 <div class="form-actions"><a class="button-link secondary" href="/releases">"Cancel"</a><button type="submit">"Save release"</button></div>
@@ -169,7 +169,7 @@ async fn release_page(cx: &Cx) -> Result {
         Some((target, release, claims)) => {
             release_detail(cx, target, release.as_ref(), claims).await?
         }
-        None => (view! { <p class="empty">"Annotated tag not found."</p> })?,
+        None => (view! { <div class="empty-panel"><h2>"Annotated tag not found"</h2><a href="/releases">"Back to releases"</a></div> })?,
     };
     view! { route_shell(active: Tab::Releases, title: "Release", nav_width: "21rem", nav: nav, detail: detail) }
 }

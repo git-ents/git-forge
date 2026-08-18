@@ -382,6 +382,298 @@ fn ui_crawls_every_internal_route() {
     assert!(crawler.seen_query("view=source"));
 }
 
+/// Regression guard for docs/ui-audit/phase-5.md: snapshots the HTML that
+/// `render_markdown`/`render_asciidoc` (crates/git-forge-ui/src/render.rs)
+/// produce for the four routes that push prose through `.rendered-file` --
+/// the `/tree` Markdown and AsciiDoc previews, plus Issue and Review detail,
+/// which render their `body` field through the same `render_asciidoc` path.
+///
+/// This exists because of F2-001 (docs/ui-audit/findings.md): the AsciiDoc
+/// converter wraps every list item's text in its own `<p>`, which Markdown's
+/// `comrak` (in "tight list" mode) never emits, and the stylesheet has to
+/// carry an explicit rule (`.rendered-file li > p { margin: 0 }`) to
+/// compensate. That asymmetry has no local diff to review if a future bump
+/// of the vendored AsciiDoc converter changes it -- this test snapshots the
+/// markup shape itself (only the prose container, not the surrounding page
+/// chrome, which changes for unrelated reasons) so a structural change shows
+/// up as a failing diff instead of a silent regression.
+///
+/// Only the prose container's inner HTML is captured, and hex ids/hashes and
+/// timestamp-shaped substrings are normalized out first, so the test is
+/// sensitive to markup structure and nothing else.
+///
+/// Set `UPDATE_SNAPSHOTS=1` to write the current output as the new expected
+/// snapshot (e.g. after an intentional rendering change).
+#[test]
+fn ui_prose_render_matches_snapshot() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    init_repo(repo_dir.path());
+    commit_file(
+        repo_dir.path(),
+        "README.md",
+        "# Prose snapshot\n\n\
+         First paragraph in a run of consecutive paragraphs.\n\n\
+         Second paragraph, immediately following the first.\n\n\
+         - Item one\n\
+         - Item two\n\
+         \x20\x20- Nested item\n\
+         - Item three\n",
+        "add markdown prose",
+    );
+    commit_file(
+        repo_dir.path(),
+        "guide.adoc",
+        "= Prose snapshot\n\n\
+         First paragraph in a run of consecutive paragraphs.\n\n\
+         Second paragraph, immediately following the first.\n\n\
+         * Item one\n\
+         * Item two\n\
+         ** Nested item\n\
+         * Item three\n",
+        "add asciidoc prose",
+    );
+
+    let repo = gix::open(repo_dir.path()).unwrap();
+    let admin = Authorization::new(Principal::member_id("alice")).administrator();
+    Member {
+        id: "alice".to_owned(),
+        signing_key: "alice".to_owned(),
+        role: "maintainer".to_owned(),
+    }
+    .save_in_repo_as(&repo, &admin)
+    .unwrap();
+    let alice = Authorization::new(Principal::member_id("alice"));
+
+    let prose_body = "First paragraph in a run of consecutive paragraphs.\n\n\
+         Second paragraph, immediately following the first.\n\n\
+         * Item one\n\
+         * Item two\n\
+         ** Nested item\n\
+         * Item three\n";
+
+    Issue {
+        id: "snap-issue-1".to_owned(),
+        status: "open".to_owned(),
+        title: "Snapshot issue".to_owned(),
+        body: prose_body.to_owned(),
+        labels: vec![],
+        assignees: vec![],
+        reporters: vec!["alice".to_owned()],
+        edit: None,
+    }
+    .save_in_repo_as(&repo, &alice)
+    .unwrap();
+    Review {
+        id: "snap-review-1".to_owned(),
+        status: "open".to_owned(),
+        body: prose_body.to_owned(),
+        reviewers: vec![],
+        requesters: vec!["alice".to_owned()],
+        target: ReviewTarget::parse("commit:0000000000000000000000000000000000000000").unwrap(),
+        edit: None,
+    }
+    .save_in_repo_as(&repo, &alice)
+    .unwrap();
+
+    let server = Server::spawn(repo_dir.path());
+    let address = server.wait_for_url();
+    let client = HttpClient { address };
+    wait_for_ready(&client);
+
+    let cases: [(&str, &str, &str); 4] = [
+        (
+            "tree-markdown-preview",
+            "/tree?ref=HEAD&path=README.md&view=preview",
+            "rendered-file",
+        ),
+        (
+            "tree-asciidoc-preview",
+            "/tree?ref=HEAD&path=guide.adoc&view=preview",
+            "rendered-file",
+        ),
+        (
+            "issue-detail",
+            "/issues/snap-issue-1",
+            "body-copy rendered-file",
+        ),
+        (
+            "review-detail",
+            "/reviews/snap-review-1",
+            "body-copy rendered-file",
+        ),
+    ];
+
+    let update = std::env::var_os("UPDATE_SNAPSHOTS").is_some();
+    let mut failures = Vec::new();
+
+    for (name, target, marker) in cases {
+        let response = client
+            .request(&Request {
+                method: "GET".to_owned(),
+                target: target.to_owned(),
+                body: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(response.status, 200, "{name} ({target}) returned non-200");
+        let html = response.body_text().unwrap();
+        let prose = extract_marked_div(html, marker);
+        let normalized = normalize_prose(&prose);
+        let snapshot_path = snapshot_path(name);
+
+        if update {
+            std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+            std::fs::write(&snapshot_path, &normalized).unwrap();
+            continue;
+        }
+
+        match std::fs::read_to_string(&snapshot_path) {
+            Ok(expected) if expected == normalized => {}
+            Ok(expected) => failures.push(format!(
+                "{name}: rendered HTML no longer matches {snapshot_path:?}\n--- expected\n{expected}\n--- actual\n{normalized}\n\
+                 (run with UPDATE_SNAPSHOTS=1 if this change is intentional)"
+            )),
+            Err(_) => failures.push(format!(
+                "{name}: no snapshot at {snapshot_path:?} -- run with UPDATE_SNAPSHOTS=1 to create it"
+            )),
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+fn wait_for_ready(client: &HttpClient) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let request = Request {
+        method: "GET".to_owned(),
+        target: "/tree".to_owned(),
+        body: Vec::new(),
+    };
+    loop {
+        match client.request(&request) {
+            Ok(response) if (200..300).contains(&response.status) => return,
+            Ok(response) => panic!(
+                "GET /tree returned HTTP {} while waiting for the UI",
+                response.status
+            ),
+            Err(error) if retryable(&error) && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => panic!("waiting for UI server: {error}"),
+        }
+    }
+}
+
+fn snapshot_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join(format!("{name}.html"))
+}
+
+/// Extracts the inner HTML of the single `<div class="{marker}">...</div>`
+/// in `html`, matching nested `<div>`/`</div>` pairs so an AsciiDoc body's
+/// own (unclassed) nested divs don't truncate the extraction early.
+fn extract_marked_div(html: &str, marker: &str) -> String {
+    let open_tag = format!(r#"<div class="{marker}">"#);
+    let start = html
+        .find(&open_tag)
+        .unwrap_or_else(|| panic!("no `{open_tag}` container in response"));
+    let content_start = start + open_tag.len();
+
+    let mut depth = 1usize;
+    let mut offset = content_start;
+    loop {
+        let next_open = html[offset..]
+            .find("<div")
+            .map(|relative| offset + relative);
+        let next_close = html[offset..]
+            .find("</div>")
+            .map(|relative| offset + relative);
+        match (next_open, next_close) {
+            (Some(open), Some(close)) if open < close => {
+                depth += 1;
+                offset = open + "<div".len();
+            }
+            (_, Some(close)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return html[content_start..close].to_owned();
+                }
+                offset = close + "</div>".len();
+            }
+            _ => panic!("unterminated `{open_tag}` container"),
+        }
+    }
+}
+
+/// Strips content that varies run-to-run but carries no markup-structure
+/// information: long hex runs (commit/blob oids, generated ids) and
+/// timestamp-shaped substrings (`YYYY-MM-DDTHH:MM:SS`). Prose bodies don't
+/// currently emit either, but staying defensive here keeps the snapshot
+/// honest if a future template starts interpolating one into `.rendered-file`.
+fn normalize_prose(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let mut result = String::with_capacity(html.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let remaining = &html[index..];
+        if let Some(length) = timestamp_prefix_len(remaining) {
+            result.push_str("<TIMESTAMP>");
+            index += length;
+            continue;
+        }
+        let hex_run = remaining
+            .as_bytes()
+            .iter()
+            .take_while(|byte| byte.is_ascii_hexdigit())
+            .count();
+        if hex_run >= 7 {
+            result.push_str("<HASH>");
+            index += hex_run;
+            continue;
+        }
+        let ch = remaining.chars().next().unwrap();
+        result.push(ch);
+        index += ch.len_utf8();
+    }
+    result
+}
+
+/// Recognizes an ISO-8601-ish `YYYY-MM-DDTHH:MM:SS` prefix and returns its
+/// byte length, or `None` if `text` doesn't start with one.
+fn timestamp_prefix_len(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let pattern: &[fn(u8) -> bool] = &[
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b == b'-',
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b == b'-',
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b == b'T',
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b == b':',
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+        |b| b == b':',
+        |b| b.is_ascii_digit(),
+        |b| b.is_ascii_digit(),
+    ];
+    if bytes.len() < pattern.len() {
+        return None;
+    }
+    pattern
+        .iter()
+        .zip(bytes.iter())
+        .all(|(check, byte)| check(*byte))
+        .then_some(pattern.len())
+}
+
 struct Server {
     child: Child,
     output: Receiver<String>,

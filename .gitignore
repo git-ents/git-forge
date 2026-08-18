@@ -2,3 +2,4 @@
 /.claude/
 /.rumdl_cache/
 *.html
+!/crates/git-forge-ui/tests/snapshots/*.html

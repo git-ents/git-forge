@@ -161,6 +161,7 @@ async fn member_nav(cx: &Cx, items: &[Member], selected: Option<&str>) -> Result
                 <a class="route-nav-action" href="/members/new">"+ add"</a>
             }
         </div>
+        <p class="route-nav-note">"members with repository access"</p>
         if items.is_empty() {
             <p class="route-nav-note">"No members found."</p>
         } else {

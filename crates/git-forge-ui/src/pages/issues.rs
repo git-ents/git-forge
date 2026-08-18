@@ -72,7 +72,7 @@ async fn issue_form(cx: &Cx, action: &str, form: &IssueForm, error: Option<&str>
                     <legend>"Issue details"</legend>
                     <label for="issue-title">"Title"</label>
                     <input id="issue-title" name="title" value=(form.title.as_str()) placeholder="A clear, concise summary" required="">
-                    <label for="issue-body">"Description <span class=\"muted\">(optional)</span>"</label>
+                    <label for="issue-body">"Description " <span class="muted">"(optional)"</span></label>
                     <textarea id="issue-body" name="body" rows="10" placeholder="What should someone know to reproduce or resolve this?">(form.body.as_str())</textarea>
                 </fieldset>
                 <fieldset>
@@ -87,11 +87,11 @@ async fn issue_form(cx: &Cx, action: &str, form: &IssueForm, error: Option<&str>
                             <option value="closed">"Closed"</option>
                         }
                     </select>
-                    <label for="issue-labels">"Labels <span class=\"muted\">(comma-separated)</span>"</label>
+                    <label for="issue-labels">"Labels " <span class="muted">"(comma-separated)"</span></label>
                     <input id="issue-labels" name="labels" value=(form.labels.as_str()) placeholder="bug, documentation">
-                    <label for="issue-assignees">"Assignees <span class=\"muted\">(comma-separated)</span>"</label>
+                    <label for="issue-assignees">"Assignees " <span class="muted">"(comma-separated)"</span></label>
                     <input id="issue-assignees" name="assignees" value=(form.assignees.as_str()) placeholder="handle or member ID">
-                    <label for="issue-reporters">"Reporters <span class=\"muted\">(comma-separated)</span>"</label>
+                    <label for="issue-reporters">"Reporters " <span class="muted">"(comma-separated)"</span></label>
                     <input id="issue-reporters" name="reporters" value=(form.reporters.as_str()) placeholder="handle or member ID">
                 </fieldset>
                 <div class="form-actions">
@@ -538,7 +538,7 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
         .trim()
         .to_owned();
     if author.is_empty() || body.is_empty() {
-        let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
+        let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>"Your name and a comment are required."</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
         return view! { shell(active: Some(Tab::Issues), title: "Comment failed", keyword: None, child: content) };
     }
     if let Some(confirm) = confirm_step(
@@ -570,7 +570,7 @@ async fn issue_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> R
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
-            let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
+            let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/issues/{id}"))>"Return to issue"</a></div> })?;
             view! { shell(active: Some(Tab::Issues), title: "Comment failed", keyword: None, child: content) }
         }
     }

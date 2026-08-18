@@ -90,8 +90,7 @@ async fn render(cx: &Cx, id: &str) -> Result {
             })?;
             let detail = (view! { cx =>
                 <div class="route-main-width-lg">
-                    <h1>"Gates unavailable"</h1>
-                    <p class="muted">"Gate evaluation failed: " (error.to_string())</p>
+                    <div class="error-panel"><strong>"Gates unavailable"</strong><p>"Gate evaluation failed: " (error.to_string())</p></div>
                 </div>
             })?;
             return view! { cx => route_shell(active: Tab::Gates, title: "Gates", nav_width: "19rem", nav: nav, detail: detail) };

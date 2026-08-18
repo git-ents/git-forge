@@ -230,6 +230,12 @@ textarea:focus-visible,
     outline: 2px solid var(--accent);
     outline-offset: 2px;
 }
+:disabled,
+[disabled] {
+    opacity: 0.5;
+    color: var(--faint);
+    cursor: not-allowed;
+}
 
 h1,
 h2,
@@ -339,7 +345,7 @@ h3 {
     padding: 0 3px;
     display: grid;
     place-items: center;
-    font-size: 0.58rem;
+    font-size: 0.62rem;
     font-weight: 700;
     background: var(--warn);
     color: var(--bg);
@@ -413,7 +419,7 @@ h3 {
     color: var(--text);
     font-weight: 600;
     letter-spacing: -0.01em;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
 }
 .branch-pill {
     flex-shrink: 0;
@@ -426,7 +432,7 @@ h3 {
     border-radius: 4px;
     background: var(--accent-tint);
     color: var(--accent);
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     font-weight: 600;
 }
 .ahead-behind {
@@ -525,7 +531,7 @@ h3 {
 }
 .route-nav-note {
     margin: 0.25rem 0 0;
-    font-size: 0.63rem;
+    font-size: 0.62rem;
     line-height: 1.4;
     color: var(--faint);
 }
@@ -585,7 +591,7 @@ h3 {
 .nav-row-title {
     display: block;
     margin-top: 0.2rem;
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -594,7 +600,7 @@ h3 {
 .nav-row-sub {
     display: block;
     margin-top: 0.15rem;
-    font-size: 0.65rem;
+    font-size: 0.68rem;
     color: var(--faint);
     white-space: nowrap;
     overflow: hidden;
@@ -621,7 +627,7 @@ h3 {
     padding: 0.2rem 0.5rem;
     border: 1px solid var(--line);
     border-radius: 4px;
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     font-weight: 600;
     color: var(--dim);
 }
@@ -665,7 +671,7 @@ h3 {
     padding: 0 0.9rem;
     border-top: 1px solid var(--line);
     background: var(--rail);
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     color: var(--faint);
     overflow: hidden;
 }
@@ -696,7 +702,7 @@ h3 {
     border-top: 1px solid var(--line2);
     box-shadow: 0 -8px 24px var(--shadow);
     padding: 0.8rem 1rem;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     max-height: 50vh;
     overflow-y: auto;
 }
@@ -705,7 +711,7 @@ h3 {
 }
 .local-panel-heading {
     margin: 0 0 0.5rem;
-    font-size: 0.63rem;
+    font-size: 0.62rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--faint);
@@ -743,7 +749,7 @@ h3 {
 .muted,
 small {
     color: var(--text-muted);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
 }
 .eyebrow {
     margin: 0 0 0.25rem;
@@ -827,7 +833,7 @@ button:hover {
     color: var(--bg);
 }
 .danger-button:hover {
-    background: #c14e44;
+    background: color-mix(in srgb, var(--danger) 85%, black);
 }
 
 /* ---------- Panels & cards ---------- */
@@ -883,7 +889,7 @@ button:hover {
 }
 .action-note {
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
 }
 
 .stats-grid {
@@ -969,7 +975,7 @@ button:hover {
     border-radius: 4px;
     background: var(--accent-tint-strong);
     color: var(--accent);
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -1028,7 +1034,7 @@ button:hover {
     margin: 0.25rem 0 0;
     white-space: pre-wrap;
     color: var(--text-prose);
-    font-size: 0.88rem;
+    font-size: 0.8rem;
 }
 
 .facts {
@@ -1076,7 +1082,7 @@ tbody tr:hover {
 .stack-form label {
     margin-top: 0.4rem;
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     font-weight: 700;
 }
 .stack-form button {
@@ -1085,7 +1091,7 @@ tbody tr:hover {
 }
 .form-help {
     color: var(--text-muted);
-    font-size: 0.74rem;
+    font-size: 0.72rem;
 }
 .form-help code {
     color: var(--text);
@@ -1128,7 +1134,7 @@ tbody tr:hover {
 .comment-form label {
     margin-top: 0.35rem;
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     font-weight: 700;
 }
 .entity-form .form-actions {
@@ -1215,7 +1221,7 @@ code {
     border-radius: 8px;
     background: color-mix(in srgb, var(--danger) 12%, var(--surface));
     color: var(--danger);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
 }
 .error-panel p,
 .error-text {
@@ -1298,7 +1304,7 @@ code {
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-sunken);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
 }
 .refs-pane-heading {
     margin: 0 0 0.5rem;
@@ -1347,7 +1353,7 @@ code {
     display: flex;
     flex-shrink: 0;
     gap: 0.4rem;
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     color: var(--text-muted);
 }
 .ref-link .ref-ahead {
@@ -1366,12 +1372,12 @@ code {
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--surface-sunken);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--text-muted);
 }
 .blob-header .blob-name {
     font-weight: 600;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     color: var(--text);
 }
 .blob-header .blob-oid {
@@ -1466,7 +1472,7 @@ code {
     padding: 0.3rem 0.6rem;
     border-radius: 4px;
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     font-weight: 700;
 }
 .view-toggle a:hover,
@@ -1602,7 +1608,7 @@ code {
     border-left: 3px solid var(--accent);
     border-radius: 0 5px 5px 0;
     background: var(--accent-glow-row);
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     white-space: normal;
 }
 .source-comment p {
@@ -1611,7 +1617,7 @@ code {
 }
 .comment-range {
     color: var(--text-muted);
-    font-size: 0.74rem;
+    font-size: 0.72rem;
 }
 .source-comment .comment-heading,
 .file-comments .comment-heading {
@@ -1735,10 +1741,17 @@ code {
     margin: 1.35rem 0 0.45rem;
     font-size: 1rem;
 }
-.rendered-file p,
+.rendered-file p:not(li > p),
 .rendered-file ul,
 .rendered-file ol {
     margin: 0 0 1rem;
+}
+/* AsciiDoc wraps every list-item's text in its own <p> (Markdown's tight
+   lists never emit one); zero it out explicitly rather than let the UA
+   stylesheet's default paragraph margin (1em, computed against this
+   context's own font-size) fill the gap left by excluding it above. */
+.rendered-file li > p {
+    margin: 0;
 }
 .rendered-file ul,
 .rendered-file ol {
@@ -1834,7 +1847,7 @@ code {
     display: grid;
     place-items: center;
     padding: 1.5rem;
-    background: rgba(6, 8, 4, 0.6);
+    background: var(--scrim);
 }
 .confirm-modal {
     width: min(30rem, 100%);
@@ -1842,7 +1855,7 @@ code {
     border: 1px solid var(--border-hover);
     border-radius: 10px;
     background: var(--surface);
-    box-shadow: 0 20px 60px #000000a0;
+    box-shadow: 0 20px 60px var(--shadow);
 }
 .confirm-modal h2 {
     margin-bottom: 0.6rem;
@@ -1850,7 +1863,7 @@ code {
 .confirm-summary {
     margin: 0 0 1.1rem;
     color: var(--text-prose);
-    font-size: 0.88rem;
+    font-size: 0.8rem;
 }
 .confirm-details {
     display: grid;
@@ -1869,7 +1882,7 @@ code {
 .confirm-details dd {
     margin: 0;
     overflow-wrap: anywhere;
-    font-size: 0.84rem;
+    font-size: 0.8rem;
 }
 .confirm-form {
     margin: 0;
@@ -1952,7 +1965,7 @@ code.oid {
     gap: 0.5rem 0.9rem;
     padding: 0.5rem 1rem;
     border-top: 1px solid var(--border-subtle);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
 }
 .claim-row .status {
     margin-left: auto;
@@ -2039,7 +2052,7 @@ code.oid {
     white-space: nowrap;
 }
 .diffstat {
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     white-space: nowrap;
 }
 .diffstat .add {
@@ -2129,7 +2142,7 @@ code.oid {
     min-width: 0;
     font-family: Lora, Georgia, serif;
     font-weight: 600;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2200,7 +2213,7 @@ code.oid {
     border-bottom: 1px solid var(--border);
     background: var(--surface-sunken);
     color: var(--text-muted);
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -2223,7 +2236,7 @@ code.oid {
     overflow-wrap: anywhere;
 }
 .anchor-projection {
-    font-size: 0.74rem;
+    font-size: 0.72rem;
 }
 .anchor-projection.ok {
     color: var(--ok);
@@ -2249,7 +2262,7 @@ code.oid {
     gap: 0.9rem;
     padding: 0.5rem 0.9rem;
     border-top: 1px solid var(--border-subtle);
-    font-size: 0.76rem;
+    font-size: 0.78rem;
 }
 .verdict-row:first-child {
     border-top: none;
@@ -2258,7 +2271,7 @@ code.oid {
     margin-left: auto;
     padding: 0.1rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -2278,7 +2291,7 @@ code.oid {
 .claim-chain {
     flex-basis: 100%;
     color: var(--text-dim);
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     overflow-wrap: anywhere;
 }
 
@@ -2304,7 +2317,7 @@ code.oid {
     border-radius: 5px;
     background: var(--surface-sunken);
     color: var(--text-muted);
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     text-decoration: none;
 }
 .palette-trigger:hover,
@@ -2319,7 +2332,7 @@ code.oid {
     background: var(--bg);
     color: var(--text-dim);
     font: inherit;
-    font-size: 0.66rem;
+    font-size: 0.68rem;
 }
 
 .palette-overlay {
@@ -2338,7 +2351,7 @@ code.oid {
 .palette-scrim {
     position: absolute;
     inset: 0;
-    background: rgba(6, 8, 4, 0.6);
+    background: var(--scrim);
 }
 .palette-panel {
     position: relative;
@@ -2351,7 +2364,7 @@ code.oid {
     border: 1px solid var(--border-hover);
     border-radius: 10px;
     background: var(--surface);
-    box-shadow: 0 20px 60px #000000a0;
+    box-shadow: 0 20px 60px var(--shadow);
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     color: var(--text);
 }
@@ -2425,7 +2438,7 @@ code.oid {
     border: 1px solid var(--accent-border);
     border-radius: 4px;
     color: var(--accent);
-    font-size: 0.6rem;
+    font-size: 0.62rem;
     font-weight: 700;
     text-align: center;
     text-transform: uppercase;
@@ -2433,7 +2446,7 @@ code.oid {
 }
 .palette-label {
     overflow: hidden;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -2556,16 +2569,16 @@ code.oid {
     border-radius: 50%;
     background: var(--accent-tint);
     color: var(--accent);
-    font-size: 0.6rem;
+    font-size: 0.62rem;
     font-weight: 700;
 }
 
 .review-title {
-    margin: 0 0 0.3rem;
+    margin: 0;
     font-size: 1.35rem;
 }
 .review-subtitle {
-    margin: 0 0 1.1rem;
+    margin: 0.3rem 0 1.1rem;
     color: var(--text-dim);
     font-size: 0.68rem;
 }
@@ -2600,7 +2613,7 @@ code.oid {
 .target-cmd code {
     padding: 0;
     background: transparent;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
 }
 .target-cmd-value {
     color: var(--syntax-string);
@@ -2608,7 +2621,7 @@ code.oid {
 .target-explain {
     margin: 0.55rem 0 0;
     color: var(--text-prose);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     line-height: 1.55;
 }
 .target-parties {
@@ -2659,7 +2672,7 @@ code.oid {
     max-width: 22rem;
     text-align: right;
     color: var(--text-dim);
-    font-size: 0.65rem;
+    font-size: 0.68rem;
 }
 
 .final-actions {
@@ -2686,7 +2699,7 @@ code.oid {
    colored by the row's status via --nav-edge (see .nav-row). */
 .nav-row-status {
     margin-left: auto;
-    font-size: 0.63rem;
+    font-size: 0.62rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -2751,7 +2764,7 @@ code.oid {
 }
 .inbox-away-body {
     margin: 0.45rem 0 0;
-    font-size: 0.86rem;
+    font-size: 0.8rem;
     line-height: 1.55;
     color: var(--muted);
 }
@@ -2771,7 +2784,7 @@ code.oid {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -2858,7 +2871,7 @@ code.oid {
     color: var(--text);
 }
 .inbox-row-age {
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     color: var(--faint);
     white-space: nowrap;
     flex-shrink: 0;
@@ -2867,17 +2880,17 @@ code.oid {
     display: flex;
     align-items: baseline;
     gap: 0.45rem;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--dim);
 }
 .inbox-row-ref {
     display: block;
-    font-size: 0.63rem;
+    font-size: 0.62rem;
     color: var(--fainter);
 }
 .inbox-row-action {
     display: inline-block;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 600;
     border-radius: 4px;
     padding: 0.2rem 0.6rem;
@@ -2913,7 +2926,7 @@ code.oid {
 .nav-row-verdict {
     display: block;
     margin-top: 0.15rem;
-    font-size: 0.66rem;
+    font-size: 0.68rem;
     font-weight: 600;
     color: var(--nav-edge, var(--faint));
     white-space: nowrap;
@@ -2937,7 +2950,7 @@ code.oid {
 }
 .gate-subline {
     margin: 0.4rem 0 0;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
     color: var(--dim);
 }
 
@@ -2956,7 +2969,7 @@ code.oid {
     align-items: baseline;
     gap: 0.6rem;
     padding: 0.18rem 0.9rem;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     white-space: nowrap;
 }
 .gate-trace-glyph {
@@ -3030,7 +3043,7 @@ code.oid {
 .nav-row-role {
     margin-left: auto;
     flex-shrink: 0;
-    font-size: 0.64rem;
+    font-size: 0.62rem;
     color: var(--faint);
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -3042,7 +3055,7 @@ code.oid {
     border-radius: 6px;
     padding: 0.6rem 0.75rem;
     margin-bottom: 1rem;
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     color: var(--text);
 }
 
@@ -3073,14 +3086,15 @@ code.oid {
 
 .trust-key {
     margin: 0.4rem 0 0;
-    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+    font-size: 0.78rem;
     color: var(--dim);
     font-family: ui-monospace, Menlo, monospace;
 }
 
 .trust-role-explain {
     margin: 0.6rem 0 0;
-    font-size: 0.76rem;
+    font-size: 0.78rem;
     color: var(--muted);
     line-height: 1.6;
 }
@@ -3144,7 +3158,7 @@ code.oid {
     margin-left: auto;
     flex-shrink: 0;
     color: var(--faint);
-    font-size: 0.66rem;
+    font-size: 0.68rem;
 }
 /* Groups a couple of inline elements together on one side of a
    `.detail-meta` row so `justify-content: space-between` only splits
@@ -3167,7 +3181,7 @@ code.oid {
     border: 1px solid var(--line);
     background: var(--surface);
     border-radius: 5px;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
 }
 /* A claim's valid/revoked word, distinct from `.status`: bare colored
    text with no pill background, and -- unlike `.claim-row .status` --
@@ -3187,7 +3201,7 @@ code.oid {
 .claim-key {
     margin-left: auto;
     color: var(--fainter);
-    font-size: 0.66rem;
+    font-size: 0.68rem;
 }
 .claim-row.revoked {
     opacity: 0.6;

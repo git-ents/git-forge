@@ -67,7 +67,7 @@ async fn comment_form(cx: &Cx, form: &CommentForm, error: Option<&str>) -> Resul
                             <option value="review">"Review"</option>
                         }
                     </select>
-                    <label for="comment-subject-id">"Entity ID <span class=\"muted\">(when attached)</span>"</label>
+                    <label for="comment-subject-id">"Entity ID " <span class="muted">"(when attached)"</span></label>
                     <input id="comment-subject-id" name="subject_id" value=(form.subject_id.as_str()) placeholder="issue ID or review ID">
                 </fieldset>
                 <fieldset>
@@ -79,7 +79,7 @@ async fn comment_form(cx: &Cx, form: &CommentForm, error: Option<&str>) -> Resul
                 </fieldset>
                 <div class="form-actions">
                     <a class="button-link secondary" href="/tree">"Cancel"</a>
-                    <button type="submit">"Publish comment"</button>
+                    <button type="submit">"Comment"</button>
                 </div>
             </form>
         </section>
@@ -208,7 +208,7 @@ async fn comment_detail(cx: &Cx) -> Result {
                     if let Some(subject) = &comment.subject {
                         <p class="muted">"Attached to " (subject.as_str())</p>
                     } else {
-                        <p class="muted">"Free-floating discussion"</p>
+                        <p class="muted">"Free-floating comment"</p>
                     }
                     <p class="body-copy">(comment.body.as_str())</p>
                     <div class="form-actions">
@@ -226,7 +226,7 @@ async fn comment_detail(cx: &Cx) -> Result {
             })?
         }
         Ok(None) => {
-            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/tree">"Return home"</a></div> })?
+            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/inbox">"Return home"</a></div> })?
         }
         Err(error) => {
             (view! { <div class="error-panel"><strong>"Could not load comment"</strong><p>(error)</p></div> })?
@@ -358,10 +358,10 @@ async fn comment_delete(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
     .await;
     let content = match result {
         Ok(true) => {
-            (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment deleted"</h2><a class="button-link" href="/tree">"Return home"</a></section> })?
+            (view! { <section class="success-panel"><span class="success-icon">"✓"</span><h2>"Comment deleted"</h2><a class="button-link" href="/inbox">"Return home"</a></section> })?
         }
         Ok(false) => {
-            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/tree">"Return home"</a></div> })?
+            (view! { <div class="empty-panel"><h2>"Comment not found"</h2><a href="/inbox">"Return home"</a></div> })?
         }
         Err(error) => {
             if let Some(error) = authorization_error(&error) {
