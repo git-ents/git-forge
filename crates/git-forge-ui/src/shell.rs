@@ -139,6 +139,42 @@ async fn repo_branch(cx: &Cx) -> String {
     .unwrap_or_else(|_| "unknown".to_owned())
 }
 
+/// Commits the current branch is ahead of / behind its upstream, or `None`
+/// when `HEAD` has no configured upstream (e.g. a detached checkout, or a
+/// branch that was never pushed/tracked) — in which case the caller omits
+/// the indicator entirely rather than showing a stand-in value.
+async fn ahead_behind(cx: &Cx) -> Option<(usize, usize)> {
+    crate::pages::with_repo(cx, |repo| {
+        Ok((|| {
+            let head = repo.head_ref().ok().flatten()?;
+            let upstream_name = head
+                .remote_tracking_ref_name(gix::remote::Direction::Fetch)?
+                .ok()?
+                .into_owned();
+            let upstream_id = repo.find_reference(&upstream_name).ok()?.into_fully_peeled_id().ok()?;
+            let head_id = head.into_fully_peeled_id().ok()?;
+            if head_id == upstream_id {
+                return Some((0, 0));
+            }
+            let ahead = repo
+                .rev_walk([head_id])
+                .with_hidden([upstream_id])
+                .all()
+                .ok()?
+                .count();
+            let behind = repo
+                .rev_walk([upstream_id])
+                .with_hidden([head_id])
+                .all()
+                .ok()?
+                .count();
+            Some((ahead, behind))
+        })())
+    })
+    .await
+    .unwrap_or(None)
+}
+
 /// The three-state theme cycle (non-negotiable #9): default follows
 /// `prefers-color-scheme` ("auto", no `data-theme` attribute rendered),
 /// and can be pinned explicitly. This app ships no client JavaScript, so
@@ -254,12 +290,17 @@ async fn rail(cx: &Cx, active: Option<Tab>) -> Result {
 async fn topbar(cx: &Cx, keyword: Option<&str>, from: &str) -> Result {
     let member = authenticated_member(cx).await;
     let branch = repo_branch(cx).await;
+    let ahead_behind = ahead_behind(cx).await;
     let mode = ThemeMode::from_cookie(cx);
     view! { cx =>
         <header class="topbar">
             <a class="repo-name" href="/inbox">"git forge"</a>
             <span class="branch-pill">(branch)</span>
-            <span class="ahead-behind" title="Ahead/behind against upstream">"↑– ↓–"</span>
+            if let Some((ahead, behind)) = ahead_behind {
+                <span class="ahead-behind" title="Ahead/behind against upstream">
+                    (format!("↑{ahead} ↓{behind}"))
+                </span>
+            }
             <form class="search-form" action="/search" method="post">
                 <label class="sr-only" for="shell-search">"Search"</label>
                 <input id="shell-search" name="keyword" value=(keyword.unwrap_or_default()) placeholder="Search, or ?predicate" type="search">

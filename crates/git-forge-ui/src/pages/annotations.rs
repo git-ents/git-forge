@@ -154,7 +154,7 @@ async fn annotation_nav(
             }
         </div>
         if filtered.is_empty() {
-            <p class="route-nav-note">"No annotations match this filter."</p>
+            <p class="route-nav-note">"No annotations match this filter. " <a href=(state_filter_href("all"))>"Show all"</a></p>
         } else {
             for row in filtered {
                 let row_class = if selected == Some(row.comment.id.as_str()) { "nav-row active" } else { "nav-row" };
@@ -209,7 +209,7 @@ async fn annotation_detail(cx: &Cx, row: &AnnotationRow) -> Result {
             } else if let Some(label) = subject_label {
                 <p class="muted">"Attached to " (label)</p>
             } else {
-                <p class="muted">"Free-floating discussion"</p>
+                <p class="muted">"Free-floating comment"</p>
             }
             if let Some(Binding::Position(anchor)) = comment.binding.as_ref() {
                 <dl class="facts">

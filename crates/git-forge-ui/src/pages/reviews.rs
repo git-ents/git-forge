@@ -180,7 +180,7 @@ async fn review_form(cx: &Cx, action: &str, form: &ReviewForm, error: Option<&st
             <form class="entity-form" action=(action) method="post">
                 <fieldset>
                     <legend>"Review request"</legend>
-                    <label for="review-body">"Summary <span class=\"muted\">(optional)</span>"</label>
+                    <label for="review-body">"Summary " <span class="muted">"(optional)"</span></label>
                     <textarea id="review-body" name="body" rows="9" placeholder="What would you like reviewers to focus on?">(form.body.as_str())</textarea>
                     <label for="review-target">"Target"</label>
                     <input id="review-target" name="target" value=(form.target.as_str()) placeholder="commit:abc123 or commit-range:base:tip" required="">
@@ -198,9 +198,9 @@ async fn review_form(cx: &Cx, action: &str, form: &ReviewForm, error: Option<&st
                             <option value="closed">"Closed"</option>
                         }
                     </select>
-                    <label for="review-reviewers">"Reviewers <span class=\"muted\">(comma-separated)</span>"</label>
+                    <label for="review-reviewers">"Reviewers " <span class="muted">"(comma-separated)"</span></label>
                     <input id="review-reviewers" name="reviewers" value=(form.reviewers.as_str()) placeholder="handle or member ID">
-                    <label for="review-requesters">"Requesters <span class=\"muted\">(comma-separated)</span>"</label>
+                    <label for="review-requesters">"Requesters " <span class="muted">"(comma-separated)"</span></label>
                     <input id="review-requesters" name="requesters" value=(form.requesters.as_str()) placeholder="handle or member ID">
                 </fieldset>
                 <div class="form-actions">
@@ -238,7 +238,7 @@ async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Re
         } else {
             for (review, comment_count, decision_count) in items {
                 let (kind_label, kind_class) = anchor_kind(&review.target);
-                let (status_label, status_class, edge_token) = if review.status == "open" { ("open", "ok", "ok") } else { ("closed", "neutral", "faint") };
+                let edge_token = if review.status == "open" { "ok" } else { "faint" };
                 let author = review.requesters.first().map(String::as_str).unwrap_or("unassigned");
                 let decisions_label = match decision_count {
                     0 => "no decisions".to_owned(),
@@ -250,10 +250,10 @@ async fn review_list(cx: &Cx, items: &[ReviewRow], selected: Option<&str>) -> Re
                 let edge_style = (!is_selected).then(|| format!("--nav-edge:var(--{edge_token})"));
                 <a class=(row_class) style=(edge_style.unwrap_or_default()) href=(format!("/reviews/{}", review.id))>
                     <div class="nav-row-top">
-                        <span class=(format!("anchor-kind {kind_class}"))>(kind_label)</span>
-                        <span class=(format!("nav-row-status {status_class}"))>(status_label)</span>
+                        <span class="nav-row-dot"></span>
+                        <span class="nav-row-title">"Review " (review.id.as_str())</span>
+                        <span class=(format!("anchor-kind {kind_class}")) style="margin-left:auto">(kind_label)</span>
                     </div>
-                    <span class="nav-row-title">"Review " (review.id.as_str())</span>
                     <span class="nav-row-sub">(author) " · " (decisions_label) " · " (*comment_count) " comments"</span>
                 </a>
             }
@@ -512,7 +512,7 @@ async fn review_detail(cx: &Cx) -> Result {
 
                         <h3 class="step-heading"><span class="step-badge">"2"</span>"Discussion"</h3>
                         <section class="comments">
-                            <div class="panel-heading"><div><span class="muted">(comment_rows.len()) " comments, scoped under (\"review\", " (review.id.as_str()) ")"</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            <div class="panel-heading"><div><span class="muted">(comment_rows.len()) " comments, scoped under (\"review\", " (review.id.as_str()) ")"</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"New comment"</a> }</div>
                             if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {
@@ -641,7 +641,7 @@ async fn review_decision_page(cx: &Cx) -> Result {
             <form class="entity-form" action=(format!("/reviews/{id}/decision")) method="post">
                 <fieldset>
                     <legend>"Decision"</legend>
-                    <label for="decision-message">"Message <span class=\"muted\">(optional)</span>"</label>
+                    <label for="decision-message">"Message " <span class="muted">"(optional)"</span></label>
                     <textarea id="decision-message" name="message" rows="7" placeholder="Explain your decision."></textarea>
                 </fieldset>
                 <div class="form-actions">
@@ -849,7 +849,7 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
         .trim()
         .to_owned();
     if author.is_empty() || body.is_empty() {
-        let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>"Your name and a comment are required."</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
+        let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>"Your name and a comment are required."</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
         return view! { shell(active: Some(Tab::Reviews), title: "Comment failed", keyword: None, child: content) };
     }
     if let Some(confirm) = confirm_step(
@@ -881,7 +881,7 @@ async fn review_comment(cx: &Cx, Form(input): Form<HashMap<String, String>>) -> 
             if let Some(error) = authorization_error(&error) {
                 return Err(error);
             }
-            let content = (view! { <div class="error-panel"><strong>"Comment could not be added"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
+            let content = (view! { <div class="error-panel"><strong>"Comment could not be saved"</strong><p>(error)</p><a href=(format!("/reviews/{id}"))>"Return to review"</a></div> })?;
             view! { shell(active: Some(Tab::Reviews), title: "Comment failed", keyword: None, child: content) }
         }
     }
