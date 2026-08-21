@@ -512,7 +512,7 @@ async fn review_detail(cx: &Cx) -> Result {
 
                         <h3 class="step-heading"><span class="step-badge">"2"</span>"Discussion"</h3>
                         <section class="comments">
-                            <div class="panel-heading"><div><span class="muted">(comment_rows.len()) " comments, scoped under (\"review\", " (review.id.as_str()) ")"</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            <div class="panel-heading"><div><span class="muted">(comment_rows.len()) " comments, scoped under (\"review\", " (review.id.as_str()) ")"</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"New comment"</a> }</div>
                             if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {

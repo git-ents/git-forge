@@ -1012,6 +1012,9 @@ button:hover {
     font-size: 0.9rem;
     line-height: 1.75;
 }
+.body-copy.rendered-file {
+    white-space: normal;
+}
 .tag-row {
     display: flex;
     flex-wrap: wrap;

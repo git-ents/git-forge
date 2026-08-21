@@ -349,7 +349,7 @@ async fn issue_detail(cx: &Cx) -> Result {
                             <dt>"Reporters"</dt><dd>(if issue.reporters.is_empty() { "None".to_owned() } else { issue.reporters.join(", ") })</dd>
                         </dl>
                         <section class="comments">
-                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comment_rows.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"Free-floating comment"</a> }</div>
+                            <div class="panel-heading"><div><h3>"Comments"</h3><span class="muted">(comment_rows.len())</span></div> if can_comment { <a class="button-link secondary" href="/comments/new">"New comment"</a> }</div>
                             if comment_rows.is_empty() {
                                 <p class="empty">"No comments yet. Start the conversation below."</p>
                             } else {

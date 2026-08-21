@@ -223,17 +223,109 @@ fn push_forge_refs(
     command
         .current_dir(work_dir)
         .args(["push", remote.as_str()]);
-    for reference in refs {
+    for reference in &refs {
         command.arg(format!("{reference}:{reference}"));
     }
     let output = command
         .output()
         .map_err(|error| gix_forge::Error::QueryRules(error.to_string()))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(gix_forge::Error::QueryRules(
+    if !output.status.success() {
+        return Err(gix_forge::Error::QueryRules(
             String::from_utf8_lossy(&output.stderr).into_owned(),
-        ))
+        ));
+    }
+
+    // `git push` only updates a local remote-tracking ref for refs that
+    // match the remote's configured fetch refspec (normally
+    // `refs/heads/*`), so `refs/forge/*` pushes never touch
+    // `refs/remotes/{remote}/forge/*` on their own. Without this, the
+    // "unpushed forge refs" count in the local strip would stay stuck at
+    // its pre-push value even though the push just succeeded. Mirror each
+    // pushed ref's new target into the matching tracking ref ourselves so
+    // the UI reflects reality immediately, instead of waiting on a fetch
+    // that may never happen.
+    for reference in &refs {
+        let Some(target) = repo
+            .find_reference(reference.as_str())
+            .ok()
+            .and_then(|r| r.into_fully_peeled_id().ok())
+        else {
+            continue;
+        };
+        let tracking_name = format!(
+            "refs/remotes/{remote}/{}",
+            reference.trim_start_matches("refs/")
+        );
+        let _ = repo.reference(
+            tracking_name,
+            target,
+            gix::refs::transaction::PreviousValue::Any,
+            "update tracking ref after forge push",
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_forge_refs;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .status()
+            .expect("git command runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// A `git push` of `refs/forge/x:refs/forge/x` never populates
+    /// `refs/remotes/{remote}/forge/x` on its own (that only happens for
+    /// refs matching the remote's fetch refspec, normally `refs/heads/*`).
+    /// `push_forge_refs` must therefore write that tracking ref itself so
+    /// the "unpushed forge refs" count in the UI reflects the push it just
+    /// performed, instead of staying stuck at its pre-push value forever.
+    #[test]
+    fn push_updates_local_tracking_ref() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let remote_dir = tmp.path().join("remote.git");
+        let work_dir = tmp.path().join("work");
+        std::fs::create_dir_all(&remote_dir).unwrap();
+        std::fs::create_dir_all(&work_dir).unwrap();
+        git(&remote_dir, &["init", "--bare", "-q"]);
+        git(&work_dir, &["init", "-q"]);
+        git(&work_dir, &["config", "user.email", "test@test.com"]);
+        git(&work_dir, &["config", "user.name", "test"]);
+        std::fs::write(work_dir.join("a.txt"), "hi").unwrap();
+        git(&work_dir, &["add", "a.txt"]);
+        git(&work_dir, &["commit", "-qm", "init"]);
+        git(
+            &work_dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.to_str().unwrap(),
+            ],
+        );
+        git(&work_dir, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+        git(&work_dir, &["update-ref", "refs/forge/meta/test1", "HEAD"]);
+
+        let repo = gix::open(&work_dir).expect("open work repo");
+        push_forge_refs(&repo, &work_dir).expect("push succeeds");
+
+        let tracking = repo
+            .find_reference("refs/remotes/origin/forge/meta/test1")
+            .expect("tracking ref exists after push")
+            .into_fully_peeled_id()
+            .expect("tracking ref resolves");
+        let head = repo
+            .find_reference("refs/forge/meta/test1")
+            .expect("local ref exists")
+            .into_fully_peeled_id()
+            .expect("local ref resolves");
+        assert_eq!(tracking, head);
     }
 }
