@@ -113,10 +113,53 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --workspace --all-features
 
+  isolation:
+    name: Sibling isolation
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+      # The CLI and the UI are siblings. Neither knows the other exists: the CLI
+      # locates the sibling `git-forge-ui` executable on disk and execs into it
+      # (docs/design-git-forge-ui.adoc). Sharing this workspace changes nothing,
+      # so the resolved dependency graph has to say so, in both directions and
+      # transitively.
+      # The model library is held to the same isolation as the frontends it
+      # serves: `gix-forge` never reaches a frontend's vocabulary either, and
+      # `test-support` stays confined to dev-dependencies.
+      - name: No git-forge / git-forge-ui dependency edge
+        run: |
+          set -uo pipefail
+          failed=0
+          for pair in "git-forge-ui:git-forge" "git-forge:git-forge-ui" "gix-forge:git-forge" "gix-forge:git-forge-ui"; do
+            from="${pair%%:*}"
+            to="${pair##*:}"
+            if cargo tree --all-features --edges normal,build,dev --prefix none \
+                 --package "$from" | awk '{print $1}' | grep -qFx "$to"; then
+              echo "::error::$from depends on $to: the CLI, the UI, and the model must never know each other exists"
+              failed=1
+            else
+              echo "ok: $from does not reach $to"
+            fi
+          done
+          for crate in git-forge git-forge-ui gix-forge; do
+            if cargo tree --all-features --edges normal,build --prefix none \
+                 --package "$crate" | awk '{print $1}' | grep -qFx "test-support"; then
+              echo "::error::$crate reaches test-support outside dev-dependencies: test-support must stay dev-only"
+              failed=1
+            else
+              echo "ok: $crate does not reach test-support outside dev-dependencies"
+            fi
+          done
+          exit $failed
+
   ci:
     name: CI
     if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)) }}
-    needs: [linux, musllinux, windows, macos]
+    needs: [linux, musllinux, windows, macos, isolation]
     runs-on: ubuntu-latest
     steps:
       - run: |
