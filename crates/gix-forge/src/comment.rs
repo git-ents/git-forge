@@ -296,6 +296,9 @@ impl Comment {
             edit: None,
         };
         let commit = Self::kind(&store).write(&stored).anonymous_under(&group)?;
+        if let Some(binding) = &stored.binding {
+            publish_anchor(repo, binding)?;
+        }
         Ok(gix_store::entity_name_under(&group, commit).to_string())
     }
 
@@ -308,16 +311,18 @@ impl Comment {
         lines: Option<LineRange>,
         body: &str,
     ) -> Result<String, Error> {
-        let anchor = capture(repo, revision, path, lines)?;
-        Self {
+        let binding = Binding::Position(capture(repo, revision, path, lines)?);
+        let name = Self {
             id: String::new(),
             subject: None,
             author: String::new(),
             body: body.to_owned(),
-            binding: Some(Binding::Position(anchor)),
+            binding: Some(binding.clone()),
             edit: None,
         }
-        .create_in_repo_as(repo, authorization)
+        .create_in_repo_as(repo, authorization)?;
+        publish_anchor(repo, &binding)?;
+        Ok(name)
     }
 
     /// Every comment in the repository, ascending by id.
@@ -341,6 +346,36 @@ impl Comment {
 #[derive(Debug, Facet)]
 struct ObsoleteAnnotation {
     comment_id: String,
+}
+
+/// The anchor-registry namespace `git-query`'s `anchor/1` builtin resolves
+/// `bind/5` through: one ref per anchor, pointing at the serialized
+/// [`Binding`] tree [`Binding::serialize_into`] returns.
+const ANCHOR_REF_PREFIX: &str = "refs/anchors/";
+
+/// Publish an anchored comment's binding into the anchor registry. Without
+/// this ref, query's `bind/5` lattice has no anchor to project and every
+/// resolution reports [`AnnotationState::Orphaned`], no matter how well the
+/// oracle chain would otherwise track the anchored region.
+///
+/// Idempotent: republishing an unchanged binding rewrites the same ref with
+/// the same target.
+///
+/// # Errors
+/// See [`Error`].
+pub fn publish_anchor(repo: &Repository, binding: &Binding) -> Result<(), Error> {
+    let Binding::Position(_) = binding else {
+        return Ok(());
+    };
+    let id: ObjectId = binding.anchor_id()?.into();
+    let handle = binding.serialize_into(repo)?;
+    repo.reference(
+        format!("{ANCHOR_REF_PREFIX}{id}"),
+        ObjectId::from(handle),
+        gix::refs::transaction::PreviousValue::Any,
+        "forge: publish comment anchor",
+    )?;
+    Ok(())
 }
 
 fn parse_location(value: &str) -> Result<(String, (u64, u64)), Error> {
@@ -646,10 +681,126 @@ mod tests {
 
         assert_eq!(a.get_comments(&repo).expect("comments a").len(), 1);
         assert_eq!(b.get_comments(&repo).expect("comments b").len(), 1);
+
         assert_eq!(
             Comment::list(&repo).expect("list all comments").len(),
             2,
             "the flat top-level listing still sees every comment"
         );
+    }
+
+    #[test]
+    fn anchored_comments_publish_their_anchor_ref() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::commit_file(dir.path(), "file.txt", "one\ntwo\nthree\n", "add file");
+        let repo = gix::open(dir.path()).expect("open repo");
+
+        let issue = Issue {
+            id: "issue-3".to_string(),
+            status: "open".to_string(),
+            title: "t".to_string(),
+            body: "b".to_string(),
+            labels: vec![],
+            assignees: vec![],
+            reporters: vec![],
+            edit: None,
+        };
+        let subject_comment = issue
+            .add_anchored_comment_as(
+                &repo,
+                &auth(),
+                "file.txt",
+                Some(LineRange { start: 2, end: 2 }),
+                "on line two",
+            )
+            .expect("add anchored comment");
+        let free_floating = Comment::create_anchored_in_repo_as(
+            &repo,
+            &auth(),
+            "HEAD",
+            "file.txt",
+            Some(LineRange { start: 1, end: 1 }),
+            "on line one",
+        )
+        .expect("create free-floating anchored comment");
+
+        for id in [subject_comment, free_floating] {
+            let comment = Comment::load_from_repo(&repo, &id)
+                .expect("load comment")
+                .expect("comment exists");
+            let Some(Binding::Position(anchor)) = &comment.binding else {
+                panic!("expected a Position binding on {id}");
+            };
+            let name = format!(
+                "refs/anchors/{}",
+                gix::ObjectId::from(anchor.id().expect("anchor id")).to_hex()
+            );
+            let target = repo
+                .find_reference(&name)
+                .unwrap_or_else(|error| panic!("anchor ref {name} not published: {error}"))
+                .target()
+                .try_id()
+                .expect("anchor ref points directly at the binding tree")
+                .to_owned();
+            let republished = Binding::deserialize(&gix_anchor::CaptureHandle::from(target), &repo)
+                .expect("published tree decodes as a binding");
+            assert_eq!(
+                republished.anchor_id().expect("anchor id").to_string(),
+                anchor.id().expect("anchor id").to_string(),
+                "the published binding is the comment's own"
+            );
+        }
+    }
+
+    #[test]
+    fn a_published_anchor_resolves_through_the_oracle_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        test_support::commit_file(dir.path(), "file.txt", "one\ntwo\nthree\n", "add file");
+        let repo = gix::open(dir.path()).expect("open repo");
+
+        let issue = Issue {
+            id: "issue-4".to_string(),
+            status: "open".to_string(),
+            title: "t".to_string(),
+            body: "b".to_string(),
+            labels: vec![],
+            assignees: vec![],
+            reporters: vec![],
+            edit: None,
+        };
+        let id = issue
+            .add_anchored_comment_as(
+                &repo,
+                &auth(),
+                "file.txt",
+                Some(LineRange { start: 2, end: 2 }),
+                "on line two",
+            )
+            .expect("add anchored comment");
+        let comment = Comment::load_from_repo(&repo, &id)
+            .expect("load comment")
+            .expect("comment exists");
+
+        // Before this fix the comment resolved as Orphaned at any revision
+        // past its genesis: nothing ever published the anchor ref the bind
+        // lattice resolves through.
+        test_support::commit_file(dir.path(), "file.txt", "one\ntwo\nthree\nfour\n", "append");
+        let revision = repo.head_id().expect("head revision").detach();
+        let state = Comment::annotation_state(&repo, &comment, revision)
+            .expect("resolve state")
+            .expect("anchored comment has a state");
+        assert_eq!(state, AnnotationState::Drifted);
+
+        let binding = Comment::annotation_binding(&repo, &comment, revision)
+            .expect("resolve binding")
+            .expect("anchored comment has a binding");
+        assert_eq!(binding.oracle, "diff_trace");
+        assert_eq!(binding.path, "file.txt");
+        let anchor = match &comment.binding {
+            Some(Binding::Position(anchor)) => anchor,
+            _ => panic!("expected a Position binding"),
+        };
+        assert_eq!(binding.span.0, anchor.identity.span.start);
+        assert_eq!(binding.span.1, anchor.identity.span.end);
     }
 }

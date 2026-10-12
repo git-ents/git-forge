@@ -27,13 +27,15 @@ use gix::{ObjectId, Repository};
 use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
-pub use comment::{AnnotationBinding, AnnotationState, Comment, Commentable, binding_genesis};
+pub use comment::{
+    AnnotationBinding, AnnotationState, Comment, Commentable, binding_genesis, publish_anchor,
+};
 pub use decision::{ReviewDecision, ReviewDecisionClaim, ReviewVerdict};
 pub use entity::{Entity, EntityOps};
 pub use error::Error;
 pub use facts::ForgeFacts;
 pub use gate::{GATE_NAMES, GateResult};
-pub use gix_anchor::{Binding, LineRange};
+pub use gix_anchor::{Binding, LineRange, capture};
 pub use gix_query::Value as QueryValue;
 pub use issue::Issue;
 pub use member::Member;

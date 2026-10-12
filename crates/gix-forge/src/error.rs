@@ -9,6 +9,9 @@ pub enum Error {
     /// An id is not a valid Git ref path.
     #[error(transparent)]
     InvalidId(#[from] gix_store::InvalidRefName),
+    /// Failed to edit a repository reference (publishing an anchor ref).
+    #[error(transparent)]
+    RefEdit(#[from] gix::reference::edit::Error),
     /// Failed at the `gix-query` layer.
     #[error(transparent)]
     Query(#[from] gix_query::QueryError),
