@@ -121,19 +121,18 @@ impl Review {
     /// No object is rewritten and the target OIDs are copied verbatim.
     pub fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Self>, Error> {
         let name = gix_store::RefPath::new(id)?;
-        match Self::kind(store).get(&name) {
-            Ok(Some(stored)) => Ok(Some(Self::from_stored(id.to_owned(), stored))),
-            Ok(None) => Ok(None),
+        match Self::kind(store).read(&name) {
+            Ok(state) => Ok(state
+                .value()
+                .map(|stored| Self::from_stored(id.to_owned(), stored))),
             Err(current) => {
                 let legacy = store.kind::<LegacyStoredReview>(
                     RefSegment::new(Self::KIND).expect("built-in ref segment is valid"),
                 );
-                match legacy.get(&name) {
-                    Ok(Some(stored)) => Ok(Some(Self::from_stored(
-                        id.to_owned(),
-                        StoredReview::from(stored),
-                    ))),
-                    Ok(None) => Ok(None),
+                match legacy.read(&name) {
+                    Ok(state) => Ok(state.value().map(|stored| {
+                        Self::from_stored(id.to_owned(), StoredReview::from(stored))
+                    })),
                     Err(_) => Err(current.into()),
                 }
             }
@@ -823,8 +822,9 @@ mod tests {
 
         let extra_alias = gix_store::RefPath::new("second-legacy-review-id").expect("second alias");
         let commit = Review::kind(&store)
-            .get_entry(&gix_store::RefPath::new(&canonical).expect("canonical path"))
+            .read(gix_store::RefPath::new(&canonical).expect("canonical path"))
             .expect("read canonical entry")
+            .present()
             .expect("canonical entry")
             .commit;
         store
@@ -880,8 +880,9 @@ mod tests {
         let store = open_store(&repo);
         let canonical_path = gix_store::RefPath::new(&canonical).expect("canonical path");
         let commit = Review::kind(&store)
-            .get_entry(&canonical_path)
+            .read(&canonical_path)
             .expect("read canonical ref")
+            .present()
             .expect("canonical ref exists")
             .commit;
         store
@@ -1048,6 +1049,7 @@ mod tests {
         store
             .get_tree(root)
             .expect("root tree")
+            .expect("root tree is present")
             .into_iter()
             .find(|entry| entry.filename == name)
             .expect("tree entry")
@@ -1074,6 +1076,7 @@ mod tests {
         let blob_entry = blob_store
             .get_tree(&blob_item)
             .expect("blob item tree")
+            .expect("blob item tree is present")
             .into_iter()
             .find(|entry| entry.filename == "oid")
             .expect("blob oid entry");
@@ -1094,6 +1097,7 @@ mod tests {
         let tree_entry = tree_store
             .get_tree(&tree_item)
             .expect("tree item tree")
+            .expect("tree item tree is present")
             .into_iter()
             .find(|entry| entry.filename == "oid")
             .expect("tree oid entry");
@@ -1120,7 +1124,10 @@ mod tests {
         .expect("serialize tree range review");
         let target = child_tree(&store, &root, "target");
         let range = child_tree(&store, &target, "TreeRange");
-        let entries = store.get_tree(&range).expect("tree range tree");
+        let entries = store
+            .get_tree(&range)
+            .expect("tree range tree")
+            .expect("tree range tree is present");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].filename, "base");
         assert_eq!(entries[0].mode.kind(), EntryKind::Tree);
@@ -1143,7 +1150,10 @@ mod tests {
         .expect("serialize commit review");
         let target = child_tree(&store, &root, "target");
         let commits = child_tree(&store, &target, "Commits");
-        let entry = &store.get_tree(&commits).expect("commit collection tree")[0];
+        let entry = &store
+            .get_tree(&commits)
+            .expect("commit collection tree")
+            .expect("commit collection tree is present")[0];
         assert_eq!(entry.mode.kind(), EntryKind::Tree);
         assert_ne!(entry.oid, commit);
 

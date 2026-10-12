@@ -209,8 +209,9 @@ mod tests {
         );
 
         Issue::kind(&store)
-            .get_migrated(&gix_store::RefPath::new(&alias).expect("alias path"))
-            .expect("current-schema migrated read")
+            .read(gix_store::RefPath::new(&alias).expect("alias path"))
+            .expect("current-schema read of the legacy document")
+            .value()
             .expect("migrated alias exists");
         let loaded = Issue::load(&store, &alias)
             .expect("load alias")
@@ -263,8 +264,9 @@ mod tests {
         // logical row rather than one row per alias.
         let extra_alias = gix_store::RefPath::new("second-legacy-alias").expect("second alias");
         let commit = Issue::kind(&store)
-            .get_entry(&gix_store::RefPath::new(&canonical).expect("canonical path"))
+            .read(gix_store::RefPath::new(&canonical).expect("canonical path"))
             .expect("read canonical entry")
+            .present()
             .expect("canonical entry")
             .commit;
 
@@ -341,8 +343,9 @@ mod tests {
         let store = open_store(&repo);
         let canonical_path = gix_store::RefPath::new(&canonical).expect("canonical path");
         let commit = Issue::kind(&store)
-            .get_entry(&canonical_path)
+            .read(&canonical_path)
             .expect("read canonical ref")
+            .present()
             .expect("canonical ref exists")
             .commit;
 
@@ -403,8 +406,9 @@ mod tests {
             .expect("publish second first-issue commit");
         let caller_alias = gix_store::RefPath::new("caller-alias").expect("caller alias");
         let first_commit = Issue::kind(&store)
-            .get_entry(&first_path)
+            .read(&first_path)
             .expect("read first")
+            .present()
             .expect("first ref exists")
             .commit;
         store

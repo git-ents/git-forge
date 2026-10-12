@@ -8,7 +8,7 @@ gix.workspace = true
 gix-anchor.workspace = true
 gix-attest.workspace = true
 gix-store.workspace = true
-facet-git-tree = { git = "https://github.com/git-ents/git-store.git" }
+facet-git-tree = "0.1.0-alpha.1"
 gix-query.workspace = true
 facet.workspace = true
 thiserror.workspace = true

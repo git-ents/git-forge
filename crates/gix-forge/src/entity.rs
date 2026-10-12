@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use facet::Facet;
 use gix::{ObjectId, Repository};
 use gix_store::{
-    ApplyError, GixRefStore, Kind, NamedEntries, RefEdit, RefName, RefPath, RefSegment, RefStore,
-    RepoStore, Typed,
+    ApplyError, EntityState, GixRefStore, Kind, NamedEntries, RefEdit, RefName, RefPath,
+    RefSegment, RefStore, RepoStore, Typed,
 };
 
 use crate::{Authorization, Capability, Error, Ownership, Principal, open_store};
@@ -178,7 +178,8 @@ pub trait EntityOps: Entity {
     fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Self>, Error> {
         let name = RefPath::new(id)?;
         Ok(Self::kind(store)
-            .get(&name)?
+            .read(&name)?
+            .value()
             .map(|stored| Self::from_stored(id.to_owned(), stored)))
     }
 
@@ -218,8 +219,14 @@ pub trait EntityOps: Entity {
         entries
             .into_iter()
             .map(|(name, commit)| {
-                kind.get_entry_at(commit)
-                    .map(|entry| Self::from_stored(name.to_string(), entry.value))
+                kind.read(commit)
+                    .and_then(|state| match state {
+                        EntityState::Present(entry) => {
+                            Ok(Self::from_stored(name.to_string(), entry.value))
+                        }
+                        EntityState::Deleted(_) => Err(gix_store::Error::Deleted { commit }),
+                        EntityState::Absent => unreachable!("a commit is always present"),
+                    })
                     .map_err(Error::from)
             })
             .collect()
@@ -233,8 +240,14 @@ pub trait EntityOps: Entity {
         entries
             .into_iter()
             .map(|(name, commit)| {
-                kind.get_entry_at(commit)
-                    .map(|entry| Self::from_stored(name.to_string(), entry.value))
+                kind.read(commit)
+                    .and_then(|state| match state {
+                        EntityState::Present(entry) => {
+                            Ok(Self::from_stored(name.to_string(), entry.value))
+                        }
+                        EntityState::Deleted(_) => Err(gix_store::Error::Deleted { commit }),
+                        EntityState::Absent => unreachable!("a commit is always present"),
+                    })
                     .map_err(Error::from)
             })
             .collect()
