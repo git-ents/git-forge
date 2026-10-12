@@ -1118,10 +1118,28 @@ fn anchored_comment_add_resolves_through_state() {
     let free_id = created_id(&out);
 
     // At its genesis revision the anchor is simply Bound.
-    let (out, err, ok) = run(path, &["comment", "state", comment_id.as_str()]);
-    assert!(ok, "comment state at genesis failed: {err}");
+    let (out, err, ok) = run(path, &["comment", "state", &display_id(&comment_id)]);
+    assert!(ok, "comment state by displayed leaf id failed: {err}");
     assert!(out.contains("Bound"), "comment state output: {out}");
-    assert!(out.contains("file.txt"), "comment state output: {out}");
+    assert!(
+        out.contains("file.txt:L2-L2"),
+        "comment state output: {out}"
+    );
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "state",
+            &display_id(&comment_id),
+            "--revision",
+            "HEAD",
+        ],
+    );
+    assert!(ok, "comment state by displayed leaf id failed: {err}");
+    assert!(
+        out.contains("file.txt:L2-L2"),
+        "comment state output: {out}"
+    );
 
     // After the file moves on, the oracle chain tracks the region.
     test_support::commit_file(path, "file.txt", "one\ntwo\nthree\nfour\n", "append");

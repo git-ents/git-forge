@@ -1587,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "gix-anchor"
 version = "0.0.0"
-source = "git+https://github.com/git-ents/git-anchor.git#1d6ce266eb856a45103ce7192b89e2b140ee88b1"
+source = "git+https://github.com/git-ents/git-anchor.git#fbb5ef8feb2fbad75c07629d2d0e7013cf44bee8"
 dependencies = [
  "facet",
  "facet-git-tree",
@@ -1600,7 +1600,7 @@ dependencies = [
 [[package]]
 name = "gix-attest"
 version = "0.0.0"
-source = "git+https://github.com/git-ents/git-anchor.git#1d6ce266eb856a45103ce7192b89e2b140ee88b1"
+source = "git+https://github.com/git-ents/git-anchor.git#fbb5ef8feb2fbad75c07629d2d0e7013cf44bee8"
 dependencies = [
  "facet",
  "facet-git-tree",

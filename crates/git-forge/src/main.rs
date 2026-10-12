@@ -852,6 +852,42 @@ fn parse_line_range(value: &str) -> Result<LineRange> {
     Ok(LineRange { start, end })
 }
 
+fn line_range_at(
+    repo: &gix::Repository,
+    revision: gix::ObjectId,
+    path: &str,
+    span: (u64, u64),
+) -> Result<Option<(u64, u64)>> {
+    if span.0 >= span.1 {
+        return Ok(None);
+    }
+    let commit = repo
+        .find_object(revision)?
+        .peel_to_kind(gix::object::Kind::Commit)?
+        .try_into_commit()?;
+    let tree = commit.tree()?;
+    let Some(entry) = tree.lookup_entry_by_path(path)? else {
+        return Ok(None);
+    };
+    if !entry.mode().is_blob() {
+        return Ok(None);
+    }
+    let bytes = repo.find_blob(entry.object_id())?.take_data();
+    let (Ok(start), Ok(end)) = (usize::try_from(span.0), usize::try_from(span.1)) else {
+        return Ok(None);
+    };
+    if end > bytes.len() || start >= end {
+        return Ok(None);
+    }
+    let start_line = bytes[..start].iter().filter(|&&byte| byte == b'\n').count() + 1;
+    let end_line = bytes[..end].iter().filter(|&&byte| byte == b'\n').count()
+        + usize::from(bytes[end - 1] != b'\n');
+    Ok(Some((
+        u64::try_from(start_line).unwrap_or(u64::MAX),
+        u64::try_from(end_line.max(1)).unwrap_or(u64::MAX),
+    )))
+}
+
 fn print_comment_state(
     repo: &gix::Repository,
     comment: &Comment,
@@ -862,12 +898,14 @@ fn print_comment_state(
         Some(state) => {
             let binding = Comment::annotation_binding(repo, comment, revision)?
                 .expect("a state implies a binding");
+            let location = match line_range_at(repo, revision, &binding.path, binding.span)? {
+                Some((start, end)) => format!("{}:L{start}-L{end}", binding.path),
+                None => format!("{}:{}-{}", binding.path, binding.span.0, binding.span.1),
+            };
             println!(
-                "{} {}:{}-{} oracle={} confidence={}",
+                "{} {} oracle={} confidence={}",
                 format!("{state:?}").bold(),
-                binding.path,
-                binding.span.0,
-                binding.span.1,
+                location,
                 binding.oracle,
                 binding.confidence
             );
