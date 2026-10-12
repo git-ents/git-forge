@@ -1482,7 +1482,14 @@ fn resolve_show_id(kind: &str, input: &str, ids: &[String]) -> Result<Option<Str
         return Ok(Some(input.to_owned()));
     }
 
-    let matches: Vec<&String> = ids.iter().filter(|id| id.starts_with(input)).collect();
+    // Entities may be stored under nested paths (a comment lives at
+    // `issue/<subject>/<leaf>`) while listings display only the leaf
+    // segment (`#<leaf8>`); accept leaf-segment prefixes so what the CLI
+    // shows is also what it accepts.
+    let matches: Vec<&String> = ids
+        .iter()
+        .filter(|id| id.starts_with(input) || leaf_segment(id).starts_with(input))
+        .collect();
     match matches.as_slice() {
         [] => Ok(None),
         [only] => Ok(Some((**only).clone())),
@@ -1505,8 +1512,14 @@ fn emphasize_min_unique_prefix(id: &str, ids: &[String]) -> String {
 }
 
 fn shorten_entity_id(id: &str) -> &str {
-    let id = id.rsplit('/').next().unwrap_or(id);
+    let id = leaf_segment(id);
     id.get(..8).unwrap_or(id)
+}
+
+/// The last `/`-segment of an entity's full stored name -- the half the CLI
+/// displays as `#<first-8>`.
+fn leaf_segment(id: &str) -> &str {
+    id.rsplit('/').next().unwrap_or(id)
 }
 
 fn display_entity_id(id: &str) -> String {

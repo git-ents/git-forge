@@ -1020,6 +1020,59 @@ fn add_issue(path: &Path, body: &str) -> String {
 }
 
 #[test]
+fn comment_show_resolves_the_displayed_leaf_id() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+    let issue_id = add_issue(path, "needs a comment");
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "add",
+            "--on",
+            "issue",
+            "--subject",
+            issue_id.as_str(),
+            "--body",
+            "shown by leaf id",
+        ],
+    );
+    assert!(ok, "comment add failed: {err}");
+    let comment_id = created_id(&out);
+
+    // `comment ls` displays the leaf segment (`#<leaf8>`), nested mid-path
+    // in the stored name; showing by exactly that display id must work.
+    let (out, err, ok) = run(path, &["comment", "show", &display_id(&comment_id)]);
+    assert!(ok, "comment show by leaf id failed: {err}");
+    assert!(
+        out.contains("shown by leaf id"),
+        "comment show output: {out}"
+    );
+
+    let (_, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "edit",
+            &display_id(&comment_id),
+            "--body",
+            "edited by leaf id",
+        ],
+    );
+    assert!(ok, "comment edit by leaf id failed: {err}");
+
+    let (out, err, ok) = run(path, &["comment", "show", &display_id(&comment_id)]);
+    assert!(ok, "comment show after leaf edit failed: {err}");
+    assert!(
+        out.contains("edited by leaf id"),
+        "comment show output: {out}"
+    );
+}
+
+#[test]
 fn anchored_comment_add_resolves_through_state() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
