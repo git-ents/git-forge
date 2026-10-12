@@ -1020,6 +1020,75 @@ fn add_issue(path: &Path, body: &str) -> String {
 }
 
 #[test]
+fn anchored_comment_add_resolves_through_state() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    let path = dir.path();
+    create_origin_commit(path);
+    test_support::commit_file(path, "file.txt", "one\ntwo\nthree\n", "add file");
+    let issue_id = add_issue(path, "needs an anchor");
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "add",
+            "--on",
+            "issue",
+            "--subject",
+            issue_id.as_str(),
+            "--path",
+            "file.txt",
+            "-L",
+            "2",
+            "--body",
+            "on line two",
+        ],
+    );
+    assert!(ok, "anchored subject comment add failed: {err}");
+    let comment_id = created_id(&out);
+
+    let (out, err, ok) = run(
+        path,
+        &[
+            "comment",
+            "add",
+            "--path",
+            "file.txt",
+            "-L",
+            "1,2",
+            "--body",
+            "lines one and two",
+        ],
+    );
+    assert!(ok, "free-floating anchored comment add failed: {err}");
+    let free_id = created_id(&out);
+
+    // At its genesis revision the anchor is simply Bound.
+    let (out, err, ok) = run(path, &["comment", "state", comment_id.as_str()]);
+    assert!(ok, "comment state at genesis failed: {err}");
+    assert!(out.contains("Bound"), "comment state output: {out}");
+    assert!(out.contains("file.txt"), "comment state output: {out}");
+
+    // After the file moves on, the oracle chain tracks the region.
+    test_support::commit_file(path, "file.txt", "one\ntwo\nthree\nfour\n", "append");
+    let (out, err, ok) = run(path, &["comment", "state", comment_id.as_str()]);
+    assert!(ok, "comment state after append failed: {err}");
+    assert!(out.contains("Drifted"), "comment state output: {out}");
+    assert!(out.contains("diff_trace"), "comment state output: {out}");
+    assert!(
+        out.contains("confidence=10000"),
+        "comment state output: {out}"
+    );
+
+    // The free-floating comment resolves through the same chain, and an
+    // explicit --revision can look back at its genesis.
+    let (out, err, ok) = run(path, &["comment", "state", free_id.as_str()]);
+    assert!(ok, "free-floating comment state failed: {err}");
+    assert!(out.contains("Drifted"), "comment state output: {out}");
+}
+
+#[test]
 fn comment_add_without_args_requires_fields_without_terminal() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());

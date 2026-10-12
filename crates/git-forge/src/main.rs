@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 use acdc_converters_core::{Converter as _, Diagnostics, Options as ConvertOptions, WarningSource};
 use acdc_converters_terminal::Processor as TerminalProcessor;
 use acdc_parser::{Options as ParseOptions, parse as parse_asciidoc};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
@@ -14,8 +14,8 @@ use dialoguer::{
     theme::ColorfulTheme,
 };
 use gix_forge::{
-    Authorization, Comment, Entity, EntityOps, HitKind, Issue, Member, Principal, QueryValue,
-    Review, ReviewDecision, ReviewTarget, Status,
+    Authorization, Binding, Comment, Entity, EntityOps, HitKind, Issue, LineRange, Member,
+    Principal, QueryValue, Review, ReviewDecision, ReviewTarget, Status, capture,
 };
 use owo_colors::OwoColorize;
 
@@ -217,6 +217,14 @@ enum CommentCommand {
         id: String,
     },
     Search(CommentSearchArgs),
+    /// Resolve an anchored comment against a revision through the real
+    /// anchor-oracle chain and query's `bind/5` lattice.
+    State {
+        id: String,
+        /// The revision to resolve against; defaults to `HEAD`.
+        #[arg(long, value_name = "REV")]
+        revision: Option<String>,
+    },
     Query(QueryArgs),
 }
 
@@ -230,7 +238,7 @@ struct CommentSearchArgs {
 
 #[derive(Args)]
 struct CommentAddArgs {
-    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["on", "subject", "author", "body"])]
+    #[arg(short = 'i', long = "interactive", conflicts_with_all = ["on", "subject", "author", "body", "path", "lines", "revision"])]
     interactive: bool,
     #[arg(long = "on")]
     on: Option<String>,
@@ -240,6 +248,24 @@ struct CommentAddArgs {
     author: Option<String>,
     #[arg(long)]
     body: Option<String>,
+    /// Anchor the comment to this path (whole file, or `--lines` within it),
+    /// captured against `--revision`. Omits `--on`/`--subject` to attach to
+    /// no entity.
+    #[arg(long, value_name = "PATH", requires = "body")]
+    path: Option<String>,
+    /// A 1-based inclusive line range within `--path`: `START,END`,
+    /// `START,+COUNT`, or a single line number.
+    #[arg(
+        short = 'L',
+        long = "lines",
+        value_name = "START,END",
+        requires = "path"
+    )]
+    lines: Option<String>,
+    /// The revision `--path`/`--lines` are captured against; defaults to
+    /// `HEAD`.
+    #[arg(long, value_name = "REV")]
+    revision: Option<String>,
 }
 
 #[derive(Args)]
@@ -621,35 +647,66 @@ fn run_comment(
 ) -> Result<()> {
     match command {
         CommentCommand::Add(args) => {
-            let interactive = resolve_interactive(
-                args.interactive,
-                args.on.is_none()
-                    && args.subject.is_none()
-                    && args.author.is_none()
-                    && args.body.is_none(),
-            )?;
-            let (kind, subject_id, body) = if interactive {
-                prompt_comment_fields(repo)?
+            let lines = args.lines.as_deref().map(parse_line_range).transpose()?;
+            if let Some(path) = &args.path {
+                let body = args.body.context("--body is required")?;
+                let revision = args.revision.as_deref().unwrap_or("HEAD");
+                let id = match (&args.on, &args.subject) {
+                    (Some(kind), Some(subject_input)) => {
+                        let subject_id = resolve_comment_subject_id(repo, kind, subject_input)?
+                            .with_context(|| format!("no {kind} {subject_input}"))?;
+                        let anchor = capture(repo, revision, path, lines)?;
+                        Comment::create_under_as(
+                            repo,
+                            authorization,
+                            kind,
+                            &subject_id,
+                            &body,
+                            Some(Binding::Position(anchor)),
+                        )?
+                    }
+                    (None, None) => Comment::create_anchored_in_repo_as(
+                        repo,
+                        authorization,
+                        revision,
+                        path,
+                        lines,
+                        &body,
+                    )?,
+                    _ => bail!("--on and --subject are required together"),
+                };
+                println!("{id}");
             } else {
-                let kind = args
-                    .on
-                    .as_deref()
-                    .context("--on is required unless running interactively")?;
-                let subject_input = args
-                    .subject
-                    .context("--subject is required unless running interactively")?;
-                let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
-                    .with_context(|| format!("no {kind} {subject_input}"))?;
-                (
-                    kind.to_owned(),
-                    subject_id,
-                    args.body
-                        .context("--body is required unless running interactively")?,
-                )
-            };
-            let id =
-                Comment::create_under_as(repo, authorization, &kind, &subject_id, &body, None)?;
-            println!("{id}");
+                let interactive = resolve_interactive(
+                    args.interactive,
+                    args.on.is_none()
+                        && args.subject.is_none()
+                        && args.author.is_none()
+                        && args.body.is_none(),
+                )?;
+                let (kind, subject_id, body) = if interactive {
+                    prompt_comment_fields(repo)?
+                } else {
+                    let kind = args
+                        .on
+                        .as_deref()
+                        .context("--on is required unless running interactively")?;
+                    let subject_input = args
+                        .subject
+                        .context("--subject is required unless running interactively")?;
+                    let subject_id = resolve_comment_subject_id(repo, kind, &subject_input)?
+                        .with_context(|| format!("no {kind} {subject_input}"))?;
+                    (
+                        kind.to_owned(),
+                        subject_id,
+                        args.body
+                            .context("--body is required unless running interactively")?,
+                    )
+                };
+                let id =
+                    Comment::create_under_as(repo, authorization, &kind, &subject_id, &body, None)?;
+                println!("{id}");
+            }
         }
         CommentCommand::Edit(args) => {
             let id = resolve_comment_show_id(repo, &args.id)?
@@ -694,6 +751,14 @@ fn run_comment(
             let ids =
                 gix_forge::search_comment(repo, args.author.as_deref(), args.keyword.as_deref())?;
             print_comment_list(repo, &ids)?;
+        }
+        CommentCommand::State { id, revision } => {
+            let id =
+                resolve_comment_show_id(repo, &id)?.with_context(|| format!("no comment {id}"))?;
+            let comment =
+                Comment::load_from_repo(repo, &id)?.with_context(|| format!("no comment {id}"))?;
+            let revision = resolve_revision(repo, revision.as_deref().unwrap_or("HEAD"))?;
+            print_comment_state(repo, &comment, revision)?;
         }
         CommentCommand::Query(args) => run_query_args(repo, args)?,
     }
@@ -745,6 +810,70 @@ fn resolve_comment_subject_id(
 
 fn resolve_comment_show_id(repo: &gix::Repository, id: &str) -> Result<Option<String>> {
     resolve_show_id("comment", id, &Comment::list(repo)?)
+}
+
+fn resolve_revision(repo: &gix::Repository, rev: &str) -> Result<gix::ObjectId> {
+    Ok(repo.rev_parse_single(rev.as_bytes())?.detach())
+}
+
+/// Parse a 1-based inclusive line range: `START,END`, `START,+COUNT`, or a
+/// single line number.
+fn parse_line_range(value: &str) -> Result<LineRange> {
+    let (start, end) = match value.split_once([',', ':']) {
+        Some((start, rest)) => {
+            let start: u64 = start
+                .parse()
+                .map_err(|_| anyhow!("invalid line start `{start}`"))?;
+            let end = match rest.strip_prefix('+') {
+                Some(count) => {
+                    let count: u64 = count
+                        .parse()
+                        .map_err(|_| anyhow!("invalid line count `{count}`"))?;
+                    start.saturating_add(count).saturating_sub(1)
+                }
+                None => rest
+                    .parse()
+                    .map_err(|_| anyhow!("invalid line end `{rest}`"))?,
+            };
+            (start, end)
+        }
+        None => {
+            let line: u64 = value
+                .parse()
+                .map_err(|_| anyhow!("invalid line number `{value}`"))?;
+            (line, line)
+        }
+    };
+    if start == 0 || end < start {
+        return Err(anyhow!(
+            "invalid line range `{value}`; lines are 1-based and END must not precede START"
+        ));
+    }
+    Ok(LineRange { start, end })
+}
+
+fn print_comment_state(
+    repo: &gix::Repository,
+    comment: &Comment,
+    revision: gix::ObjectId,
+) -> Result<()> {
+    match Comment::annotation_state(repo, comment, revision)? {
+        None => println!("unattached"),
+        Some(state) => {
+            let binding = Comment::annotation_binding(repo, comment, revision)?
+                .expect("a state implies a binding");
+            println!(
+                "{} {}:{}-{} oracle={} confidence={}",
+                format!("{state:?}").bold(),
+                binding.path,
+                binding.span.0,
+                binding.span.1,
+                binding.oracle,
+                binding.confidence
+            );
+        }
+    }
+    Ok(())
 }
 
 fn prompt_comment_fields(repo: &gix::Repository) -> Result<(String, String, String)> {
