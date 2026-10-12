@@ -23,12 +23,11 @@ dialoguer = { version = "0.11", features = ["completion"] }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "net"] }
 serde_json = "1"
-libc = "0.2"
 acdc-parser = { path = "../../vendor/acdc/acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
 acdc-converters-core = { path = "../../vendor/acdc/converters/core", default-features = false }
-# `highlighting` pulls in syntect and its bundled syntax and theme dumps, a
-# second highlighter alongside the UI's Arborium. The CLI renders code blocks
-# as plain text so the grammars stay confined to the `git-forge-ui` binary.
+# `highlighting` pulls in syntect and its bundled syntax and theme dumps. The
+# CLI renders code blocks as plain text so the grammars stay confined to the
+# `git-forge-lsp` binary.
 acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", default-features = false, features = ["pre-spec-subs"] }
 
 [dev-dependencies]

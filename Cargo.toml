@@ -2,7 +2,6 @@
 members = [
     "crates/gix-forge",
     "crates/git-forge",
-    "crates/git-forge-ui",
     "crates/test-support",
 ]
 exclude = [
@@ -30,8 +29,8 @@ debug = 0
 # release size left to win is code and metadata: cross-crate inlining and dead
 # code elimination, and no symbol table in the shipped binary.
 #
-# `panic = "abort"` is deliberately absent. It saves little here, and the UI is
-# a server: unwinding confines a panicking request handler to its own Tokio
+# `panic = "abort"` is deliberately absent. It saves little here, and the CLI
+# is a server: unwinding confines a panicking request handler to its own Tokio
 # task, where aborting would take down every other connection with it.
 [profile.release]
 lto = "fat"

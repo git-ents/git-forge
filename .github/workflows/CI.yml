@@ -122,30 +122,21 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
-      # The CLI and the UI are siblings. Neither knows the other exists: the CLI
-      # locates the sibling `git-forge-ui` executable on disk and execs into it
-      # (docs/design-git-forge-ui.adoc). Sharing this workspace changes nothing,
-      # so the resolved dependency graph has to say so, in both directions and
-      # transitively.
-      # The model library is held to the same isolation as the frontends it
-      # serves: `gix-forge` never reaches a frontend's vocabulary either, and
-      # `test-support` stays confined to dev-dependencies.
-      - name: No git-forge / git-forge-ui dependency edge
+      # The CLI and the model library stay isolated: `gix-forge` must never
+      # reach the CLI's vocabulary, and `test-support` stays confined to
+      # dev-dependencies.
+      - name: No git-forge / gix-forge dependency edge
         run: |
           set -uo pipefail
           failed=0
-          for pair in "git-forge-ui:git-forge" "git-forge:git-forge-ui" "gix-forge:git-forge" "gix-forge:git-forge-ui"; do
-            from="${pair%%:*}"
-            to="${pair##*:}"
-            if cargo tree --all-features --edges normal,build,dev --prefix none \
-                 --package "$from" | awk '{print $1}' | grep -qFx "$to"; then
-              echo "::error::$from depends on $to: the CLI, the UI, and the model must never know each other exists"
-              failed=1
-            else
-              echo "ok: $from does not reach $to"
-            fi
-          done
-          for crate in git-forge git-forge-ui gix-forge; do
+          if cargo tree --all-features --edges normal,build,dev --prefix none \
+               --package gix-forge | awk '{print $1}' | grep -qFx "git-forge"; then
+            echo "::error::gix-forge depends on git-forge: the model must never know the CLI exists"
+            failed=1
+          else
+            echo "ok: gix-forge does not reach git-forge"
+          fi
+          for crate in git-forge gix-forge; do
             if cargo tree --all-features --edges normal,build --prefix none \
                  --package "$crate" | awk '{print $1}' | grep -qFx "test-support"; then
               echo "::error::$crate reaches test-support outside dev-dependencies: test-support must stay dev-only"
