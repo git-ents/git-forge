@@ -24,7 +24,7 @@ repos:
       - id: fmt
         name: cargo fmt
         language: system
-        entry: cargo fmt -p gix-forge -p git-forge -p test-support --
+        entry: cargo fmt -p git-forge -p test-support --
         types: [rust]
         pass_filenames: false
       - id: clippy
