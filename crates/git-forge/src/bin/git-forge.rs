@@ -13,7 +13,7 @@ use dialoguer::{
     Completion, Confirm, Editor as InteractiveEditor, Input, MultiSelect, Select,
     theme::ColorfulTheme,
 };
-use gix_forge::{
+use git_forge::{
     Authorization, Binding, Comment, Entity, EntityOps, HitKind, Issue, LineRange, Member,
     Principal, QueryValue, Review, ReviewDecision, ReviewTarget, Status, capture,
 };
@@ -505,7 +505,7 @@ fn run_issue(
         }
         IssueCommand::Search(args) => {
             let ids =
-                gix_forge::search_issue(repo, args.assignee.as_deref(), args.keyword.as_deref())?;
+                git_forge::search_issue(repo, args.assignee.as_deref(), args.keyword.as_deref())?;
             print_issue_list(repo, &ids)?;
         }
         IssueCommand::Query(args) => run_query_args(repo, args)?,
@@ -749,7 +749,7 @@ fn run_comment(
         }
         CommentCommand::Search(args) => {
             let ids =
-                gix_forge::search_comment(repo, args.author.as_deref(), args.keyword.as_deref())?;
+                git_forge::search_comment(repo, args.author.as_deref(), args.keyword.as_deref())?;
             print_comment_list(repo, &ids)?;
         }
         CommentCommand::State { id, revision } => {
@@ -945,7 +945,7 @@ fn run_install(
         println!(
             "{} {}",
             Issue::KIND,
-            gix_forge::ensure_issue_schema_as(repo, authorization)?
+            git_forge::ensure_issue_schema_as(repo, authorization)?
         );
         installed = true;
     }
@@ -954,7 +954,7 @@ fn run_install(
         println!(
             "{} {}",
             Review::KIND,
-            gix_forge::ensure_review_schema_as(repo, authorization)?
+            git_forge::ensure_review_schema_as(repo, authorization)?
         );
         installed = true;
     }
@@ -963,13 +963,13 @@ fn run_install(
         println!(
             "{} {}",
             Member::KIND,
-            gix_forge::ensure_member_schema_as(repo, authorization)?
+            git_forge::ensure_member_schema_as(repo, authorization)?
         );
         installed = true;
     }
 
     if should_install(args.interactive, "query rules")? {
-        gix_forge::install_builtin_query_rules_as(repo, authorization)?;
+        git_forge::install_builtin_query_rules_as(repo, authorization)?;
         println!("query rules review");
         installed = true;
     }
@@ -983,7 +983,7 @@ fn run_install(
 
 fn run_uninstall(repo: &gix::Repository, args: UninstallArgs) -> Result<()> {
     if should_uninstall(args.interactive)? {
-        gix_forge::uninstall(repo)?;
+        git_forge::uninstall(repo)?;
         println!("forge uninstalled");
     }
     Ok(())
@@ -1258,19 +1258,19 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
     match command {
         QueryCommand::Run(args) => run_query_args(repo, args)?,
         QueryCommand::Assignee { name } => {
-            let ids = gix_forge::search_assignee(repo, &name)?;
+            let ids = git_forge::search_assignee(repo, &name)?;
             print_issue_list(repo, &ids)?;
         }
         QueryCommand::Reviewer { name } => {
-            let ids = gix_forge::search_reviewer(repo, &name)?;
+            let ids = git_forge::search_reviewer(repo, &name)?;
             print_review_list(repo, &ids)?;
         }
         QueryCommand::Requester { name } => {
-            let ids = gix_forge::search_requester(repo, &name)?;
+            let ids = git_forge::search_requester(repo, &name)?;
             print_review_list(repo, &ids)?;
         }
         QueryCommand::Keyword { value } => {
-            let hits = gix_forge::search_keyword(repo, &value)?;
+            let hits = git_forge::search_keyword(repo, &value)?;
             print_search_views(repo, &hits)?;
         }
         QueryCommand::Find {
@@ -1287,7 +1287,7 @@ fn run_query(repo: &gix::Repository, command: QueryCommand) -> Result<()> {
                 );
             }
 
-            let hits = gix_forge::search_find(
+            let hits = git_forge::search_find(
                 repo,
                 assignee.as_deref(),
                 reviewer.as_deref(),
@@ -1316,7 +1316,7 @@ fn run_query_args(repo: &gix::Repository, args: QueryArgs) -> Result<()> {
                 .iter()
                 .map(|item| parse_bind(item))
                 .collect::<Result<_>>()?;
-            let rows = gix_forge::query_predicate(repo, &predicate, &bound)?;
+            let rows = git_forge::query_predicate(repo, &predicate, &bound)?;
             print_rows(&rows);
         }
         (None, Some(goal)) => {
@@ -1324,7 +1324,7 @@ fn run_query_args(repo: &gix::Repository, args: QueryArgs) -> Result<()> {
                 bail!("--goal requires --select");
             }
             let select: Vec<&str> = select.iter().map(String::as_str).collect();
-            let rows = gix_forge::query_goal(repo, &goal, &select)?;
+            let rows = git_forge::query_goal(repo, &goal, &select)?;
             print_rows(&rows);
         }
         (None, None) => bail!("query requires either a predicate or --goal"),
@@ -1458,7 +1458,7 @@ fn run_review(
             }
         }
         ReviewCommand::Search(args) => {
-            let ids = gix_forge::search_review(
+            let ids = git_forge::search_review(
                 repo,
                 args.reviewer.as_deref(),
                 args.requester.as_deref(),
@@ -1598,7 +1598,7 @@ fn format_status(status: &str) -> String {
     }
 }
 
-fn print_search_views(repo: &gix::Repository, hits: &[gix_forge::SearchHit]) -> Result<()> {
+fn print_search_views(repo: &gix::Repository, hits: &[git_forge::SearchHit]) -> Result<()> {
     let issue_ids: Vec<String> = hits
         .iter()
         .filter(|hit| hit.kind == HitKind::Issue)

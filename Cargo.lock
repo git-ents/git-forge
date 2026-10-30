@@ -1510,13 +1510,19 @@ dependencies = [
  "clap",
  "comfy-table",
  "dialoguer",
+ "facet",
+ "facet-git-tree",
  "gix",
- "gix-forge",
+ "gix-anchor",
+ "gix-attest",
+ "gix-query",
+ "gix-store",
  "owo-colors",
  "proptest",
  "serde_json",
  "tempfile",
  "test-support",
+ "thiserror 2.0.21",
  "tokio",
  "tower-lsp",
 ]
@@ -1798,22 +1804,6 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "smallvec 1.16.3",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "gix-forge"
-version = "0.1.0"
-dependencies = [
- "facet",
- "facet-git-tree",
- "gix",
- "gix-anchor",
- "gix-attest",
- "gix-query",
- "gix-store",
- "tempfile",
- "test-support",
  "thiserror 2.0.21",
 ]
 

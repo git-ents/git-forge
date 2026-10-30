@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use gix_forge::{Authorization, EntityOps, Issue, Member, Principal, Review, ReviewTarget};
+use git_forge::{Authorization, EntityOps, Issue, Member, Principal, Review, ReviewTarget};
 use proptest::prelude::*;
 use test_support::init_repo;
 

@@ -1,6 +1,6 @@
-//! [`Error`]: everything `gix-forge`'s storage and query operations return.
+//! [`Error`]: everything `git-forge`'s storage and query operations return.
 
-/// Errors from `gix-forge`'s storage and query operations.
+/// Errors from `git-forge`'s storage and query operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Failed at the `gix-store` layer (missing schema, git error, etc).

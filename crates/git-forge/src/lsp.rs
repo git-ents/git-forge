@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gix_forge::{Binding, Comment, EntityOps};
+use git_forge::{Binding, Comment, EntityOps};
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, Hover, HoverContents,
     InitializeParams, InitializeResult, Location, MarkupContent, MarkupKind, OneOf, Position,

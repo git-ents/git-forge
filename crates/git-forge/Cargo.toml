@@ -3,34 +3,70 @@ name = "git-forge"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "git_forge"
+path = "src/lib.rs"
+
+# The CLI is a front end over the library. It is enabled by default but can be
+# turned off (`--no-default-features`) to consume the forge as a pure library
+# without pulling in the terminal, LSP, or AsciiDoc rendering stack.
+[features]
+default = ["cli"]
+cli = [
+    "dep:acdc-converters-core",
+    "dep:acdc-converters-terminal",
+    "dep:acdc-parser",
+    "dep:anyhow",
+    "dep:chrono",
+    "dep:clap",
+    "dep:comfy-table",
+    "dep:dialoguer",
+    "dep:owo-colors",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:tower-lsp",
+    "gix/interrupt",
+    "gix/revision",
+]
+
 [[bin]]
 name = "git-forge"
-path = "src/main.rs"
+path = "src/bin/git-forge.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "git-forge-lsp"
 path = "src/bin/git-forge-lsp.rs"
+required-features = ["cli"]
 
 [dependencies]
-gix-forge = { path = "../gix-forge" }
-gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs", "interrupt", "revision"] }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1"
-chrono = "0.4"
-comfy-table = "7"
-owo-colors = "4"
-dialoguer = { version = "0.11", features = ["completion"] }
-tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "net"] }
-serde_json = "1"
-acdc-parser = { path = "../../vendor/acdc/acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"] }
-acdc-converters-core = { path = "../../vendor/acdc/converters/core", default-features = false }
+gix.workspace = true
+gix-anchor.workspace = true
+gix-attest.workspace = true
+gix-store.workspace = true
+facet-git-tree = "0.1.0-alpha.1"
+gix-query.workspace = true
+facet.workspace = true
+thiserror.workspace = true
+
+# CLI-only dependencies, enabled through the `cli` feature.
+anyhow = { version = "1", optional = true }
+chrono = { version = "0.4", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+comfy-table = { version = "7", optional = true }
+owo-colors = { version = "4", optional = true }
+dialoguer = { version = "0.11", features = ["completion"], optional = true }
+tower-lsp = { version = "0.20", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "net"], optional = true }
+serde_json = { version = "1", optional = true }
+acdc-parser = { path = "../../vendor/acdc/acdc-parser", default-features = false, features = ["pre-spec-subs", "setext"], optional = true }
+acdc-converters-core = { path = "../../vendor/acdc/converters/core", default-features = false, optional = true }
 # `highlighting` pulls in syntect and its bundled syntax and theme dumps. The
 # CLI renders code blocks as plain text so the grammars stay confined to the
 # `git-forge-lsp` binary.
-acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", default-features = false, features = ["pre-spec-subs"] }
+acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", default-features = false, features = ["pre-spec-subs"], optional = true }
 
 [dev-dependencies]
 proptest = "1"
-tempfile = "3"
+tempfile.workspace = true
 test-support = { path = "../test-support" }
