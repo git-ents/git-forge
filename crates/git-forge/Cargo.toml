@@ -41,11 +41,11 @@ required-features = ["cli"]
 
 [dependencies]
 gix.workspace = true
-gix-anchor.workspace = true
-gix-attest.workspace = true
-gix-store.workspace = true
-facet-git-tree = "0.1.0-alpha.1"
-gix-query.workspace = true
+git-anchor.workspace = true
+git-attest.workspace = true
+git-store.workspace = true
+facet-git-tree.workspace = true
+git-query.workspace = true
 facet.workspace = true
 thiserror.workspace = true
 

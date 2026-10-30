@@ -7,9 +7,9 @@ use std::{
 };
 
 use facet::Facet;
+use git_attest::{AttestKey, Claims, Envelope, Target, register_claim_schema, register_key_schema};
+use git_store::{RefSegment, RepoStore, schema_of};
 use gix::ObjectId;
-use gix_attest::{AttestKey, Claims, Envelope, Target, register_claim_schema, register_key_schema};
-use gix_store::{RefSegment, RepoStore, schema_of};
 
 use crate::decision::SigningKey;
 use crate::{Authorization, Capability, Error, Ownership};
@@ -93,7 +93,7 @@ pub fn input_digest(repo: &gix::Repository, rule_ref: Option<ObjectId>) -> Resul
 pub fn install_rules(repo: &gix::Repository, authorization: &Authorization) -> Result<(), Error> {
     authorization.check(Capability::ForgeInstall, Ownership::NotApplicable)?;
     let store =
-        gix_query::RuleStore::open(repo).map_err(|error| Error::QueryRules(error.to_string()))?;
+        git_query::RuleStore::open(repo).map_err(|error| Error::QueryRules(error.to_string()))?;
     store
         .put("merge_gate", MERGE_RULES)
         .map_err(|e| Error::QueryRules(e.to_string()))?;
@@ -168,14 +168,14 @@ pub fn promote_as(
     authorization.check(Capability::GatePromote, Ownership::NotApplicable)?;
     let key = SigningKey::from_config(repo)?;
     let public = key.public_openssh()?;
-    let store = RepoStore::open_with_layout(repo, gix_attest::layout()).with_signer(key);
+    let store = RepoStore::open_with_layout(repo, git_attest::layout()).with_signer(key);
     register_claim_schema(&store)?;
     register_key_schema(&store)?;
     let kind = RefSegment::new("gate-verdict").expect("gate-verdict is valid");
     store
         .kind::<StoredGateClaim>(kind.clone())
         .schema()
-        .put(&schema_of::<StoredGateClaim>().map_err(gix_store::Error::from)?)?;
+        .put(&schema_of::<StoredGateClaim>().map_err(git_store::Error::from)?)?;
     let key_claim = Claims::open(&store).add_key(&AttestKey::from_openssh(&public, false)?)?;
     let payload = store
         .kind::<StoredGateClaim>(kind)
@@ -221,7 +221,7 @@ mod tests {
         let authorization =
             Authorization::new(crate::Principal::member_id("maintainer")).administrator();
         install_rules(&repo, &authorization).expect("publish gate modules");
-        gix_query::checked_program_with(&repo, &crate::ForgeFacts::registry())
+        git_query::checked_program_with(&repo, &crate::ForgeFacts::registry())
             .expect("gate modules validate against forge facts");
     }
 

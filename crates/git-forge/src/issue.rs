@@ -92,7 +92,7 @@ mod tests {
     use super::*;
     use crate::entity::EntityOps;
     use crate::{Authorization, Principal, open_store, query_goal, query_predicate};
-    use gix_store::{RefEdit, RefSegment, RefStore};
+    use git_store::{RefEdit, RefSegment, RefStore};
 
     fn auth() -> Authorization {
         Authorization::new(Principal::member_id("alice"))
@@ -123,7 +123,7 @@ mod tests {
         let store = open_store(&repo);
         let issue_segment = RefSegment::new(Issue::KIND).expect("issue segment");
         let legacy_kind = store.kind::<legacy::StoredIssue>(issue_segment);
-        let legacy_schema = gix_store::schema_of::<legacy::StoredIssue>().expect("legacy schema");
+        let legacy_schema = git_store::schema_of::<legacy::StoredIssue>().expect("legacy schema");
         legacy_kind
             .schema()
             .put(&legacy_schema)
@@ -144,8 +144,8 @@ mod tests {
 
         Issue::ensure_schema_as(&store, &auth()).expect("publish current schema");
         let current_kind = Issue::kind(&store);
-        let commit_name = gix_store::entity_name(commit);
-        let canonical = gix_store::RefPath::new(
+        let commit_name = git_store::entity_name(commit);
+        let canonical = git_store::RefPath::new(
             repo.find_commit(commit)
                 .expect("legacy commit")
                 .tree_id()
@@ -182,7 +182,7 @@ mod tests {
                 expected: commit,
             })
             .expect("remove pre-migration ref name");
-        let alias = gix_store::RefPath::new("legacy-caller-id").expect("alias id");
+        let alias = git_store::RefPath::new("legacy-caller-id").expect("alias id");
         store
             .refs()
             .apply(RefEdit::Create {
@@ -209,7 +209,7 @@ mod tests {
         );
 
         Issue::kind(&store)
-            .read(gix_store::RefPath::new(&alias).expect("alias path"))
+            .read(git_store::RefPath::new(&alias).expect("alias path"))
             .expect("current-schema read of the legacy document")
             .value()
             .expect("migrated alias exists");
@@ -259,12 +259,12 @@ mod tests {
             1
         );
 
-        // Adding another alias after the first query invalidates gix-store's
+        // Adding another alias after the first query invalidates git-store's
         // source-ref index, but the broad issue/* fact scan still emits one
         // logical row rather than one row per alias.
-        let extra_alias = gix_store::RefPath::new("second-legacy-alias").expect("second alias");
+        let extra_alias = git_store::RefPath::new("second-legacy-alias").expect("second alias");
         let commit = Issue::kind(&store)
-            .read(gix_store::RefPath::new(&canonical).expect("canonical path"))
+            .read(git_store::RefPath::new(&canonical).expect("canonical path"))
             .expect("read canonical entry")
             .present()
             .expect("canonical entry")
@@ -341,7 +341,7 @@ mod tests {
     fn alias_only_legacy_refs_are_discoverable_without_a_canonical_ref() {
         let (_dir, repo, canonical, alias) = migrated_alias_fixture();
         let store = open_store(&repo);
-        let canonical_path = gix_store::RefPath::new(&canonical).expect("canonical path");
+        let canonical_path = git_store::RefPath::new(&canonical).expect("canonical path");
         let commit = Issue::kind(&store)
             .read(&canonical_path)
             .expect("read canonical ref")
@@ -391,7 +391,7 @@ mod tests {
             .create_in_repo_as(&repo, &auth())
             .expect("create first issue");
         let store = open_store(&repo);
-        let first_path = gix_store::RefPath::new(&first_id).expect("first path");
+        let first_path = git_store::RefPath::new(&first_id).expect("first path");
         let first_value = Issue::load(&store, &first_id)
             .expect("load first")
             .expect("first exists");
@@ -400,11 +400,11 @@ mod tests {
         // name. The document tree, not either publication commit, is the
         // logical identity and must therefore produce one result.
         let publication_alias =
-            gix_store::RefPath::new("caller-publication").expect("publication alias");
+            git_store::RefPath::new("caller-publication").expect("publication alias");
         Issue::kind(&store)
             .put(&publication_alias, &first_value.to_stored())
             .expect("publish second first-issue commit");
-        let caller_alias = gix_store::RefPath::new("caller-alias").expect("caller alias");
+        let caller_alias = git_store::RefPath::new("caller-alias").expect("caller alias");
         let first_commit = Issue::kind(&store)
             .read(&first_path)
             .expect("read first")

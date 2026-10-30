@@ -3,18 +3,18 @@
 /// Errors from `git-forge`'s storage and query operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Failed at the `gix-store` layer (missing schema, git error, etc).
+    /// Failed at the `git-store` layer (missing schema, git error, etc).
     #[error(transparent)]
-    Store(#[from] gix_store::Error),
+    Store(#[from] git_store::Error),
     /// An id is not a valid Git ref path.
     #[error(transparent)]
-    InvalidId(#[from] gix_store::InvalidRefName),
+    InvalidId(#[from] git_store::InvalidRefName),
     /// Failed to edit a repository reference (publishing an anchor ref).
     #[error(transparent)]
     RefEdit(#[from] gix::reference::edit::Error),
-    /// Failed at the `gix-query` layer.
+    /// Failed at the `git-query` layer.
     #[error(transparent)]
-    Query(#[from] gix_query::QueryError),
+    Query(#[from] git_query::QueryError),
     /// Failed storing or checking built-in query rules.
     #[error("failed to install built-in query rules: {0}")]
     QueryRules(String),
@@ -24,9 +24,9 @@ pub enum Error {
     /// Forge data is still present and must be removed first.
     #[error("cannot uninstall forge schemas while {0} data exists")]
     DataPresent(String),
-    /// Failed capturing a `gix-anchor` binding.
+    /// Failed capturing a `git-anchor` binding.
     #[error(transparent)]
-    Anchor(#[from] gix_anchor::Error),
+    Anchor(#[from] git_anchor::Error),
     /// A `--target`/review-target string did not parse.
     #[error("invalid review target `{0}`")]
     InvalidTarget(String),
@@ -47,7 +47,7 @@ pub enum Error {
     UnsignedRelease,
     /// Failed to publish or read an attest claim.
     #[error(transparent)]
-    Attest(#[from] gix_attest::Error),
+    Attest(#[from] git_attest::Error),
     /// Authentication is required for the requested mutation.
     #[error("unauthorized: authentication is required to {capability}; provide --as <member-id>")]
     Unauthorized { capability: crate::Capability },

@@ -1,4 +1,4 @@
-//! [`Comment`]: a forge doc embedding a `gix_anchor::Binding` subtree inline
+//! [`Comment`]: a forge doc embedding a `git_anchor::Binding` subtree inline
 //! (ARCHITECTURE.md, "git-forge": "comment = forge doc embedding a Binding
 //! subtree; anchor id falls out as the hash of its identity subtree").
 //!
@@ -10,11 +10,11 @@
 //! [`crate::entity::EntityOps`] CRUD.
 
 use facet::Facet;
+use git_anchor::{Binding, LineRange, RebindPin, capture};
+use git_attest::{Claims, Envelope, Target, register_claim_schema, register_key_schema};
+use git_query::Value;
+use git_store::{RefPath, RefSegment, RepoStore, schema_of};
 use gix::{ObjectId, Repository};
-use gix_anchor::{Binding, LineRange, RebindPin, capture};
-use gix_attest::{Claims, Envelope, Target, register_claim_schema, register_key_schema};
-use gix_query::Value;
-use gix_store::{RefPath, RefSegment, RepoStore, schema_of};
 
 use crate::entity::{Entity, EntityOps};
 use crate::error::Error;
@@ -136,7 +136,7 @@ impl Comment {
                 confidence: 100,
             }));
         }
-        let rows = gix_query::run_predicate(
+        let rows = git_query::run_predicate(
             repo,
             "bind",
             &[
@@ -215,14 +215,14 @@ impl Comment {
                 path: binding.path,
                 span: binding.span,
             };
-            let kind = RefSegment::new(gix_anchor::REBIND_PIN_KIND).expect("built-in kind");
+            let kind = RefSegment::new(git_anchor::REBIND_PIN_KIND).expect("built-in kind");
             store
                 .kind::<RebindPin>(kind)
                 .schema()
-                .put(&schema_of::<RebindPin>().map_err(gix_store::Error::from)?)?;
+                .put(&schema_of::<RebindPin>().map_err(git_store::Error::from)?)?;
             Ok(store
                 .kind::<RebindPin>(
-                    RefSegment::new(gix_anchor::REBIND_PIN_KIND).expect("built-in kind"),
+                    RefSegment::new(git_anchor::REBIND_PIN_KIND).expect("built-in kind"),
                 )
                 .compile(&payload)?)
         })
@@ -245,7 +245,7 @@ impl Comment {
             store
                 .kind::<ObsoleteAnnotation>(kind)
                 .schema()
-                .put(&schema_of::<ObsoleteAnnotation>().map_err(gix_store::Error::from)?)?;
+                .put(&schema_of::<ObsoleteAnnotation>().map_err(git_store::Error::from)?)?;
             Ok(store
                 .kind::<ObsoleteAnnotation>(
                     RefSegment::new("obsolete-annotation").expect("built-in kind"),
@@ -299,7 +299,7 @@ impl Comment {
         if let Some(binding) = &stored.binding {
             publish_anchor(repo, binding)?;
         }
-        Ok(gix_store::entity_name_under(&group, commit).to_string())
+        Ok(git_store::entity_name_under(&group, commit).to_string())
     }
 
     /// Create a free-floating anchored comment after authorization.
@@ -404,11 +404,11 @@ where
     F: FnOnce(&RepoStore<'_>) -> Result<ObjectId, Error>,
 {
     let signer = crate::decision::SigningKey::from_config(repo)?;
-    let store = RepoStore::open_with_layout(repo, gix_attest::layout()).with_signer(signer);
+    let store = RepoStore::open_with_layout(repo, git_attest::layout()).with_signer(signer);
     register_claim_schema(&store)?;
     register_key_schema(&store)?;
-    if payload_kind == gix_anchor::REBIND_PIN_KIND {
-        gix_anchor::register_rebind_pin_schema(&store)?;
+    if payload_kind == git_anchor::REBIND_PIN_KIND {
+        git_anchor::register_rebind_pin_schema(&store)?;
     }
     let payload_oid = payload(&store)?;
     let envelope = Envelope {
@@ -530,7 +530,7 @@ pub trait Commentable {
 
 /// The genesis commit a [`Binding::Position`] anchor was captured against, or
 /// `None` for any other binding shape -- what a caller reads to jump to an
-/// anchored comment's location, without duplicating `gix_anchor`'s own
+/// anchored comment's location, without duplicating `git_anchor`'s own
 /// vocabulary.
 #[must_use]
 pub fn binding_genesis(binding: &Binding) -> Option<ObjectId> {
@@ -742,7 +742,7 @@ mod tests {
                 .try_id()
                 .expect("anchor ref points directly at the binding tree")
                 .to_owned();
-            let republished = Binding::deserialize(&gix_anchor::CaptureHandle::from(target), &repo)
+            let republished = Binding::deserialize(&git_anchor::CaptureHandle::from(target), &repo)
                 .expect("published tree decodes as a binding");
             assert_eq!(
                 republished.anchor_id().expect("anchor id").to_string(),

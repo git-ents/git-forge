@@ -37,12 +37,13 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.dependencies]
-gix-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
-gix-attest = { git = "https://github.com/git-ents/git-anchor.git" }
-gix-store = { git = "https://github.com/git-ents/git-store.git" }
-gix-query = { git = "https://github.com/git-ents/git-query.git" }
+git-anchor = { git = "https://github.com/git-ents/git-anchor.git" }
+git-attest = { git = "https://github.com/git-ents/git-anchor.git" }
+git-store = { git = "https://github.com/git-ents/git-store.git" }
+git-query = { git = "https://github.com/git-ents/git-query.git", default-features = false }
 gix = { version = "0.85.0", default-features = false, features = ["sha1", "zlib-rs"] }
 facet = "0.50.0-rc.7"
 facet-value = "0.50.0-rc.7"
+facet-git-tree = { git = "https://github.com/git-ents/facet-git-tree", features = ["value"] }
 thiserror = "2"
 tempfile = "3"

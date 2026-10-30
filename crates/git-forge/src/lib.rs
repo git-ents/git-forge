@@ -2,8 +2,8 @@
 //!
 //! Per ARCHITECTURE.md, "git-forge... composes everything, owns no primitive
 //! logic": [`entity`] is the one CRUD implementation every entity kind
-//! (`Issue`, `Review`, `Comment`) shares over `gix-store`; [`Comment`] embeds
-//! a `gix_anchor::Binding` subtree inline rather than reimplementing bind
+//! (`Issue`, `Review`, `Comment`) shares over `git-store`; [`Comment`] embeds
+//! a `git_anchor::Binding` subtree inline rather than reimplementing bind
 //! resolution ("Forge reads binds through query only"); [`facts::ForgeFacts`]
 //! is the only place forge data is read to answer a query, and [`search`]
 //! compiles to the same Datalog goals `query` runs -- never an in-memory
@@ -23,8 +23,8 @@ mod review;
 mod search;
 mod status;
 
+use git_store::{Layout, RefPrefix, RefSegment, RepoStore};
 use gix::{ObjectId, Repository};
-use gix_store::{Layout, RefPrefix, RefSegment, RepoStore};
 
 pub use authorization::{Authorization, Capability, MemberId, Ownership, Principal};
 pub use comment::{
@@ -35,8 +35,8 @@ pub use entity::{Entity, EntityOps};
 pub use error::Error;
 pub use facts::ForgeFacts;
 pub use gate::{GATE_NAMES, GateResult};
-pub use gix_anchor::{Binding, LineRange, capture};
-pub use gix_query::Value as QueryValue;
+pub use git_anchor::{Binding, LineRange, capture};
+pub use git_query::Value as QueryValue;
 pub use issue::Issue;
 pub use member::Member;
 pub use release::{Release, ReleaseAttachment, ReleaseClaim, ReleaseTarget};
@@ -186,12 +186,12 @@ pub fn install_builtin_query_rules_as(
     authorization: &Authorization,
 ) -> Result<(), Error> {
     authorization.check(Capability::ForgeInstall, Ownership::NotApplicable)?;
-    let store = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
+    let store = git_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
     store
         .put("review", BUILTIN_REVIEW_RULES)
         .map_err(|e| Error::QueryRules(e.to_string()))?;
     gate::install_rules(repo, authorization)?;
-    gix_query::checked_program_with(repo, &ForgeFacts::registry())?;
+    git_query::checked_program_with(repo, &ForgeFacts::registry())?;
     Ok(())
 }
 
@@ -215,7 +215,7 @@ pub fn uninstall(repo: &Repository) -> Result<(), Error> {
         }
     }
 
-    let rules = gix_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
+    let rules = git_query::RuleStore::open(repo).map_err(|e| Error::QueryRules(e.to_string()))?;
     for name in ["merge_gate", "release_signable", "docs_coverage"] {
         rules
             .delete(name)

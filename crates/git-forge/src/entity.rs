@@ -4,23 +4,23 @@
 //! stored payload shape, and how to move between the public struct and that
 //! payload. [`EntityOps`] is the blanket implementation of everything else --
 //! schema publishing, create/save/load/list/history/delete -- over
-//! `gix-store`, so `Issue`, `Review`, and `Comment` each write only an
+//! `git-store`, so `Issue`, `Review`, and `Comment` each write only an
 //! `Entity` impl instead of duplicating the whole CRUD surface.
 
 use std::collections::BTreeMap;
 
 use facet::Facet;
-use gix::{ObjectId, Repository};
-use gix_store::{
+use git_store::{
     ApplyError, EntityState, GixRefStore, Kind, NamedEntries, RefEdit, RefName, RefPath,
     RefSegment, RefStore, RepoStore, Typed,
 };
+use gix::{ObjectId, Repository};
 
 use crate::{Authorization, Capability, Error, Ownership, Principal, open_store};
 
 /// What one forge entity kind must declare.
 pub trait Entity: Sized + Clone {
-    /// The `gix-store` kind name: entities live under `refs/forge/<KIND>/*`.
+    /// The `git-store` kind name: entities live under `refs/forge/<KIND>/*`.
     const KIND: &'static str;
 
     /// The facet-derived value actually written to the store. Distinct from
@@ -171,7 +171,7 @@ pub trait EntityOps: Entity {
             entity.attribute_to(member.as_str());
         }
         let commit = Self::kind(&store).write(&entity.to_stored()).anonymous()?;
-        Ok(gix_store::entity_name(commit).to_string())
+        Ok(git_store::entity_name(commit).to_string())
     }
 
     /// Load the entity named `id`, or `None` if it doesn't exist.
@@ -209,7 +209,7 @@ pub trait EntityOps: Entity {
 
     /// Every logical entity of this kind, ascending by its canonical id.
     ///
-    /// `gix-store` deliberately exposes every source ref, including caller
+    /// `git-store` deliberately exposes every source ref, including caller
     /// aliases. Forge treats refs carrying the same bound document tree as
     /// one entity for collection and query APIs, while [`load`](Self::load)
     /// keeps the name supplied by the caller for compatibility.
@@ -224,7 +224,7 @@ pub trait EntityOps: Entity {
                         EntityState::Present(entry) => {
                             Ok(Self::from_stored(name.to_string(), entry.value))
                         }
-                        EntityState::Deleted(_) => Err(gix_store::Error::Deleted { commit }),
+                        EntityState::Deleted(_) => Err(git_store::Error::Deleted { commit }),
                         EntityState::Absent => unreachable!("a commit is always present"),
                     })
                     .map_err(Error::from)
@@ -245,7 +245,7 @@ pub trait EntityOps: Entity {
                         EntityState::Present(entry) => {
                             Ok(Self::from_stored(name.to_string(), entry.value))
                         }
-                        EntityState::Deleted(_) => Err(gix_store::Error::Deleted { commit }),
+                        EntityState::Deleted(_) => Err(git_store::Error::Deleted { commit }),
                         EntityState::Absent => unreachable!("a commit is always present"),
                     })
                     .map_err(Error::from)
@@ -343,7 +343,7 @@ fn retarget(
             new,
         })
         .map_err(|error: ApplyError<_>| {
-            Error::Store(gix_store::Error::Backend(Box::new(std::io::Error::other(
+            Error::Store(git_store::Error::Backend(Box::new(std::io::Error::other(
                 error.to_string(),
             ))))
         })
@@ -378,7 +378,7 @@ fn source_entries<T: Entity>(store: &RepoStore<'_>) -> Result<Vec<(RefPath, Obje
     store
         .refs()
         .prefixed(&prefix)
-        .map_err(|error| Error::Store(gix_store::Error::Backend(Box::new(error))))
+        .map_err(|error| Error::Store(git_store::Error::Backend(Box::new(error))))
         .map(|entries| {
             entries
                 .into_iter()
@@ -444,7 +444,7 @@ fn canonical_name(objects: &gix::OdbHandle, refs: &[(RefPath, ObjectId)]) -> Ref
     // compatibility alias. Prefer it over caller-chosen aliases so the
     // primary id returned by creation remains stable.
     if let Some((name, _)) = refs.iter().find(|(name, commit)| {
-        name.segments().len() == 1 && *name == gix_store::entity_name(*commit)
+        name.segments().len() == 1 && *name == git_store::entity_name(*commit)
     }) {
         return name.clone();
     }

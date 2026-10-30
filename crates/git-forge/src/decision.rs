@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use facet::Facet;
+use git_attest::{Claims, Envelope, Target, register_claim_schema, register_key_schema};
+use git_store::{RefSegment, RepoStore, SignatureBytes, Signer, schema_of};
 use gix::ObjectId;
-use gix_attest::{Claims, Envelope, Target, register_claim_schema, register_key_schema};
-use gix_store::{RefSegment, RepoStore, SignatureBytes, Signer, schema_of};
 
 use crate::error::Error;
 use crate::{Authorization, Capability, Ownership, Review, ReviewTarget};
@@ -36,7 +36,7 @@ pub enum ReviewVerdict {
 const KIND: &str = "review-decision";
 
 /// A decision in a review's signed claim chain, including structural revocation
-/// information supplied by `gix-attest`.
+/// information supplied by `git-attest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewDecisionClaim {
     /// The signed claim's object id.
@@ -62,8 +62,8 @@ impl ReviewDecision {
             kind: review.target.attest_kind().to_owned(),
             id: review.target.target_id()?.into(),
         };
-        let store = RepoStore::open_with_layout(repo, gix_attest::layout());
-        let claims = gix_attest::Claims::open(&store).resolve(&target)?;
+        let store = RepoStore::open_with_layout(repo, git_attest::layout());
+        let claims = git_attest::Claims::open(&store).resolve(&target)?;
         let kind = RefSegment::new(KIND).expect("built-in kind is valid");
         claims
             .into_iter()
@@ -139,13 +139,13 @@ impl ReviewDecision {
 
         let signing_key = SigningKey::from_config(repo)?;
         let store =
-            RepoStore::open_with_layout(repo, gix_attest::layout()).with_signer(signing_key);
+            RepoStore::open_with_layout(repo, git_attest::layout()).with_signer(signing_key);
         register_claim_schema(&store)?;
         register_key_schema(&store)?;
         store
             .kind::<ReviewDecision>(RefSegment::new(KIND).expect("built-in kind is valid"))
             .schema()
-            .put(&schema_of::<ReviewDecision>().map_err(gix_store::Error::from)?)?;
+            .put(&schema_of::<ReviewDecision>().map_err(git_store::Error::from)?)?;
         let payload = store
             .kind::<ReviewDecision>(RefSegment::new(KIND).expect("built-in kind is valid"))
             .compile(&decision)?;

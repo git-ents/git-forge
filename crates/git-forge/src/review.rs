@@ -7,8 +7,8 @@ use std::fmt;
 use facet::Facet;
 use facet_git_tree::normal_form::{self, NormalForm};
 use facet_git_tree::{RawBlob, RawTree};
+use git_store::{RefSegment, RepoStore, Typed};
 use gix::ObjectId;
-use gix_store::{RefSegment, RepoStore, Typed};
 
 use crate::comment::Commentable;
 use crate::entity::{Entity, EntityOps};
@@ -94,7 +94,7 @@ impl Commentable for Review {
 impl Review {
     fn kind<'a>(
         store: &'a RepoStore<'a>,
-    ) -> gix_store::Kind<'a, Typed<StoredReview>, gix_store::GixRefStore<'a>, &'a gix::OdbHandle>
+    ) -> git_store::Kind<'a, Typed<StoredReview>, git_store::GixRefStore<'a>, &'a gix::OdbHandle>
     {
         store.kind(RefSegment::new(Self::KIND).expect("built-in ref segment is valid"))
     }
@@ -104,7 +104,7 @@ impl Review {
     pub fn ensure_schema(store: &RepoStore<'_>) -> Result<ObjectId, Error> {
         Self::kind(store)
             .schema()
-            .put(&facet_git_tree::schema_of::<ReviewSchema>().map_err(gix_store::Error::from)?)
+            .put(&facet_git_tree::schema_of::<ReviewSchema>().map_err(git_store::Error::from)?)
             .map_err(Error::from)
     }
 
@@ -120,7 +120,7 @@ impl Review {
     /// Read a review, falling back only to the exact pre-retention shape.
     /// No object is rewritten and the target OIDs are copied verbatim.
     pub fn load(store: &RepoStore<'_>, id: &str) -> Result<Option<Self>, Error> {
-        let name = gix_store::RefPath::new(id)?;
+        let name = git_store::RefPath::new(id)?;
         match Self::kind(store).read(&name) {
             Ok(state) => Ok(state
                 .value()
@@ -174,7 +174,7 @@ impl Review {
             entity.attribute_to(member.as_str());
         }
         let commit = Self::kind(&store).write(&entity.to_stored()).anonymous()?;
-        Ok(gix_store::entity_name(commit).to_string())
+        Ok(git_store::entity_name(commit).to_string())
     }
 
     pub fn save_in_repo_as(
@@ -204,7 +204,7 @@ impl Review {
         authorization.check(crate::Capability::ReviewDelete, ownership)?;
         // Deletion is likewise by logical document identity, not merely by
         // the spelling supplied by the caller. This removes canonical and
-        // migrated aliases together while retaining gix-store's ref/CAS
+        // migrated aliases together while retaining git-store's ref/CAS
         // semantics.
         <Self as EntityOps>::delete_as(repo, id, authorization)
     }
@@ -661,7 +661,7 @@ mod tests {
         query_goal,
     };
     use facet_git_tree::{EntryKind, ObjectStore, serialize_into};
-    use gix_store::{RefEdit, RefStore};
+    use git_store::{RefEdit, RefStore};
     use std::io::Write;
     use std::process::Command;
 
@@ -692,7 +692,7 @@ mod tests {
         }]);
         legacy
             .put(
-                &gix_store::RefPath::new("legacy-1").expect("review id"),
+                &git_store::RefPath::new("legacy-1").expect("review id"),
                 &LegacyStoredReview {
                     status: "open".into(),
                     body: "legacy".into(),
@@ -740,8 +740,8 @@ mod tests {
 
         Review::ensure_schema_as(&store, &auth()).expect("publish current schema");
         let current_kind = Review::kind(&store);
-        let commit_name = gix_store::entity_name(commit);
-        let canonical = gix_store::RefPath::new(
+        let commit_name = git_store::entity_name(commit);
+        let canonical = git_store::RefPath::new(
             repo.find_commit(commit)
                 .expect("legacy commit")
                 .tree_id()
@@ -778,7 +778,7 @@ mod tests {
                 expected: commit,
             })
             .expect("remove pre-migration ref name");
-        let alias = gix_store::RefPath::new("legacy-review-id").expect("alias id");
+        let alias = git_store::RefPath::new("legacy-review-id").expect("alias id");
         store
             .refs()
             .apply(RefEdit::Create {
@@ -820,9 +820,9 @@ mod tests {
             vec![alias.clone()]
         );
 
-        let extra_alias = gix_store::RefPath::new("second-legacy-review-id").expect("second alias");
+        let extra_alias = git_store::RefPath::new("second-legacy-review-id").expect("second alias");
         let commit = Review::kind(&store)
-            .read(gix_store::RefPath::new(&canonical).expect("canonical path"))
+            .read(git_store::RefPath::new(&canonical).expect("canonical path"))
             .expect("read canonical entry")
             .present()
             .expect("canonical entry")
@@ -878,7 +878,7 @@ mod tests {
     fn alias_only_legacy_review_refs_are_discoverable() {
         let (_dir, repo, canonical, alias) = migrated_alias_fixture();
         let store = open_store(&repo);
-        let canonical_path = gix_store::RefPath::new(&canonical).expect("canonical path");
+        let canonical_path = git_store::RefPath::new(&canonical).expect("canonical path");
         let commit = Review::kind(&store)
             .read(&canonical_path)
             .expect("read canonical ref")

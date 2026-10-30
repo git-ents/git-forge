@@ -4,9 +4,9 @@ use std::fmt;
 use std::str::FromStr;
 
 use facet::Facet;
+use git_attest::{AttestKey, Claims, Envelope, Target, register_claim_schema, register_key_schema};
+use git_store::{RefSegment, RepoStore, schema_of};
 use gix::ObjectId;
-use gix_attest::{AttestKey, Claims, Envelope, Target, register_claim_schema, register_key_schema};
-use gix_store::{RefSegment, RepoStore, schema_of};
 
 use crate::decision::SigningKey;
 use crate::entity::{Entity, EntityOps};
@@ -127,7 +127,7 @@ impl Release {
         authorization.check(Capability::ReleaseCreate, Ownership::NotApplicable)?;
         Self::kind(store)
             .schema()
-            .put(&schema_of::<StoredRelease>().map_err(gix_store::Error::from)?)
+            .put(&schema_of::<StoredRelease>().map_err(git_store::Error::from)?)
             .map_err(Error::from)
     }
 
@@ -173,7 +173,7 @@ impl Release {
         repo: &gix::Repository,
         target: &ReleaseTarget,
     ) -> Result<Vec<ReleaseClaim>, Error> {
-        let store = RepoStore::open_with_layout(repo, gix_attest::layout());
+        let store = RepoStore::open_with_layout(repo, git_attest::layout());
         let claims = Claims::open(&store).resolve(&Target {
             kind: "tag".into(),
             id: target.object_id().into(),
@@ -187,7 +187,7 @@ impl Release {
                     .kind::<StoredReleaseClaim>(kind.clone())
                     .decode(claim.envelope.payload.into())?;
                 let verified =
-                    Claims::open(&store).verify(&claim)? == gix_attest::Verdict::Verified;
+                    Claims::open(&store).verify(&claim)? == git_attest::Verdict::Verified;
                 let date = repo
                     .find_commit(claim.id)
                     .ok()
@@ -226,14 +226,14 @@ impl Release {
         let signing_key = SigningKey::from_config(repo)?;
         let public_key = signing_key.public_openssh()?;
         let store =
-            RepoStore::open_with_layout(repo, gix_attest::layout()).with_signer(signing_key);
+            RepoStore::open_with_layout(repo, git_attest::layout()).with_signer(signing_key);
         register_claim_schema(&store)?;
         register_key_schema(&store)?;
         let kind = RefSegment::new(CLAIM_KIND).expect("built-in claim kind is valid");
         store
             .kind::<StoredReleaseClaim>(kind.clone())
             .schema()
-            .put(&schema_of::<StoredReleaseClaim>().map_err(gix_store::Error::from)?)?;
+            .put(&schema_of::<StoredReleaseClaim>().map_err(git_store::Error::from)?)?;
         let key = AttestKey::from_openssh(&public_key, false)?;
         let key_claim = Claims::open(&store).add_key(&key)?;
         let payload = store

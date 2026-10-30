@@ -16,7 +16,7 @@ pub fn init_repo(path: &Path) {
 
 /// Initialize a repository at `path` (if not already one), write `rel` with
 /// `contents`, and commit it -- for tests that need a real, committed blob to
-/// anchor against (`gix_anchor::capture` resolves a path against a commit's
+/// anchor against (`git_anchor::capture` resolves a path against a commit's
 /// tree, which an empty repository has none of).
 ///
 /// Shells out to `git` rather than writing objects through `gix`, so the

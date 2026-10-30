@@ -2,7 +2,7 @@
 //!
 //! Every function here compiles its filters to Datalog goal text and runs it
 //! through [`crate::facts::run_forge_goal`] -- the exact path `query` takes
-//! (`gix_query::run_goal_with` over [`crate::facts::ForgeFacts`]). None of
+//! (`git_query::run_goal_with` over [`crate::facts::ForgeFacts`]). None of
 //! these loop over `Entity::list` themselves; the CLI must not either.
 //!
 //! This replaces the in-memory scans that used to live in the `git-forge`

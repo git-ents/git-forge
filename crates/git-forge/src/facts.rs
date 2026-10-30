@@ -1,6 +1,6 @@
 //! [`ForgeFacts`]: the `FactSource` exposing issue, review, and comment
-//! fields as EDB predicates, per `gix-query`'s consumer seam
-//! (`gix-query/tests/facts_seam.rs`) and ARCHITECTURE.md's
+//! fields as EDB predicates, per `git-query`'s consumer seam
+//! (`git-query/tests/facts_seam.rs`) and ARCHITECTURE.md's
 //! "extension-contributed predicates" (`reviewed/1` from forge rules is the
 //! example named there; this is the base-fact half that feeds such rules).
 //!
@@ -13,12 +13,12 @@
 
 use std::cell::OnceCell;
 
-use gix::Repository;
-use gix_query::{
+use git_query::{
     ArgSet, Backing, Bindings, Fact, FactSource, Facts, HostError, HostRegistry, PredicateEntry,
     PredicateKey, QueryError, Value, ValueType,
 };
-use gix_store::RepoStore;
+use git_store::RepoStore;
+use gix::Repository;
 
 use crate::comment::Comment;
 use crate::entity::EntityOps;
@@ -453,7 +453,7 @@ pub(crate) fn quote(value: &str) -> String {
 }
 
 /// Run `goal` against `repo` through [`ForgeFacts`], layered over a fresh
-/// `RepoFacts` by `gix_query::run_goal_with` -- the one path both `search`
+/// `RepoFacts` by `git_query::run_goal_with` -- the one path both `search`
 /// and `query run --goal` take.
 pub(crate) fn run_forge_goal(
     repo: &Repository,
@@ -461,7 +461,7 @@ pub(crate) fn run_forge_goal(
     select: &[&str],
 ) -> Result<Vec<Vec<Value>>, QueryError> {
     let facts = ForgeFacts::new(repo);
-    gix_query::run_goal_with(repo, &ForgeFacts::registry(), &facts, goal, select)
+    git_query::run_goal_with(repo, &ForgeFacts::registry(), &facts, goal, select)
 }
 
 /// [`run_forge_goal`] for a bare predicate name, the path `query run
@@ -472,7 +472,7 @@ pub(crate) fn run_forge_predicate(
     bound: &[(usize, Value)],
 ) -> Result<Vec<Vec<Value>>, QueryError> {
     let facts = ForgeFacts::new(repo);
-    gix_query::run_predicate_with(repo, &ForgeFacts::registry(), &facts, predicate, bound)
+    git_query::run_predicate_with(repo, &ForgeFacts::registry(), &facts, predicate, bound)
 }
 
 #[cfg(test)]
@@ -614,7 +614,7 @@ mod tests {
     /// Validation is not bypassable: a predicate the registry declares but
     /// that neither `ForgeFacts` nor the layered-in `RepoFacts` answers for
     /// surfaces as an error, never as silent empty rows -- the same
-    /// guarantee `gix-query`'s own `facts_seam.rs` proves for its `flagged`
+    /// guarantee `git-query`'s own `facts_seam.rs` proves for its `flagged`
     /// example, checked here against `ForgeFacts::registry` specifically.
     #[test]
     fn a_predicate_the_registry_declares_but_forge_facts_does_not_answer_is_an_error() {
@@ -633,7 +633,7 @@ mod tests {
 
         let facts = ForgeFacts::new(&repo);
         let err =
-            gix_query::run_predicate_with(&repo, &registry, &facts, "unanswered", &[]).unwrap_err();
+            git_query::run_predicate_with(&repo, &registry, &facts, "unanswered", &[]).unwrap_err();
         assert!(
             matches!(err, QueryError::Eval(_)),
             "expected a host/eval error, got {err:?}"
