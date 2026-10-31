@@ -70,3 +70,7 @@ acdc-converters-terminal = { path = "../../vendor/acdc/converters/terminal", def
 proptest = "1"
 tempfile.workspace = true
 test-support = { path = "../test-support" }
+# The interactive CLI tests drive the binary through a real pty. A pty is
+# allocated in-process rather than by shelling out to `script(1)`, which is a
+# separate package (`util-linux-script`) on some distributions.
+pty-process = "0.5"

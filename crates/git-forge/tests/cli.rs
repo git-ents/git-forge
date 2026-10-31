@@ -1,7 +1,9 @@
 //! Drive the built `git-forge` binary against a temp repo, exactly as
 //! `git forge …` would.
 
+use std::fs::File;
 use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -53,10 +55,8 @@ fn run(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
-/// Run the binary attached to a pseudo-terminal via `script`. Each input item
-/// waits until `wait_for` has appeared in the child's output before writing
-/// `text` to stdin, avoiding races with the pty setup. Returns `(stdout,
-/// stderr, ok)` of the `script` process.
+/// Run the binary without an identity in `dir`, returning `(stdout, stderr,
+/// ok)`.
 fn run_without_identity(dir: &Path, args: &[&str]) -> (String, String, bool) {
     let out = Command::new(BIN)
         .current_dir(dir)
@@ -73,32 +73,36 @@ fn run_without_identity(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
+/// Run the binary attached to a pseudo-terminal. Each input item waits until
+/// `wait_for` has appeared in the child's output before writing `text` to the
+/// pty, avoiding races with the pty setup. Returns `(output, ok)`; a pty merges
+/// the child's stdout and stderr onto one stream, so there is no separate
+/// stderr to report.
 fn run_with_pty_env(
     dir: &Path,
     args: &[&str],
     inputs: &[(&str, &str)],
     envs: &[(&str, &str)],
-) -> (String, String, bool) {
+) -> (String, bool) {
     authenticate_cli(dir);
-    let mut cmd = Command::new("script");
-    cmd.current_dir(dir)
-        .arg("-q")
-        .arg("/dev/null")
-        .arg(BIN)
+    let (pty, pts) = pty_process::blocking::open().unwrap();
+    pty.resize(pty_process::Size::new(24, 80)).unwrap();
+
+    let mut child = pty_process::blocking::Command::new(BIN)
+        .current_dir(dir)
         .args(args)
         .arg("--as")
         .arg("alice")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .envs(envs.iter().copied())
+        .spawn(pts)
+        .unwrap();
 
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-
-    let mut child = cmd.spawn().unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    // The pty master carries both directions, so dup it: the reader thread and
+    // the writer below own independent descriptors onto the same terminal.
+    // Dropping our copy of the master is not EOF for the child; it only sees
+    // EOF when the pty is torn down, so the master stays open until it exits.
+    let master = File::from(OwnedFd::from(pty));
+    let mut stdout = master.try_clone().unwrap();
 
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stdout_reader = {
@@ -111,10 +115,7 @@ fn run_with_pty_env(
         })
     };
 
-    // Keep the write end of stdin open until the child has exited: `script`
-    // translates a closed pipe into a literal EOF byte written into the pty,
-    // which can race with (and get echoed ahead of) data we just wrote.
-    let mut stdin_handle = child.stdin.take();
+    let mut stdin_handle = Some(master);
 
     for (wait_for, text) in inputs {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -132,9 +133,6 @@ fn run_with_pty_env(
             .unwrap();
     }
 
-    let mut stderr_buf = Vec::new();
-    stderr.read_to_end(&mut stderr_buf).unwrap();
-
     let status = child.wait().unwrap();
     stdout_reader.join().unwrap();
 
@@ -142,7 +140,6 @@ fn run_with_pty_env(
 
     (
         String::from_utf8_lossy(&stdout_buf.lock().unwrap()).into_owned(),
-        String::from_utf8_lossy(&stderr_buf).into_owned(),
         status.success(),
     )
 }
@@ -590,13 +587,13 @@ fn issue_edit_picker_only_edits_selected_field_with_pty() {
     .unwrap();
 
     let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
-    let (_out, err, ok) = run_with_pty_env(
+    let (out, ok) = run_with_pty_env(
         path,
         &["issue", "edit", issue_id.as_str()],
         &[("What would you like to edit?", "\x1b[B \r")],
         &[("EDITOR", editor_cmd.as_str())],
     );
-    assert!(ok, "interactive issue edit failed: {err}");
+    assert!(ok, "interactive issue edit failed: {out}");
 
     let (out, err, ok) = run(path, &["issue", "show", issue_id.as_str()]);
     assert!(ok, "issue show after edit failed: {err}");
@@ -625,16 +622,18 @@ fn issue_edit_picker_prompts_selected_terminal_field_with_pty() {
     assert!(ok, "issue new failed: {err}");
     let issue_id = created_id(&out);
 
-    let (_out, err, ok) = run_with_pty_env(
+    let (out, ok) = run_with_pty_env(
         path,
         &["issue", "edit", issue_id.as_str()],
         &[
             ("What would you like to edit?", " \r"),
-            ("Title (first title)", "second title\n"),
+            // The theme styles the label and the default hint as separate ANSI
+            // spans, so only the hint appears contiguously in the output.
+            ("(first title)", "second title\n"),
         ],
         &[],
     );
-    assert!(ok, "interactive issue edit failed: {err}");
+    assert!(ok, "interactive issue edit failed: {out}");
 
     let (out, err, ok) = run(path, &["issue", "show", issue_id.as_str()]);
     assert!(ok, "issue show after edit failed: {err}");
@@ -999,13 +998,13 @@ fn review_edit_picker_only_edits_selected_field_with_pty() {
     .unwrap();
 
     let editor_cmd = format!("sh {}", editor_script.to_string_lossy());
-    let (_out, err, ok) = run_with_pty_env(
+    let (out, ok) = run_with_pty_env(
         path,
         &["review", "edit", review_id.as_str()],
         &[("What would you like to edit?", " \r")],
         &[("EDITOR", editor_cmd.as_str())],
     );
-    assert!(ok, "interactive review edit failed: {err}");
+    assert!(ok, "interactive review edit failed: {out}");
 
     let (out, err, ok) = run(path, &["review", "show", review_id.as_str()]);
     assert!(ok, "review show after edit failed: {err}");
